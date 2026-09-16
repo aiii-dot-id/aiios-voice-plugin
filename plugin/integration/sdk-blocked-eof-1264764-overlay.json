@@ -1,0 +1,5 @@
+{
+  "Replace": {
+    "/home/user/voice-frontier/.build/aii-plugin-sdk-1264764/pkg/aiiosdk/external_blocked_eof_test.go": "/home/user/voice-frontier/plugin/integration/sdk_blocked_eof_test.go"
+  }
+}

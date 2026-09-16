@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "description": "Prefer a durable, explicitly requested enrollment capture: call speaker.list and copy pending_captures[].capture_id, choose speaker_id and label, then obtain host operator confirmation. No live microphone is needed, and the handle survives restart until enrolled or explicitly discarded. If none exists, ask the human to make an explicit Add speaker recording; do not substitute ambient conversation or invent a handle. Older checkpoints also accept session_id plus live finals, as a mutually exclusive alternative. Speaker matching grants no command authority; audio, embedding and storage paths are never accepted.",
+  "properties": {
+    "capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Exact pending capture handle from speaker.list. The hexadecimal ID in examples is illustrative, never a usable default. Select this OR live finals, never both; the native operation enforces this choice."},
+    "session_id": {"type":"string","minLength":1,"maxLength":128,"description":"Required only for the alternative live-finals path: copy the current session_id from speaker.list and keep that session open through confirmation; live recordings expire after ten minutes and clear on session change. Omit for durable capture_id enrollment after microphone close or restart."},
+    "speaker_id": {"type":"string","minLength":1,"maxLength":96,"pattern":"^[A-Za-z0-9][A-Za-z0-9_.-]*$","description":"Stable local identifier for this person, not a filename. For additional recordings use the speaker_id and unchanged label already returned by speaker.list."},
+    "label": {"type":"string","minLength":1,"maxLength":512,"pattern":"^[^\\x00-\\x1F]+$","description":"Operator-approved display name. Unicode is supported; the native record additionally limits the label to 512 UTF-8 bytes. Do not infer identity from a voice or transcript alone."},
+    "finals": {"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":8,"uniqueItems":true,"description":"Alternative live-finals path only, mutually exclusive with capture_id. Distinct numbers copied from speaker.list.eligible_final_sequences, not transcript text, timestamps or audio paths. That path requires enough independent same-speaker recordings to meet minimum_recordings_per_speaker; the combined enrollment holds at most eight. Prefer one explicit guided capture and its durable capture_id."}
+  },
+  "required": ["speaker_id","label"],
+  "additionalProperties": false
+}

@@ -1,0 +1,5 @@
+{
+  "Replace": {
+    "/home/user/voice-frontier/.build/interrupt-candidate-r2/sdk/pkg/aiiosdk/session_pending_test.go": "/home/user/voice-frontier/plugin/integration/sdk_windows_pending_stack_test.go"
+  }
+}

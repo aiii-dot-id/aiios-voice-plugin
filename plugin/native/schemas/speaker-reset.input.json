@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"Propose removing ALL speaker enrollments with {}. The host asks the operator to confirm this destructive action. An open microphone is not required; use speaker.remove for one person. No storage path or confirmation stamp is supplied by the caller.",
+  "properties":{"session_id":{"type":"string","minLength":1,"maxLength":128,"description":"Optional session consistency check from speaker.list. Omit when managing enrollment without an open speech session."}},
+  "additionalProperties":false
+}

@@ -1,0 +1,23 @@
+                            val shiftedPcm = FloatArray(nativeAudio[0].size + nativeAudio[1].size * 2 + 8000)
+                            nativeAudio[0].copyInto(shiftedPcm)
+                            nativeAudio[1].copyInto(shiftedPcm, nativeAudio[0].size + 4000)
+                            nativeAudio[1].copyInto(shiftedPcm, nativeAudio[0].size + 8000 + nativeAudio[1].size)
+                            val shiftedReference = JSONArray()
+                            for (start in listOf(32000, 112000)) {
+                                val pcm = shiftedPcm.copyOfRange(start, start + 80000)
+                                val features = MelSpectroProcessor(16000, LogMelSpectroConfig(), ::fastLogMel).process(pcm)
+                                val nativeFeatures = NativeSpeech.frontend(pcm)
+                                check(LogitArgmax.identical(features, nativeFeatures)) { "Shifted frontend differs" }
+                                inputs[0].writeFloat(features);model.run(inputs, outputs, "encode")
+                                val found = JSONArray();var endings = 0
+                                decoder.decode(outputs).forEach { (token, frame) ->
+                                    if (token == SpeechRecognizer.END_OF_SEQUENCE) endings++
+                                    else found.put(JSONArray().put(token).put(frame))
+                                }
+                                check(endings == 1)
+                                shiftedInputs.add(features);shiftedWindows.add(decoder.referenceWindows())
+                                shiftedReference.put(JSONObject().put("start", start).put("end", start + 80000)
+                                    .put("tokens", found).put("model_calls", decoder.referenceProfile().getLong("model_calls"))
+                                    .put("feature_bits_identical", true))
+                                report.put("shifted_reference", shiftedReference)
+                            }

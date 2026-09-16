@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"Call speaker.list first. If policy_upgrade_required is true, close speech and propose this operation with {}. The host must confirm it. Both policies come from the signed runtime, never your arguments. Existing usable speakers keep exactly their IDs, labels and recordings; an incomplete old enrollment is named and refused, not silently activated. A repeat after an uncertain publication verifies the same bytes without advancing the revision again. This never grants command authority.",
+  "properties":{"session_id":{"type":"string","minLength":1,"maxLength":128,"description":"Optional consistency check copied from speaker.list; normally omit for closed-microphone management."}},
+  "additionalProperties":false
+}

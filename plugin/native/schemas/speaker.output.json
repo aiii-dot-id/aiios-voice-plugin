@@ -1,0 +1,31 @@
+{
+  "type":"object",
+  "description":"Successful operation_result after the host unwraps the SDK result envelope. Matching is identification evidence only, never permission. Refusals remain host-visible errors, not instances of this success schema.",
+  "properties":{
+    "session_id":{"type":"string"},
+    "session_open":{"type":"boolean","description":"Whether an ordinary speech session is open. A durable capture_id never requires it; live-final selection does."},
+    "pending_captures":{"type":"array","items":{"type":"object","properties":{"capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"created_ms":{"type":"integer","minimum":1},"samples":{"type":"integer","minimum":31920,"maximum":480000}},"required":["capture_id","created_ms","samples"],"additionalProperties":false}},
+    "guided_capture_available":{"type":"boolean"},
+    "policy_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The policy actually governing the stored enrollment and its readiness decisions."},
+    "runtime_policy_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The policy for new guided enrollment; not silently applied to existing profiles."},
+    "policy_upgrade_required":{"type":"boolean","description":"If true, close speech and propose speaker.upgrade_policy before enrolling a durable capture. Existing speakers still use their stored bound policy."},
+    "capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "speaker_id":{"type":"string"},
+    "label":{"type":"string"},
+    "enrollment_durable":{"type":"boolean"},
+    "capture_retirement_durable":{"type":"boolean"},
+    "reconciled":{"type":"boolean"},
+    "cleanup_detail":{"type":"string"},
+    "capture_publication":{"type":["object","null"]},
+    "speakers":{"type":"array","items":{"type":"object","properties":{"speaker_id":{"type":"string"},"label":{"type":"string"},"recordings":{"type":"integer","minimum":0},"ready":{"type":"boolean"}},"required":["speaker_id","label","recordings","ready"],"additionalProperties":false}},
+    "revision":{"type":"string","description":"Opaque decimal revision; never convert through a floating-point number."},
+    "enrollment_file_absent":{"type":"boolean"},
+    "used_for_permissions":{"const":false},
+    "publication":{"type":"object","description":"The engine's publication/readback evidence on a modifying operation."},
+    "eligible_final_sequences":{"type":"array","items":{"type":"integer","minimum":1},"uniqueItems":true},
+    "minimum_recordings_per_speaker":{"type":"integer","minimum":1},
+    "recording_retention_seconds":{"type":"integer","minimum":1}
+  },
+  "required":["session_id","session_open","used_for_permissions"],
+  "additionalProperties":false
+}
