@@ -1,0 +1,42 @@
+name: AiiVoiceMobile
+options:
+  deploymentTarget:
+    iOS: "18.0"
+packages:
+  FluidAudio:
+    path: ../../../artifacts/sources/fluidaudio-native-adapter-r1
+targets:
+  AiiVoiceMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: ../../../deliverables/native-mobile-composition-20260913-r1/ios-editor-r2/source/runtime/native/session/c_api_probe.cpp
+        compilerFlags: "-Dmain=aii_mobile_fixture_main"
+    dependencies:
+      - package: FluidAudio
+        product: FluidAudio
+      # Framework references are relative to the generated Xcode project,
+      # unlike the source/package paths above (relative to this specification).
+      - framework: ../../.build/ios-wespeaker-device/Frameworks/onnxruntime.xcframework/ios-arm64/onnxruntime.framework
+        embed: false
+      - sdk: UIKit.framework
+      - sdk: CoreML.framework
+      - sdk: Accelerate.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: id.aiii.voice.portability.full
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        SWIFT_VERSION: "6.0"
+        CODE_SIGNING_ALLOWED: NO
+        GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "AII_WITH_UID", "AII_APPLE_COREML_BACKEND"]
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../../deliverables/native-mobile-composition-20260913-r1/ios-editor-r2/source/runtime/native/session"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - '"$(PROJECT_DIR)/../../deliverables/native-mobile-composition-20260913-r1/ios-editor-r2/build/libaii_voice_mobile.a"'
+          - '"$(PROJECT_DIR)/../../deliverables/native-mobile-composition-20260913-r1/ios-editor-r2/build/uid-frontend/libaiii_uid_frontend.a"'
+          - '"$(PROJECT_DIR)/../../deliverables/native-mobile-composition-20260913-r1/ios-editor-r2/sleef/lib/libsleef.a"'

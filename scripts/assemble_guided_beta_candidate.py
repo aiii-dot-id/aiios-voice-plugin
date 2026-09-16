@@ -1,0 +1,217 @@
+"""Assemble explicitly bound three-desktop bytes for package/integration testing.
+
+Authenticode status comes from the supplied staging receipt, never a filename.
+T3 signing, host UID integration and installed journeys remain separate gates.
+No release upload or installed identity is changed by this command.
+"""
+import argparse
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import tarfile
+import zipfile
+
+from scripts.build_plugin_carrier import ROOT, SDK_SOURCE, verify_sdk
+from scripts.prepare_desktop_distribution import copy_asset, emit, put, sha
+from scripts.repackage_native_schemas import read_package
+from scripts.package_common_native_checkpoint import enrollment_interfaces
+from scripts.stage_qualified_runtime import check_archive
+
+TEMPLATE=ROOT/'deliverables/desktop-beta-release-20260915-r1/portable-windows-family-r1/author'
+TEMPLATE_SHA='d6c0cee9feab43bf6c07a79ad870966a10cff342d9b0406b2e8b4297e50a9a7b'
+STAGES={
+ 'macos':ROOT/'deliverables/beta1-runtime-assets-20260916-r2/macos',
+ 'linux':ROOT/'deliverables/beta1-runtime-assets-20260916-r2/linux',
+ 'windows':ROOT/'deliverables/beta1-unsigned-windows-companion-20260916-r1'}
+CARRIERS={
+ 'macos':ROOT/'deliverables/macos-guided-beta1-20260916-r2/run/checkpoint/runtime/aii-voice-t3',
+ 'linux':ROOT/'.build/linux-release-checkpoint-20260916-r1/runtime/aii-voice-t3',
+ 'windows':STAGES['windows']/'aii-voice-t3.exe'}
+
+
+def candidate_inputs(path):
+    """Select explicit immutable staging, never guess the latest directory."""
+    if path is None:
+        return STAGES, CARRIERS
+    rows = json.loads(path.read_text())
+    if set(rows) != set(STAGES): raise ValueError('all three desktop bindings required')
+    stages, carriers = {}, {}
+    for platform, row in rows.items():
+        stages[platform] = Path(row['stage']).resolve()
+        carriers[platform] = Path(row['carrier']).resolve()
+        if sha(stages[platform] / 'result.json') != row['stage_sha256']:
+            raise ValueError('staging result changed: ' + platform)
+        if sha(carriers[platform]) != row['carrier_sha256']:
+            raise ValueError('carrier changed: ' + platform)
+    return stages, carriers
+
+
+def operator_setup(platform):
+    """Host-owned setting, never a plugin-granted extension of its deadline.
+
+    The host default is 30 seconds. Windows five-model starts exceed it; the
+    shared Ubuntu 24.04 laptop also measured 115.90 seconds on the stable-UID
+    checkpoint (prior guided startup already reached 86.33 seconds). Both
+    need the existing host-owned 180-second allowance. This is not a speedup
+    or a claim that all starts will meet this ceiling. Mac keeps its default.
+    """
+    if platform not in STAGES:
+        raise ValueError('unsupported desktop setup')
+    return ({'plugins': {'resources': {'id.aiii.voice': {'startup_timeout_ms': 180000}}}}
+            if platform in ('windows', 'linux') else {})
+
+
+def current_windows_notices(profile):
+    """Bind vendor attribution to the NuGet binaries actually in the payload."""
+    root=ROOT/'.build/ort-directml-1.24.4-20260915-r1'
+    specs=[('onnxruntime-directml.nupkg','57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681',
+      'Microsoft.ML.OnnxRuntime.DirectML 1.24.4',
+      {'runtimes/win-x64/native/onnxruntime.dll':'bin/onnxruntime.dll',
+       'runtimes/win-x64/native/onnxruntime_providers_shared.dll':'bin/onnxruntime_providers_shared.dll'},
+      {n:'ort-'+n for n in ('LICENSE','ThirdPartyNotices.txt','Privacy.md')}),
+      ('directml.nupkg','4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9',
+       'Microsoft.AI.DirectML 1.15.4',{'bin/x64-win/DirectML.dll':'bin/DirectML.dll'},
+       {n:'directml-'+n for n in ('LICENSE.txt','LICENSE-CODE.txt','ThirdPartyNotices.txt')})]
+    files={};libraries=[]
+    for name,digest,distribution,binaries,notices in specs:
+        if sha(root/name)!=digest:raise ValueError('vendor package changed')
+        with zipfile.ZipFile(root/name) as z:
+            for src,dest in binaries.items():
+                raw=z.read(src);h=hashlib.sha256(raw).hexdigest();row=profile['files'][dest]
+                if h!=row['sha256'] or len(raw)!=row['bytes']:raise ValueError('vendor binary provenance differs')
+                libraries.append(dict(component='onnxruntime' if dest.endswith('/onnxruntime.dll') else Path(dest).name,
+                    platform='windows',distribution=distribution,source_sha256=h,shipped_sha256=h,
+                    package_sha256=digest,package_member=src,
+                    execution_claim='Measured DirectML encoder; CPU decoder/joiner, VAD and UID. TTS uses Vulkan.'))
+            for src,dest in notices.items():
+                raw=z.read(src);row=profile['files']['resources/notices/directml/'+dest]
+                if hashlib.sha256(raw).hexdigest()!=row['sha256'] or len(raw)!=row['bytes']:
+                    raise ValueError('vendor notice differs from qualified runtime')
+                files['notices/windows-directml-current/'+dest]=raw
+    return files,libraries
+
+
+def runtime(stage):
+    result=json.loads((stage/'result.json').read_text())
+    if not result['passed'] or result['beta_release_ready']:
+        raise ValueError('expected successful explicitly unqualified staging')
+    archive=Path(result['runtime_archive']['path'])
+    with tarfile.open(archive) as t:
+        raw=t.extractfile('runtime/voice-runtime.json').read()
+        if hashlib.sha256(raw).hexdigest()!=result['runtime_manifest_sha256']:
+            raise ValueError('runtime manifest binding changed')
+        profile=json.loads(raw)
+    rows={**profile['files'],'voice-runtime.json':dict(bytes=len(raw),sha256=result['runtime_manifest_sha256'],executable=False)}
+    check_archive(archive,result['runtime_archive'],rows,windows=profile['platform']=='windows')
+    return result,profile
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--inputs',type=Path,help='Explicit stage and carrier paths with SHA-256 bindings')
+    a=p.parse_args();out=a.out.resolve();pin,_=verify_sdk()
+    stages, carriers = candidate_inputs(a.inputs)
+    if sha(TEMPLATE/'plugin.json')!=TEMPLATE_SHA:raise ValueError('template changed')
+    cfg=json.loads((TEMPLATE/'plugin.json').read_text())
+    # Signature/readiness status belongs in evidence, not descriptive metadata
+    # that would remain falsely "unsigned" after the exact package is signed.
+    cfg['title']='AII Voice'
+    cfg['description']='On-device English speech for macOS, Windows and Ubuntu: ten selectable voices, recognition, active adjustable VAD, interruption/recovery and durable guided speaker enrollment. Speaker matching identifies a speaker; it grants no authority.'
+    cfg['runtimes']=[]
+    bound={};profiles={}
+    for platform,stage in stages.items():
+        bound[platform],profiles[platform]=runtime(stage)
+        if sha(carriers[platform])!=bound[platform]['carrier_sha256']:raise ValueError('carrier changed')
+    descriptors=json.loads(subprocess.check_output([str(carriers['macos'])],env={'PATH':'','AIISDK_DESCRIBE':'1'},timeout=10))
+    cfg['interfaces']=enrollment_interfaces(descriptors)
+    schemas={d[k] for d in descriptors for k in ('input','output') if d.get(k)}
+    if len(schemas)!=7:raise ValueError('guided speaker schema set changed')
+    out.mkdir(parents=True,exist_ok=False);author=out/'author'
+    assets={};plans={}
+    for v in cfg['variants']:
+        platform=v['platform'];r=bound[platform];variant=v['variant_id']
+        if variant!=r['variant_id']:raise ValueError('variant binding differs')
+        v['artifact']='payloads/'+variant
+        copy_asset(carriers[platform],author/v['artifact'],carriers[platform].stat().st_size,r['carrier_sha256'])
+        arc=r['runtime_archive'];name=arc['sha256']+'-'+variant+'-runtime.tar.gz'
+        copy_asset(arc['path'],out/'assets'/name,arc['size'],arc['sha256'])
+        decl={k:arc[k] for k in ('sha256','size','files','installed_bytes','inventory_sha256')}
+        decl.update(variant_id=variant,url='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v0.1.0-beta.1/'+name)
+        cfg['runtimes'].append(decl);assets[name]=dict(kind='runtime',variant_id=variant,sha256=arc['sha256'],size=arc['size'])
+        # Do not change measured model/backend/resource choices with packaging.
+        selected=[m for m in cfg['models'] if m['name'] in v['accelerator']['models']]
+        if len(selected)!=24 or len({m['path'] for m in selected})!=24:raise ValueError('variant model selection differs')
+        if ('endpoint/windows/coefficients.f32' in {m['path'] for m in selected})!=(platform=='windows'):
+            raise ValueError('foreign platform endpoint model selected')
+        plans[platform]=dict(variant_id=variant,runtime=decl,carrier_sha256=r['carrier_sha256'],
+            carrier_path=str((author/v['artifact']).resolve()),models=selected,
+            runtime_archive_path=str((out/'assets'/name).resolve()),
+            operator_config_merge=operator_setup(platform))
+    # These are setup instructions using existing host keys, not a new SDK
+    # declaration and not permission to replace a whole identity config.
+    emit(out/'operator-setup.json',dict(
+        scope='Operator-reviewed merge into existing host config; never replace config.json. No plugin self-authorization.',
+        restart_required=True,
+        platforms={p:operator_setup(p) for p in plans},
+        rationale='Windows and shared Ubuntu 24.04 five-model startup exceed the host 30-second default. Ubuntu stable-UID measured up to 115.90 seconds. Existing per-plugin allowance: 180000 ms; Mac default unchanged.',
+        automatic_configuration=False))
+    # Notices are original texts with exact attribution. Rebind the one stale
+    # execution description; do not represent notice collection as clearance.
+    notice_rows=json.loads((TEMPLATE/'release-notices.json').read_text())
+    for row in notice_rows:
+        if row['path']!='notices/INDEX.json':
+            copy_asset(TEMPLATE/row['path'],author/row['path'],row['size'],row['sha256'])
+    # The original index describes third-party bytes, which must be present in
+    # this candidate. A missing or changed library is not a reusable notice.
+    index=json.loads((TEMPLATE/'notices/INDEX.json').read_text())
+    files,current=current_windows_notices(profiles['windows'])
+    index['libraries']=[r for r in index['libraries'] if not (r['platform']=='windows' and r['component']=='onnxruntime')]+current
+    notice_rows=[r for r in notice_rows if r['path']!='notices/INDEX.json']
+    for name,raw in files.items():
+        put(author/name,raw)
+        notice_rows.append(dict(path=name,sha256=hashlib.sha256(raw).hexdigest(),size=len(raw)))
+    index['original_notice_files']=copy.deepcopy(notice_rows)
+    index['windows_current_distribution']='NuGet native distribution, not the previous Python wheel; the original notice corpus is retained, with exact currently shipped notices under notices/windows-directml-current.'
+    for lib in index['libraries']:
+        hashes={f['sha256'] for f in profiles[lib['platform']]['files'].values()}
+        if lib['shipped_sha256'] not in hashes:raise ValueError('third-party notice binding changed: '+lib['component'])
+    emit(author/'notices/INDEX.json',index)
+    notice_rows.append(dict(path='notices/INDEX.json',size=(author/'notices/INDEX.json').stat().st_size,sha256=sha(author/'notices/INDEX.json')))
+    for name in schemas:put(author/name,(ROOT/'plugin/native'/name).read_bytes())
+    emit(author/'plugin.json',cfg);emit(author/'descriptors.json',descriptors)
+    emit(author/'release-notices.json',notice_rows)
+    env={**os.environ,'GOTOOLCHAIN':'local','GOWORK':'off','GOPROXY':'off','GOSUMDB':'off',
+         'GOMODCACHE':str(ROOT/'.build/guided-go-cache-20260916-r1')}
+    assembler=out/'assemble'
+    for label,cmd in [('build',['/usr/local/go1.27/bin/go','build','-trimpath','-buildvcs=false','-o',str(assembler),str(ROOT/'scripts/private_cp1_package.go')]),
+                      ('assemble',[str(assembler),str(author)])]:
+        r=subprocess.run(cmd,cwd=SDK_SOURCE,env=env,capture_output=True,timeout=120)
+        put(out/(label+'.stdout'),r.stdout);put(out/(label+'.stderr'),r.stderr)
+        if r.returncode:raise RuntimeError(label+' failed; retained output')
+    assembly=json.loads(r.stdout);manifest,files=read_package(author/assembly['bundle'],assembly['sha256'])
+    for v in manifest['variants']:
+        if files[v['entrypoint']]!=carriers[v['platform']].read_bytes():raise ValueError('packaged carrier differs')
+    if json.loads(files['models.json'])!=cfg['models']:raise ValueError('packaged model union differs')
+    if json.loads(files['settings.json'])!=cfg['settings']:raise ValueError('packaged settings differ')
+    for name in schemas:
+        if files[name]!=(ROOT/'plugin/native'/name).read_bytes():raise ValueError('schema not packed exactly')
+    emit(out/'platform-plans.json',plans);emit(out/'release-assets.json',assets)
+    emit(out/'result.json',dict(passed=True,scope=__doc__,bundle=assembly,sdk_revision=pin['revision'],
+        source_sha256=sha(__file__),assembler_sha256=sha(ROOT/'scripts/private_cp1_package.go'),
+        bound_staging={p:sha(s/'result.json') for p,s in stages.items()},variants=list(plans),
+        explicit_inputs_sha256=sha(a.inputs) if a.inputs else None,
+        speaker_methods=[d['id'] for d in descriptors if d['id'].startswith('speaker.')],
+        input_output_schema_files=sorted(schemas),models=len(cfg['models']),notices=len(notice_rows),
+        signed=False,installed=False,published=False,beta_release_ready=False,
+        windows_authenticode_verified=bound['windows'].get('authenticode_verified',False),
+        required_before_release=([] if bound['windows'].get('authenticode_verified') else ['Authenticode and rebind Windows runtime/carrier'])+[
+          'host guided capture, UID ingress filters and AI-visible policy',
+          'final signed fresh-cache installed journeys','authorized T3 signature and host verification',
+          'third-party distribution review','signed catalog and hosted byte readback']))
+    print(json.dumps({'bundle':assembly,'variants':list(plans),'beta_release_ready':False}))
+
+
+if __name__=='__main__':main()

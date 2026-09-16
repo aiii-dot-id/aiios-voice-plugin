@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+  ".git",
+  ".pytest_cache",
+  "__pycache__",
+  "artifacts",
+  "baselines",
+  "models",
+  "research",
+  "third_party",
+]

@@ -1,0 +1,25 @@
+name: AiiVoiceFrontend
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    GCC_C_LANGUAGE_STANDARD: c99
+    CODE_SIGN_STYLE: Automatic
+targets:
+  AiiVoiceFrontend:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+    dependencies:
+      - sdk: UIKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: id.aiii.voice.portability.frontend
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"

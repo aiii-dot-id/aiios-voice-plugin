@@ -1,0 +1,6 @@
+{
+  "Replace": {
+    "/home/user/voice-frontier/.build/aii-os-4502546-integration-r1/internal/pluginhost/voice_engine_integration_test.go": "/home/user/voice-frontier/plugin/integration/host_resident_conversation_r4_test.go",
+    "/home/user/voice-frontier/.build/aii-os-4502546-integration-r1/internal/audio/audio.go": "/home/user/voice-frontier/plugin/integration/host_audio_lifetime_candidate.go"
+  }
+}

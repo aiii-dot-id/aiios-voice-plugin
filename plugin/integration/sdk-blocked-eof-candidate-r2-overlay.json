@@ -1,0 +1,5 @@
+{
+  "Replace": {
+    "/home/user/voice-frontier/.build/interrupt-candidate-r2/sdk/pkg/aiiosdk/external_blocked_eof_test.go": "/home/user/voice-frontier/plugin/integration/sdk_blocked_eof_test.go"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "Replace": {
+    "/home/user/voice-frontier/.build/aii-os-0adf1c5-browser-r1/internal/pluginhost/voice_browser_proof_bind.go": "/home/user/voice-frontier/plugin/integration/browser_host_bind.go",
+    "/home/user/voice-frontier/.build/aii-os-0adf1c5-browser-r1/internal/app/voice_browser_integration_test.go": "/home/user/voice-frontier/plugin/integration/browser_conversation_test.go"
+  }
+}
