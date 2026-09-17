@@ -8,6 +8,8 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
+
 from runtime.plugin_engine.worker import serve
 from tests.plugin_models import Models
 
@@ -41,6 +43,9 @@ def main():
 
         models.tts_stream = cancellable
         models.cancel_synthesis = cancelled.set
+        if os.environ.get("AII_TEST_WRONG_CLOCK") == "1":
+            # The output service refuses the clock and keeps the error on the job.
+            models.tts_next = lambda it: (np.full(10, 0.1, np.float32), 16000, 1)
         if os.environ.get("AII_TEST_BLOCK_MODEL") == "1":
 
             def blocked(text):

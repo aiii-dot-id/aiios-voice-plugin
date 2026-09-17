@@ -23,7 +23,12 @@ async def until(predicate):
 
 
 @pytest.fixture
-def parts():
+def parts(request):
+    """An engine whose every shutdown result is checked when the test ends.
+
+    Shutdown returns cleanup errors instead of raising them, so a teardown that
+    ignores its result would pass over a synthesis fault. A test that provokes
+    one names it with @pytest.mark.cleanup_errors("fragment", ...)."""
     models, events, frames = Models(), [], []
     executor, control = ThreadPoolExecutor(1), ThreadPoolExecutor(1)
 
@@ -40,10 +45,23 @@ def parts():
         tail_timeout=0.15,
         drain_timeout=0.15,
     )
+    cleanup_errors, shutdown = [], engine.shutdown
+
+    async def checked_shutdown():
+        errors = await shutdown()
+        cleanup_errors.extend(errors)
+        return errors
+
+    engine.shutdown = checked_shutdown
     yield engine, models, events, frames
     models.release.set()
     executor.shutdown(wait=True)
     control.shutdown(wait=True)
+    marker = request.node.get_closest_marker("cleanup_errors")
+    expected = marker.args if marker else ()
+    unexpected = [x for x in cleanup_errors if not any(e in x for e in expected)]
+    if unexpected:
+        pytest.fail(f"shutdown returned unexpected cleanup errors: {unexpected}", pytrace=False)
 
 
 def test_sdk_audio_vectors_and_truncation():
@@ -94,6 +112,7 @@ async def test_failure_remains_terminal_and_shutdown_releases_owned_tasks(parts)
 
 
 @pytest.mark.asyncio
+@pytest.mark.cleanup_errors("synthesis failed")
 async def test_shutdown_reports_a_stored_synthesis_error_instead_of_raising(parts):
     """A backend fault is kept on the synthesis until it is awaited, and closing
     the output awaits it. Shutdown returns such errors after releasing what it
