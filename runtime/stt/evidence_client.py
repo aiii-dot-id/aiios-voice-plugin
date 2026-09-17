@@ -6,6 +6,7 @@ import queue
 import subprocess
 import threading
 import time
+from collections import deque
 
 import numpy as np
 
@@ -21,7 +22,7 @@ class EvidenceClient:
             bufsize=1,
         )
         self.events = queue.Queue()
-        self.messages = []
+        self.messages = deque(maxlen=4096)  # a bounded record, not a log
 
         def read():
             try:
@@ -105,3 +106,10 @@ class EvidenceClient:
                     raise RuntimeError("worker close failed")
         finally:
             self.reader.join(timeout=3)
+            # The pipes are ours to release whether or not the reader retired.
+            for pipe in (self.child.stdin, self.child.stdout):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
