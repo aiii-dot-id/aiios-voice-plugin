@@ -106,8 +106,14 @@ class EvidenceClient:
                     raise RuntimeError("worker close failed")
         finally:
             self.reader.join(timeout=3)
-            # The pipes are ours to release whether or not the reader retired.
-            for pipe in (self.child.stdin, self.child.stdout):
+            # stdin is ours to release in any case. stdout is released only once
+            # its reader has exited: closing a buffered reader waits for the lock
+            # a blocked read holds, so a descendant still holding the pipe open
+            # would hang close() here.
+            pipes = [self.child.stdin]
+            if not self.reader.is_alive():
+                pipes.append(self.child.stdout)
+            for pipe in pipes:
                 if pipe is not None:
                     try:
                         pipe.close()
