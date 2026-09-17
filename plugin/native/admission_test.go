@@ -148,18 +148,19 @@ func TestPrivateSecondReadinessIsAFaultAfterTheFirstWasTaken(t *testing.T) {
 	if _, err := io.WriteString(replies, ready); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-c.stop:
-	case <-time.After(time.Second):
-		t.Fatal("a second readiness after the first was taken did not fault the transport")
-	}
+	// fail() closes stop before it records the fault, so wait on the fault itself.
 	select {
 	case e := <-c.fault:
 		if !strings.Contains(e.Error(), "duplicate") {
 			t.Fatalf("wrong fault: %v", e)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("a second readiness after the first was taken did not fault the transport")
+	}
+	select {
+	case <-c.stop:
 	default:
-		t.Fatal("no fault recorded")
+		t.Fatal("the transport recorded a fault without stopping")
 	}
 }
 
