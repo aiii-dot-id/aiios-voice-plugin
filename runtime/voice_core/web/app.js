@@ -55,7 +55,7 @@ async function start(){
     ws=new WebSocket(`ws://${location.host}/ws`);cancelled=new Set();done=new Set();sources=new Set();audioChain=Promise.resolve();clock=ctx.currentTime;
     ws.onopen=()=>send({type:'start',input_kind:'browser_microphone',reply:$('reply').value,
       audio_settings:{...stream.getAudioTracks()[0].getSettings(),microphoneLabel:stream.getAudioTracks()[0].label,contextSampleRate:ctx.sampleRate,sinkId:route.sinkId,playbackRoute:route.kind,playbackLabel:$('speaker').selectedOptions[0]?.text,automaticInterruption:'browser-webrtc-aec-vad',rawRmsBargeIn:false}});
-    ws.onmessage=e=>{const m=JSON.parse(e.data);
+    ws.onmessage=e=>{let m;try{m=JSON.parse(e.data);}catch(error){log({type:'malformed_frame',reason:String(error)});return;}
       if(m.type==='ready'){running=true;input.connect(worklet,0,0);$('stop').disabled=false;$('interrupt').disabled=false;$('status').textContent='Listening · local recording active';log(m);}
       else if(m.type==='audio'){audioChain=audioChain.then(()=>audio(m)).catch(error=>{$('status').textContent='Playback failed: '+error.message;ws.close();});}
       else if(m.type==='interrupt'){cancelled.add(m.synthesis_id);stopPlayback(false,m.synthesis_id);log(m);}

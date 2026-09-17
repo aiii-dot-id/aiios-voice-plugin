@@ -34,7 +34,9 @@ $("start").onclick = () => {
   status("Opening native audio…"); ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => ws.send(JSON.stringify({type:"start", input_kind:"native_microphone", input_uid:$("input").value, output_uid:$("output").value, application_mode:$("mode").value}));
   ws.onmessage = event => {
-    const row = JSON.parse(event.data), detail = row.event || {}; log(row);
+    let row;
+    try { row = JSON.parse(event.data); } catch (error) { log({type: "malformed_frame", reason: String(error)}); return; }
+    const detail = row.event || {}; log(row);
     if (row.type === "ready") { status("Listening. Ask a question or just start talking."); $("finish").disabled = $("interrupt").disabled = false; }
     if (row.type === "reply_requested") { pending = row; $("send").disabled = $("mode").value !== "manual"; if ($("mode").value === "manual") status("Your turn is ready. Supply a reply within 30 seconds."); }
     if (row.type === "application_thinking") status("Thinking locally. You can interrupt or keep speaking.");
