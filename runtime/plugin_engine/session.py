@@ -880,14 +880,33 @@ class ResidentEngine:
         }
 
     async def shutdown(self):
+        """Release everything the engine owns; cleanup errors are returned, never raised.
+
+        A synthesis that failed keeps its error until it is awaited, and closing
+        the output awaits it. Raising here aborted the worker's release of its
+        executors and audio handles (review, 2026-09-16); the abort path already
+        gathers every cleanup result, and the orderly path now does the same.
+        """
         if self.speaker is not None:
             self.speaker.closed = True
         if self.output:
             self.fence({}, cancel=True)
         for task in tuple(self.tasks):
             task.cancel()
-        await asyncio.gather(*tuple(self.tasks), return_exceptions=True)
+        results = list(await asyncio.gather(*tuple(self.tasks), return_exceptions=True))
         if self.output:
-            await self.output.close(abort=True)
+            results.extend(
+                await asyncio.gather(
+                    self.output.close(abort=True), return_exceptions=True
+                )
+            )
         if self.speaker is not None:
-            await self.speaker.close()
+            results.extend(
+                await asyncio.gather(self.speaker.close(), return_exceptions=True)
+            )
+        self.cleanup_errors = [
+            str(x)
+            for x in results
+            if isinstance(x, Exception) and not isinstance(x, asyncio.CancelledError)
+        ]
+        return self.cleanup_errors

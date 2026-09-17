@@ -92,6 +92,30 @@ async def test_failure_remains_terminal_and_shutdown_releases_owned_tasks(parts)
 
 
 @pytest.mark.asyncio
+async def test_shutdown_reports_a_stored_synthesis_error_instead_of_raising(parts):
+    """A backend fault is kept on the synthesis until it is awaited, and closing
+    the output awaits it. Shutdown returns such errors after releasing what it
+    owns; raising them aborted the worker's release of its executors and audio
+    handles (review, 2026-09-16)."""
+    e, models, _, _ = parts
+    # The wrong clock is refused by the output service and stored on the job.
+    models.tts_next = lambda it: (np.full(10, 0.1, np.float32), 16000, 1)
+    try:
+        e.admit("speech.session.open", open_args())
+        await until(lambda: e.lifecycle == "open")
+        e.admit(
+            "speech.session.synthesize",
+            {"session_id": e.id, "synthesis_id": "faulted", "text": "A reply."},
+        )
+        await until(lambda: e.current is not None and e.current.job.error is not None)
+        errors = await e.shutdown()
+        assert any("synthesis failed" in x for x in errors), errors
+        assert not e.tasks
+    finally:
+        await e.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_session_end_allows_immediate_reuse_without_callback_delay(parts):
     e, _, events, _ = parts
     observed = []
