@@ -10,4 +10,4 @@ require (
 	golang.org/x/sys v0.28.0 // indirect
 )
 
-replace github.com/aiii-dot-id/aii-plugin-sdk => ../../.build/aii-plugin-sdk-92a4265
+replace github.com/aiii-dot-id/aii-plugin-sdk => ../../.build/aii-plugin-sdk-d75105d

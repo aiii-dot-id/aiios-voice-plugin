@@ -52,23 +52,38 @@ def candidate_inputs(path):
 
 
 def operator_setup(platform):
-    """Host-owned setting, never a plugin-granted extension of its deadline.
-
-    The host default is 30 seconds. Windows five-model starts exceed it; the
-    shared Ubuntu 24.04 laptop also measured 115.90 seconds on the stable-UID
-    checkpoint (prior guided startup already reached 86.33 seconds). Both
-    need the existing host-owned 180-second allowance. This is not a speedup
-    or a claim that all starts will meet this ceiling. Mac keeps its default.
-    """
+    """AII OS 0.1.7 consumes the package declaration; no config edit needed."""
     if platform not in STAGES:
         raise ValueError('unsupported desktop setup')
-    return ({'plugins': {'resources': {'id.aiii.voice': {'startup_timeout_ms': 180000}}}}
-            if platform in ('windows', 'linux') else {})
+    return {}
 
 
-def current_windows_notices(profile):
+def release_contract(cfg):
+    """Apply agreed metadata without changing models, budgets or setting values."""
+    scopes = {'stt_language': 'hearing', 'turn_pause_ms': 'hearing',
+              'vad_threshold': 'hearing', 'tts_voice': 'speaking',
+              'tts_language': 'speaking', 'tts_temperature': 'speaking',
+              'tts_seed': 'speaking'}
+    if {v['platform'] for v in cfg['variants']} != set(STAGES) or len(cfg['variants']) != 3:
+        raise ValueError('exact desktop variants required')
+    if {s['key'] for s in cfg['settings']} != set(scopes) or len(cfg['settings']) != len(scopes):
+        raise ValueError('review scope for changed settings')
+    for v in cfg['variants']:
+        profile = v['accelerator']
+        if type(profile.get('memory_bytes')) is not int or profile['memory_bytes'] <= 0:
+            raise ValueError('existing positive host reservation required')
+        if 'device_memory_bytes' in profile:
+            raise ValueError('new device reservation needs independently measured justification')
+    cfg['aiios_min_version'] = '0.1.7'
+    for v in cfg['variants']:
+        v['accelerator']['startup_ms'] = 180000
+    for setting in cfg['settings']:
+        setting['scope'] = scopes[setting['key']]
+
+
+def current_windows_notices(profile, artifact_root=ROOT):
     """Bind vendor attribution to the NuGet binaries actually in the payload."""
-    root=ROOT/'.build/ort-directml-1.24.4-20260915-r1'
+    root=artifact_root/'.build/ort-directml-1.24.4-20260915-r1'
     specs=[('onnxruntime-directml.nupkg','57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681',
       'Microsoft.ML.OnnxRuntime.DirectML 1.24.4',
       {'runtimes/win-x64/native/onnxruntime.dll':'bin/onnxruntime.dll',
@@ -93,7 +108,8 @@ def current_windows_notices(profile):
                 if hashlib.sha256(raw).hexdigest()!=row['sha256'] or len(raw)!=row['bytes']:
                     raise ValueError('vendor notice differs from qualified runtime')
                 files['notices/windows-directml-current/'+dest]=raw
-    extra,binding=openmp_notices(profile['files']['bin/libiomp5md.dll'])
+    extra,binding=openmp_notices(profile['files']['bin/libiomp5md.dll'],
+        artifact_root/'artifacts/intel-openmp-redist-20260917-r1/intelopenmp.redist.win.2025.2.0.756.nupkg')
     files.update(extra);libraries.append(binding)
     return files,libraries
 
@@ -156,12 +172,17 @@ def main():
     p.add_argument('--uid-model-template-sha256')
     p.add_argument('--uid-notices-sha256')
     p.add_argument('--version',help='New immutable release version; never overwrite a published tag')
+    p.add_argument('--artifact-root',type=Path,default=ROOT,help='Explicit retained artifact store, never a source checkout override')
+    p.add_argument('--go-modcache',type=Path,required=True)
     a=p.parse_args();out=a.out.resolve();pin,_=verify_sdk()
+    artifact_root=a.artifact_root.resolve()
+    template=artifact_root/TEMPLATE.relative_to(ROOT)
     stages, carriers = candidate_inputs(a.inputs)
-    if sha(TEMPLATE/'plugin.json')!=TEMPLATE_SHA:raise ValueError('template changed')
-    cfg=json.loads((TEMPLATE/'plugin.json').read_text())
+    if sha(template/'plugin.json')!=TEMPLATE_SHA:raise ValueError('template changed')
+    cfg=json.loads((template/'plugin.json').read_text())
+    release_contract(cfg)
     # Notice selection and model selection form one atomic packaging decision.
-    index=json.loads((TEMPLATE/'notices/INDEX.json').read_text());uid_files={}
+    index=json.loads((template/'notices/INDEX.json').read_text());uid_files={}
     if any((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):
         if not all((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):raise ValueError('complete UID replacement bindings required')
         if sha(a.uid_model_template)!=a.uid_model_template_sha256 or sha(a.uid_notices/'UID-REPLACEMENT.json')!=a.uid_notices_sha256:raise ValueError('UID replacement inputs changed')
@@ -211,20 +232,20 @@ def main():
     # declaration and not permission to replace a whole identity config.
     emit(out/'operator-setup.json',dict(
         scope='Operator-reviewed merge into existing host config; never replace config.json. No plugin self-authorization.',
-        restart_required=True,
+        restart_required=False,
         platforms={p:operator_setup(p) for p in plans},
-        rationale='Windows and shared Ubuntu 24.04 five-model startup exceed the host 30-second default. Ubuntu stable-UID measured up to 115.90 seconds. Existing per-plugin allowance: 180000 ms; Mac default unchanged.',
+        rationale='AII OS 0.1.7 consumes startup_ms=180000 from each accelerator profile, subject to operator ceilings and overrides. memory_bytes retains the existing host reservation, not a measured peak. Unmeasured device memory is omitted, not zero.',
         automatic_configuration=False))
     # Notices are original texts with exact attribution. Rebind the one stale
     # execution description; do not represent notice collection as clearance.
-    notice_rows=json.loads((TEMPLATE/'release-notices.json').read_text())
+    notice_rows=json.loads((template/'release-notices.json').read_text())
     if uid_files:notice_rows=[r for r in notice_rows if not r['path'].startswith('notices/wespeaker-uid/')]
     for row in notice_rows:
         if row['path']!='notices/INDEX.json':
-            copy_asset(TEMPLATE/row['path'],author/row['path'],row['size'],row['sha256'])
+            copy_asset(template/row['path'],author/row['path'],row['size'],row['sha256'])
     # The original index describes third-party bytes, which must be present in
     # this candidate. A missing or changed library is not a reusable notice.
-    files,current=current_windows_notices(profiles['windows'])
+    files,current=current_windows_notices(profiles['windows'],artifact_root)
     files.update(uid_files)
     index['libraries']=[r for r in index['libraries'] if not (r['platform']=='windows' and r['component']=='onnxruntime')]+current
     # Keep the historical PyPI notice corpus, but select the exact unchanged
@@ -258,7 +279,7 @@ def main():
     emit(author/'plugin.json',cfg);emit(author/'descriptors.json',descriptors)
     emit(author/'release-notices.json',notice_rows)
     env={**os.environ,'GOTOOLCHAIN':'local','GOWORK':'off','GOPROXY':'off','GOSUMDB':'off',
-         'GOMODCACHE':str(ROOT/'.build/guided-go-cache-20260916-r1')}
+         'GOMODCACHE':str(a.go_modcache.resolve())}
     assembler=out/'assemble'
     for label,cmd in [('build',['/usr/local/go1.27/bin/go','build','-trimpath','-buildvcs=false','-o',str(assembler),str(ROOT/'scripts/private_cp1_package.go')]),
                       ('assemble',[str(assembler),str(author)])]:
