@@ -112,16 +112,23 @@ class Bundle:
     def local(self, name, path, group):
         return self.add(name, path.read_bytes(), {'local_path': str(path), 'sha256': file_hash(path)}, group)
 
-    def public(self, name, url, group, marker, bound=1024 * 1024):
+    def public(self, name, url, group, marker, bound=1024 * 1024, sha256=None):
+        """A fetched notice is bound by its pinned digest when one is given; the
+        marker alone only recognizes the text, as it did before a pin existed."""
         req = urllib.request.Request(url, headers={'User-Agent': 'voice-frontier-notice-audit/1'})
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read(bound + 1)
             if r.status != 200 or len(raw) > bound:
                 raise ValueError('notice download failed or exceeded bound: ' + name)
+        if sha256 is not None and digest(raw) != sha256:
+            raise ValueError('notice content differs from its pinned digest: ' + name)
         if marker not in raw.decode('utf-8'):
             raise ValueError('notice content not recognized: ' + name)
-        return self.add(name, raw, {'url': url, 'retrieved_utc': datetime.now(timezone.utc).isoformat(),
-                                   'source_kind': 'public text, content sealed at retrieval'}, group)
+        origin = {'url': url, 'retrieved_utc': datetime.now(timezone.utc).isoformat(),
+                  'source_kind': 'public text, content sealed at retrieval'}
+        if sha256 is not None:
+            origin['pinned_sha256'] = sha256
+        return self.add(name, raw, origin, group)
 
 
 def model_notices(b):
