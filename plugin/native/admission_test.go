@@ -131,6 +131,38 @@ func TestPrivateUnknownReplyFaultsInsteadOfSatisfyingAnotherCall(t *testing.T) {
 	}
 }
 
+// A SECOND READINESS IS A FAULT even after the first was taken: the channel's
+// capacity refused a repeat only while the first announcement still sat in it,
+// so a worker re-announcing after admission was silently forgotten.
+func TestPrivateSecondReadinessIsAFaultAfterTheFirstWasTaken(t *testing.T) {
+	c, _, replies := privateFixture(t)
+	ready := "{\"ready\":{\"identity\":{\"backend\":\"deterministic-test-not-real-model\"}}}\n"
+	if _, err := io.WriteString(replies, ready); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.ready:
+	case <-time.After(time.Second):
+		t.Fatal("first readiness not delivered")
+	}
+	if _, err := io.WriteString(replies, ready); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.stop:
+	case <-time.After(time.Second):
+		t.Fatal("a second readiness after the first was taken did not fault the transport")
+	}
+	select {
+	case e := <-c.fault:
+		if !strings.Contains(e.Error(), "duplicate") {
+			t.Fatalf("wrong fault: %v", e)
+		}
+	default:
+		t.Fatal("no fault recorded")
+	}
+}
+
 func TestPrivateCapacityRefusesWithoutAdditionalEnqueue(t *testing.T) {
 	c, _, _ := privateFixture(t)
 	for range 64 {
