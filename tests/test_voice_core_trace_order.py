@@ -1,4 +1,4 @@
-"""A synthesis is known to the trace before anything can name it (review, 2026-09-16)."""
+"""A synthesis is known to the trace before anything can name it."""
 
 import asyncio
 import json

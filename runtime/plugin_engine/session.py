@@ -25,8 +25,8 @@ from .capture import capture_processing
 # The bounded input queue admits this many PCM frames. One more slot is reserved
 # for the end-of-input sentinel, so a finish can never be refused after its
 # cutoff is committed: the queue and the 2.048-second admission guard met at
-# exactly 64 frames, and a legal finish at that moment committed the cutoff,
-# armed the tail deadline, then refused (review, 2026-09-16).
+# exactly 64 frames, and a legal finish at that moment committed its cutoff and
+# armed the tail deadline, and was then refused.
 INPUT_QUEUE_FRAMES = 64
 
 
@@ -883,9 +883,9 @@ class ResidentEngine:
         """Release everything the engine owns; cleanup errors are returned, never raised.
 
         A synthesis that failed keeps its error until it is awaited, and closing
-        the output awaits it. Raising here aborted the worker's release of its
-        executors and audio handles (review, 2026-09-16); the abort path already
-        gathers every cleanup result, and the orderly path now does the same.
+        the output awaits it. Raising here would abort the worker's release of its
+        executors and audio handles, so every cleanup result is gathered, as the
+        abort path gathers them.
         """
         if self.speaker is not None:
             self.speaker.closed = True

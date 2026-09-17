@@ -572,9 +572,10 @@ class LiveSession:
         and the id is active from this moment. A barge-in that lands during the
         first notification write, or between scheduling and the task's first
         run, therefore finds the synthesis it interrupts, and its
-        interruption_requested follows synthesis_start in the trace. Registering
-        inside the task put interruption_requested first, and the validator
-        refused the whole session at its end (review, 2026-09-16).
+        interruption_requested follows synthesis_start in the trace. Registered
+        inside the task, the id would be unknown to such a barge-in: its
+        interruption_requested would come first, and the validator would refuse
+        the whole session at its end.
         """
         text = self.reply if text is None else text
         self.active_synthesis = sid
