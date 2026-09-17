@@ -403,7 +403,9 @@ def _validate_trace(trace: Any) -> dict[str, Any]:
                 event, label, streams, direction="input"
             )
             _sha256(event["content_sha256"], f"{label}.content_sha256")
-            key = (kind, stream_id)
+            # Gapless and non-overlapping PER STREAM, as the spec says: two
+            # byte-bound input kinds cannot both occupy one stream's samples.
+            key = stream_id
             expected = input_positions.get(key, 0)
             if start != expected:
                 raise ValueError(
