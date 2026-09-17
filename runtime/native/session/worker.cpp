@@ -955,6 +955,12 @@ class Worker {
           aii_voice_next_event_with_reference(session_, &e, &reference, text, sizeof text, &n, &error_);
       if (rc == AII_VOICE_AGAIN)
         break;
+      if (rc == AII_VOICE_CAPACITY)
+        // Named, not collapsed into "native ownership unavailable": the event
+        // stays in core custody and the session can never drain past it.
+        throw std::runtime_error("native event needs " + std::to_string(n) +
+                                 " bytes; the worker's event buffer holds " +
+                                 std::to_string(sizeof text));
       core(rc, error_);
       if (abort_ || !failure_.empty())
         continue;
@@ -1178,6 +1184,8 @@ public:
     uid_snapshot_.sender([this](Json message){send(std::move(message));});
     if(!policy.empty())uid_policies_.emplace(policy,previous);
   }
+  // The bridge outlives this worker; a sender bound to it must not.
+  ~Worker() { uid_snapshot_.sender({}); }
   int run() {
     start_threads();
     auto ready = object(), identity = object(), details = object(),
