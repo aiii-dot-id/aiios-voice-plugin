@@ -207,6 +207,9 @@ struct AiiAsrStream {
     const size_t count = processed == 0 ? 49 : 65;
     const size_t first = processed == 0 ? 0 : processed - 16;
     auto rows = features.frames(first, count);
+    // The extent is checked before the transpose writes, not after them in
+    // tensor(): a short frame set must never be written past.
+    if (rows.size() != count * 128) throw std::runtime_error("frontend frame extent");
     std::vector<float> input(rows.size());
     for (size_t f = 0; f < count; ++f)
       for (size_t m = 0; m < 128; ++m) input[m*count+f] = rows[f*128+m];

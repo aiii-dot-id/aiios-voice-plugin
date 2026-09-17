@@ -375,6 +375,13 @@ int vf_pulse_read(vf_host *h, float *data, uint32_t capacity) {
   if (!h || !data || !capacity)
     return -1;
   pa_threaded_mainloop_lock(h->loop);
+  if (h->status.failed) {
+    /* Refused before anything is consumed or counted, as every other
+       mutator here refuses: the caller discards the buffer on a refusal, so
+       samples drained first were lost and the client sample clock over-read. */
+    pa_threaded_mainloop_unlock(h->loop);
+    return -1;
+  }
   uint32_t count = h->in_count;
   if (count > capacity)
     count = capacity;
@@ -383,9 +390,8 @@ int vf_pulse_read(vf_host *h, float *data, uint32_t capacity) {
   h->in_head = (h->in_head + count) % IN_CAP;
   h->in_count -= count;
   h->status.read += count;
-  int result = h->status.failed ? -1 : (int)count;
   pa_threaded_mainloop_unlock(h->loop);
-  return result;
+  return (int)count;
 }
 int vf_pulse_end(vf_host *h, uint64_t epoch) {
   if (!h)

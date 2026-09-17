@@ -78,7 +78,11 @@ struct Session::Impl {
       launch([this]{endpoint_loop();}); launch([this]{synthesis_loop();});
       if(speaker) launch([this]{speaker_loop();});
     } catch (...) {
-      stopping=true; changed.notify_all(); cancel_models();
+      // Published under the lock, as fault() publishes it: a worker between
+      // its predicate check and its wait would otherwise miss the wakeup, and
+      // the join below would never return.
+      { std::lock_guard<std::mutex> lock(mutex); stopping=true; }
+      changed.notify_all(); cancel_models();
       for(auto& owner:owners) owner.join();
       throw;
     }
