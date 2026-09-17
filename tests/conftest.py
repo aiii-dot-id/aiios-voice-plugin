@@ -13,7 +13,6 @@ nothing.
 """
 
 import ast
-import functools
 import re
 import shutil
 import subprocess
@@ -24,19 +23,25 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@functools.lru_cache(maxsize=None)
-def cmake_usable():
-    """Whether the cmake on PATH runs at all; a broken launcher is not a tool.
+def unusable_cmake(fallback=None):
+    """The cmake a suite would run, when it exists but does not run; else None.
 
-    The suites that configure real projects skip on this, naming it, instead
-    of reporting a launcher's traceback as a failed link contract."""
+    A broken launcher is not a tool: the suites that configure real projects
+    skip, naming it, instead of reporting its traceback as a failed contract.
+    The cmake on PATH comes first, then the suite's own `fallback` path. When
+    no cmake exists at all nothing is skipped, and those suites fail, as a
+    native build contract without CMake should."""
     cmake = shutil.which("cmake")
-    if not cmake:
-        return False
+    if cmake is None and fallback is not None and Path(fallback).is_file():
+        cmake = str(fallback)
+    if cmake is None:
+        return None
     try:
-        return subprocess.run([cmake, "--version"], capture_output=True, timeout=20).returncode == 0
+        if subprocess.run([cmake, "--version"], capture_output=True, timeout=20).returncode == 0:
+            return None
     except (OSError, subprocess.SubprocessError):
-        return False
+        pass
+    return cmake
 
 
 EVIDENCE_DIRECTORY = re.compile(r"\b(deliverables|artifacts)/")

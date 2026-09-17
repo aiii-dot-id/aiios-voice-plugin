@@ -5,10 +5,11 @@ import subprocess
 
 import pytest
 
-from tests.conftest import cmake_usable
+from tests.conftest import unusable_cmake
 
-if not cmake_usable():
-    pytest.skip('cmake on PATH does not run; this link check configures a real project', allow_module_level=True)
+BROKEN_CMAKE = unusable_cmake()
+if BROKEN_CMAKE:
+    pytest.skip(f'{BROKEN_CMAKE} does not run; this link check configures a real project', allow_module_level=True)
 
 
 ROOT = Path(__file__).resolve().parents[1]
