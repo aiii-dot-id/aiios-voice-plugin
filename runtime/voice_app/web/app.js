@@ -36,6 +36,7 @@ $("start").onclick = () => {
   ws.onmessage = event => {
     let row;
     try { row = JSON.parse(event.data); } catch (error) { log({type: "malformed_frame", reason: String(error)}); return; }
+    if (!row || typeof row !== "object" || Array.isArray(row)) { log({type: "malformed_frame", reason: "not a JSON object"}); return; }
     const detail = row.event || {}; log(row);
     if (row.type === "ready") { status("Listening. Ask a question or just start talking."); $("finish").disabled = $("interrupt").disabled = false; }
     if (row.type === "reply_requested") { pending = row; $("send").disabled = $("mode").value !== "manual"; if ($("mode").value === "manual") status("Your turn is ready. Supply a reply within 30 seconds."); }
