@@ -41,8 +41,10 @@ class Worker:
         os.close(audio_in)
         os.close(audio_out)
         self.lines = queue.Queue()
-        threading.Thread(target=self.read, daemon=True).start()
-        threading.Thread(target=self.drain, daemon=True).start()
+        self.readers = [threading.Thread(target=self.read, daemon=True),
+                        threading.Thread(target=self.drain, daemon=True)]
+        for reader in self.readers:
+            reader.start()
 
     def read(self):
         for line in self.child.stdout:
@@ -89,7 +91,14 @@ class Worker:
                 self.child.kill()
                 self.child.wait()
             os.close(self.audio_in)
-        return code, self.child.stderr.read().decode()
+        for reader in self.readers:
+            reader.join(timeout=3)
+            assert not reader.is_alive(), "fixture reader did not retire"
+        stderr = self.child.stderr.read().decode()
+        self.child.stdout.close()
+        self.child.stderr.close()
+        os.close(self.audio_out)
+        return code, stderr
 
 
 def test_a_synthesis_fault_found_at_release_fails_the_worker():

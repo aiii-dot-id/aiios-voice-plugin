@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 project(aii_native_session LANGUAGES C CXX)
+option(AII_UID_NCNN "Use exact ncnn/Vulkan UID representation in the mobile composition" OFF)
+if(AII_UID_NCNN)
+  add_compile_definitions(AII_UID_NCNN)
+endif()
 # A single-config build without a profile otherwise compiles this resident
 # wrapper at -O0: UID integrity hashing alone then costs seconds at startup.
 # Explicit Debug/RelWithDebInfo choices and multi-config generators stay intact.
@@ -7,6 +11,9 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Native session build profile" FORCE)
 endif()
 enable_testing()
+add_executable(aii_uid_model_binding_test ../../native_uid/model_contract_test.cpp)
+target_compile_features(aii_uid_model_binding_test PRIVATE cxx_std_17)
+add_test(NAME uid_exact_model_binding COMMAND aii_uid_model_binding_test)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(aii_vulkan_device_policy_test ../../native_pocket/vulkan_device_policy_test.cpp)
   target_compile_features(aii_vulkan_device_policy_test PRIVATE cxx_std_17)

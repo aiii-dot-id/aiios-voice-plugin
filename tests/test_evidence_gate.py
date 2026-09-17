@@ -80,12 +80,12 @@ def test_gate_follows_sibling_test_modules_in_every_import_form(tmp_path):
     assert missing_needs(loop_a, root) == []  # a cycle is not a missing need
 
 
-def test_a_test_body_need_skips_that_test_by_name(tmp_path):
+def test_a_test_body_need_fails_the_required_gate(tmp_path):
     root = tree(tmp_path)
     (root / "tests" / "test_fine.py").write_text("X = 1\n")
     (root / "tests" / "test_base.py").write_text("from scripts.absent import b\n")
     skip_unless_shipped("scripts.present", "tests.test_fine", root=root)  # returns
-    with pytest.raises(pytest.skip.Exception) as skipped:
+    with pytest.raises(pytest.fail.Exception) as skipped:
         skip_unless_shipped(
             "scripts.present", "scripts.absent", "tests.test_base", "deliverables/", root=root
         )

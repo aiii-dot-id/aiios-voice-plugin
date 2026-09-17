@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tarfile
@@ -19,6 +20,7 @@ from scripts.prepare_desktop_distribution import copy_asset, emit, put, sha
 from scripts.repackage_native_schemas import read_package
 from scripts.package_common_native_checkpoint import enrollment_interfaces
 from scripts.stage_qualified_runtime import check_archive
+from scripts.intel_openmp_redist import verified_notices as openmp_notices
 
 TEMPLATE=ROOT/'deliverables/desktop-beta-release-20260915-r1/portable-windows-family-r1/author'
 TEMPLATE_SHA='d6c0cee9feab43bf6c07a79ad870966a10cff342d9b0406b2e8b4297e50a9a7b'
@@ -91,13 +93,15 @@ def current_windows_notices(profile):
                 if hashlib.sha256(raw).hexdigest()!=row['sha256'] or len(raw)!=row['bytes']:
                     raise ValueError('vendor notice differs from qualified runtime')
                 files['notices/windows-directml-current/'+dest]=raw
+    extra,binding=openmp_notices(profile['files']['bin/libiomp5md.dll'])
+    files.update(extra);libraries.append(binding)
     return files,libraries
 
 
 def runtime(stage):
     result=json.loads((stage/'result.json').read_text())
-    if not result['passed'] or result['beta_release_ready']:
-        raise ValueError('expected successful explicitly unqualified staging')
+    if result.get('passed') is not True or result.get('installed') is not False or result.get('published') is not False:
+        raise ValueError('expected successful local staging with no installation/publication claim')
     archive=Path(result['runtime_archive']['path'])
     with tarfile.open(archive) as t:
         raw=t.extractfile('runtime/voice-runtime.json').read()
@@ -109,13 +113,66 @@ def runtime(stage):
     return result,profile
 
 
+def uid_replacement(cfg,index,model_template,notice_root):
+    """Change one measured numerical space; keep every other model/term intact."""
+    model=json.loads(model_template.read_text());record=json.loads((notice_root/'UID-REPLACEMENT.json').read_text())
+    if (model['id'],model['version'])!=(cfg['id'],cfg['version']):raise ValueError('UID template identity differs')
+    before={m['path']:m for m in cfg['models']};after={m['path']:m for m in model['models']}
+    if len(after)!=len(model['models']) or set(before)!=set(after):raise ValueError('UID template model census differs')
+    if {n for n in before if before[n]!=after[n]}!={'uid/model.onnx'}:raise ValueError('replacement changes other models')
+    old,new=before['uid/model.onnx'],after['uid/model.onnx']
+    if (new['name']!=old['name'] or new['sha256']!=record['model_sha256'] or new['size']!=record['model_bytes']
+            or old['sha256']!=record['replaces_model_sha256']):raise ValueError('UID model/notice binding differs')
+    files={}
+    for name,row in record['files'].items():
+        path=Path(name)
+        if path.is_absolute() or '..' in path.parts:raise ValueError('unsafe UID notice path')
+        raw=(notice_root/path).read_bytes()
+        if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('UID notice changed')
+        files['notices/uid-resnet152-lm/'+name]=raw
+    files['notices/uid-resnet152-lm/UID-REPLACEMENT.json']=(notice_root/'UID-REPLACEMENT.json').read_bytes()
+    updated_index=copy.deepcopy(index)
+    rows=[r for r in updated_index['models'] if r['path']=='uid/model.onnx']
+    if len(rows)!=1 or rows[0]['sha256']!=old['sha256']:raise ValueError('old UID notice index differs')
+    rows[0].update(sha256=new['sha256'],bytes=new['size'],notice_group='uid-resnet152-lm')
+    obsolete=[s for s in updated_index['open_items'] if s.startswith('WeSpeaker delegates model licensing to training datasets; VoxBlink2 ')]
+    if len(obsolete)!=1:raise ValueError('expected explicit old UID disposition item')
+    updated_index['open_items']=[s for s in updated_index['open_items'] if s not in obsolete]
+    updated_index['uid_replacement']=dict(model_sha256=new['sha256'],record='notices/uid-resnet152-lm/UID-REPLACEMENT.json',
+        old_checkpoint_terms_not_applied_to_new_weights=True,
+        declared_terms=record['declarations'],other_component_obligations_unchanged=True)
+    # Commit the in-memory pair only after every model/notice/index check passes.
+    cfg['models']=copy.deepcopy(model['models'])
+    index.clear()
+    index.update(updated_index)
+    return files
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True)
     p.add_argument('--inputs',type=Path,help='Explicit stage and carrier paths with SHA-256 bindings')
+    p.add_argument('--uid-model-template',type=Path)
+    p.add_argument('--uid-notices',type=Path)
+    p.add_argument('--uid-model-template-sha256')
+    p.add_argument('--uid-notices-sha256')
+    p.add_argument('--version',help='New immutable release version; never overwrite a published tag')
     a=p.parse_args();out=a.out.resolve();pin,_=verify_sdk()
     stages, carriers = candidate_inputs(a.inputs)
     if sha(TEMPLATE/'plugin.json')!=TEMPLATE_SHA:raise ValueError('template changed')
     cfg=json.loads((TEMPLATE/'plugin.json').read_text())
+    # Notice selection and model selection form one atomic packaging decision.
+    index=json.loads((TEMPLATE/'notices/INDEX.json').read_text());uid_files={}
+    if any((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):
+        if not all((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):raise ValueError('complete UID replacement bindings required')
+        if sha(a.uid_model_template)!=a.uid_model_template_sha256 or sha(a.uid_notices/'UID-REPLACEMENT.json')!=a.uid_notices_sha256:raise ValueError('UID replacement inputs changed')
+        uid_files=uid_replacement(cfg,index,a.uid_model_template,a.uid_notices)
+    if a.version:
+        if not re.fullmatch(r'\d+\.\d+\.\d+-beta\.\d+',a.version):raise ValueError('expected explicit beta version')
+        old_base='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v'+cfg['version']+'/'
+        new_base='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v'+a.version+'/'
+        for model in cfg['models']:
+            if model['url'].startswith(old_base):model['url']=new_base+model['url'][len(old_base):]
+        cfg['version']=a.version
     # Signature/readiness status belongs in evidence, not descriptive metadata
     # that would remain falsely "unsigned" after the exact package is signed.
     cfg['title']='AII Voice'
@@ -139,7 +196,7 @@ def main():
         arc=r['runtime_archive'];name=arc['sha256']+'-'+variant+'-runtime.tar.gz'
         copy_asset(arc['path'],out/'assets'/name,arc['size'],arc['sha256'])
         decl={k:arc[k] for k in ('sha256','size','files','installed_bytes','inventory_sha256')}
-        decl.update(variant_id=variant,url='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v0.1.0-beta.1/'+name)
+        decl.update(variant_id=variant,url='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v'+cfg['version']+'/'+name)
         cfg['runtimes'].append(decl);assets[name]=dict(kind='runtime',variant_id=variant,sha256=arc['sha256'],size=arc['size'])
         # Do not change measured model/backend/resource choices with packaging.
         selected=[m for m in cfg['models'] if m['name'] in v['accelerator']['models']]
@@ -161,14 +218,21 @@ def main():
     # Notices are original texts with exact attribution. Rebind the one stale
     # execution description; do not represent notice collection as clearance.
     notice_rows=json.loads((TEMPLATE/'release-notices.json').read_text())
+    if uid_files:notice_rows=[r for r in notice_rows if not r['path'].startswith('notices/wespeaker-uid/')]
     for row in notice_rows:
         if row['path']!='notices/INDEX.json':
             copy_asset(TEMPLATE/row['path'],author/row['path'],row['size'],row['sha256'])
     # The original index describes third-party bytes, which must be present in
     # this candidate. A missing or changed library is not a reusable notice.
-    index=json.loads((TEMPLATE/'notices/INDEX.json').read_text())
     files,current=current_windows_notices(profiles['windows'])
+    files.update(uid_files)
     index['libraries']=[r for r in index['libraries'] if not (r['platform']=='windows' and r['component']=='onnxruntime')]+current
+    # Keep the historical PyPI notice corpus, but select the exact unchanged
+    # DLL from Intel's redistributable channel with its own original terms.
+    obsolete=[s for s in index['open_items'] if s.startswith('The byte-matched Intel OpenMP 2025.2.0 distribution carries its Developer Tools EULA')]
+    if len(obsolete)!=1:raise ValueError('expected historical OpenMP disposition item')
+    index['open_items']=[s for s in index['open_items'] if s not in obsolete]
+    index['intel_openmp_distribution']=copy.deepcopy(current[-1])
     notice_rows=[r for r in notice_rows if r['path']!='notices/INDEX.json']
     for name,raw in files.items():
         put(author/name,raw)
@@ -178,6 +242,16 @@ def main():
     for lib in index['libraries']:
         hashes={f['sha256'] for f in profiles[lib['platform']]['files'].values()}
         if lib['shipped_sha256'] not in hashes:raise ValueError('third-party notice binding changed: '+lib['component'])
+    # This sentence belonged to the original notice collection, not to this
+    # package. The bytes above now include its notices and declared endpoints.
+    # Actual public availability and legal disposition remain separate gates.
+    historical='Final release must incorporate notices and real asset URLs before freezing/signing; this evidence bundle did not repack the working candidate.'
+    if index['open_items'].count(historical)!=1:raise ValueError('notice-collection history changed')
+    index['open_items'].remove(historical)
+    index['release_notice_packaging']=dict(notices='included_and_byte_bound',
+        declared_urls='pinned_upstream_and_new_release_destinations',
+        public_release_url_availability='not_asserted_by_assembly',
+        supersedes_original_collection_note=historical)
     emit(author/'notices/INDEX.json',index)
     notice_rows.append(dict(path='notices/INDEX.json',size=(author/'notices/INDEX.json').stat().st_size,sha256=sha(author/'notices/INDEX.json')))
     for name in schemas:put(author/name,(ROOT/'plugin/native'/name).read_bytes())
@@ -205,13 +279,16 @@ def main():
         explicit_inputs_sha256=sha(a.inputs) if a.inputs else None,
         speaker_methods=[d['id'] for d in descriptors if d['id'].startswith('speaker.')],
         input_output_schema_files=sorted(schemas),models=len(cfg['models']),notices=len(notice_rows),
-        signed=False,installed=False,published=False,beta_release_ready=False,
+        signed=False,installed=False,published=False,
+        release_status=dict(package_integrity='verified',package_signature='not_performed_by_assembly',
+            installed_journey='not_performed_by_assembly',technical_acceptance='platform_audits_only',
+            distribution_review='complete' if index['distribution_review_complete'] else 'open',publication='not_performed_by_assembly'),
         windows_authenticode_verified=bound['windows'].get('authenticode_verified',False),
         required_before_release=([] if bound['windows'].get('authenticode_verified') else ['Authenticode and rebind Windows runtime/carrier'])+[
           'host guided capture, UID ingress filters and AI-visible policy',
           'final signed fresh-cache installed journeys','authorized T3 signature and host verification',
           'third-party distribution review','signed catalog and hosted byte readback']))
-    print(json.dumps({'bundle':assembly,'variants':list(plans),'beta_release_ready':False}))
+    print(json.dumps({'bundle':assembly,'variants':list(plans),'signed':False,'published':False}))
 
 
 if __name__=='__main__':main()

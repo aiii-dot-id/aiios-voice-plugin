@@ -1,6 +1,7 @@
 #include "asr.h"
 #include "frontend.h"
 #include "onnxruntime_cxx_api.h"
+#include "onnx_log.h"
 #include "initializers.h"
 #include "../native/platform/startup_trace.h"
 #include "../native/platform/coreml_candidate.h"
@@ -48,7 +49,7 @@ struct Graph {
   }
 };
 struct Model {
-  Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "aii-native-asr"};
+  Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "aii-native-asr", aii::asr::onnx_log, nullptr};
   std::unique_ptr<aii::platform::ReadonlyModel> decoder_bytes,joiner_bytes,token_bytes;
   Ort::SessionOptions options;
   std::unique_ptr<Graph> encoder, decoder, joiner;

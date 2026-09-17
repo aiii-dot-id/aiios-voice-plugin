@@ -30,14 +30,18 @@ int main(int argc, char** argv) {
   try {
     if (argc != 4) throw std::invalid_argument("usage: aii_uid_probe MODEL PCM_PATHS BACKEND");
     char error[1024]{};
-    auto model = read(argv[1], 100865597);
+    const bool native=std::string(argv[3]).rfind("ncnn-",0)==0;
+    auto model = read(native?std::string(argv[1])+"/model.ncnn.bin":argv[1], 100865597);
+    auto graph = native?read(std::string(argv[1])+"/model.ncnn.param",29451):std::vector<uint8_t>{};
     const auto began = Clock::now();
     std::unique_ptr<AiiUid, decltype(&aii_uid_destroy)> uid(
+        native?aii_uid_create_ncnn(graph.data(),graph.size(),model.data(),model.size(),argv[3],error,sizeof(error)):
         aii_uid_create(model.data(), model.size(), argv[3], error, sizeof(error)), aii_uid_destroy);
     if (!uid) throw std::runtime_error(error);
     const double construction = seconds(began);
     // The caller may release the original serialized buffer after create.
     std::fill(model.begin(), model.end(), 0); model.clear(); model.shrink_to_fit();
+    std::fill(graph.begin(),graph.end(),0);graph.clear();graph.shrink_to_fit();
     std::ifstream list(argv[2]);
     require(bool(list), "probe corpus unavailable");
     std::string path;
@@ -50,10 +54,12 @@ int main(int argc, char** argv) {
       require(!path.empty() && id < 10000, "probe corpus line/count");
       auto pcm = read(path, 960000);
       Vector vector{};
+      std::cerr << "UID_OWNER_BEGIN " << id << '\n' << std::flush;
       const auto begin = Clock::now();
       const int rc = aii_uid_embed(uid.get(), ++id, pcm.data(), pcm.size(), 16000,
           vector.data(), vector.size(), error, sizeof(error));
       if (rc) throw std::runtime_error(error);
+      std::cerr << "UID_OWNER_END " << id-1 << '\n' << std::flush;
       std::cout << "{\"index\":" << id - 1 << ",\"seconds\":" << seconds(begin) << ",\"samples\":" << pcm.size() / 2 << ",\"vector\":[";
       for (size_t i = 0; i < vector.size(); ++i) std::cout << (i ? "," : "") << vector[i];
       std::cout << "]}\n" << std::flush;
@@ -78,6 +84,22 @@ int main(int argc, char** argv) {
     refused(20001, clipped, 16000, 256, 2);
     std::vector<uint8_t> stress(960000);
     for (size_t i = 0; i < stress.size(); ++i) stress[i] = first[i % first.size()];
+    int frontend_rc=-1;
+    std::thread frontend_worker([&] {
+      frontend_rc=aii_uid_embed(uid.get(),25000,stress.data(),stress.size(),16000,
+          sentinel.data(),sentinel.size(),error,sizeof(error));
+    });
+    const auto frontend_wait=Clock::now();
+    while(aii_uid_phase(uid.get())!=1&&seconds(frontend_wait)<5)
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+    const bool saw_frontend=aii_uid_phase(uid.get())==1;
+    const auto frontend_control=Clock::now();
+    const int frontend_cancel=aii_uid_cancel_through(uid.get(),25000);
+    const double frontend_cancel_seconds=seconds(frontend_control);
+    frontend_worker.join();
+    const double frontend_retirement_seconds=seconds(frontend_control);
+    require(saw_frontend&&frontend_cancel==0&&frontend_rc==3&&unchanged(),"frontend cancellation lost its output fence");
+    require(frontend_cancel_seconds<0.05&&frontend_retirement_seconds<0.25,"frontend cancellation/retirement deadline exceeded");
     int inference_rc = -1;
     std::thread worker([&] {
       inference_rc = aii_uid_embed(uid.get(), 30000, stress.data(), stress.size(), 16000,
@@ -110,9 +132,20 @@ int main(int argc, char** argv) {
     refused(30004, first, 16000, 256, 3);
     require(aii_uid_embed(uid.get(), 30006, first.data(), first.size(), 16000, recovery.data(), recovery.size(), error, sizeof(error)) == 0 && recovery == reference,
         "monotonic fence prevented fresh recovery");
+    uid.reset();
+    model=read(native?std::string(argv[1])+"/model.ncnn.bin":argv[1],100865597);
+    graph=native?read(std::string(argv[1])+"/model.ncnn.param",29451):std::vector<uint8_t>{};
+    uid.reset(native?aii_uid_create_ncnn(graph.data(),graph.size(),model.data(),model.size(),argv[3],error,sizeof(error)):
+        aii_uid_create(model.data(),model.size(),argv[3],error,sizeof(error)));
+    require(bool(uid),"UID reopen refused");
+    require(aii_uid_embed(uid.get(),1,first.data(),first.size(),16000,recovery.data(),recovery.size(),error,sizeof(error))==0&&recovery==reference,
+        "reopened owner changed embedding");
     std::cout << "{\"summary\":true,\"count\":" << id << ",\"construction_seconds\":" << construction
               << ",\"invalid_refused\":true,\"cancel_seconds\":" << control_seconds
               << ",\"retirement_seconds\":" << retirement_seconds
+              << ",\"frontend_cancel_seconds\":" << frontend_cancel_seconds
+              << ",\"frontend_retirement_seconds\":" << frontend_retirement_seconds
+              << ",\"reopen_exact\":true"
               << ",\"recovery_exact\":true,\"monotonic_fence\":true}\n" << std::flush;
     return 0;
   } catch (const std::exception& e) { std::cerr << "UID probe: " << e.what() << '\n'; return 1; }

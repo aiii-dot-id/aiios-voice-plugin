@@ -1,20 +1,32 @@
 """Real SDK transport probes for the engine control; client reports are simulated."""
 
+import os
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from scripts.build_plugin_carrier import development_carrier
+from scripts.build_plugin_carrier import development_carrier, verify_build
 from scripts.plugin_abort_probe import abort_waiting_for_receipt
 from scripts.prove_plugin_sdk_engine import SDKHost
 from tests.plugin_models import open_args
 
 
-def test_sdk_abort_during_receipt_wait_and_successful_reuse(tmp_path):
+@pytest.fixture
+def carrier():
+    candidate = development_carrier()
+    if selected := os.environ.get("AII_TEST_CARRIER_BUILD"):
+        build = Path(selected).resolve(strict=True)
+        verify_build(build)
+        candidate = build / candidate.name
+    return candidate
+
+
+def test_sdk_abort_during_receipt_wait_and_successful_reuse(tmp_path, carrier):
     host = SDKHost(
         SimpleNamespace(
-            output=tmp_path, fixture=True, carrier=development_carrier()
+            output=tmp_path, fixture=True, carrier=carrier
         )
     )
     try:
@@ -35,10 +47,10 @@ def test_sdk_abort_during_receipt_wait_and_successful_reuse(tmp_path):
         assert host.close() == 0
 
 
-def test_missing_receipt_fails_real_sdk_drain_without_inventing_playback(tmp_path):
+def test_missing_receipt_fails_real_sdk_drain_without_inventing_playback(tmp_path, carrier):
     host = SDKHost(
         SimpleNamespace(
-            output=tmp_path, fixture=True, carrier=development_carrier()
+            output=tmp_path, fixture=True, carrier=carrier
         )
     )
     try:
@@ -89,11 +101,11 @@ def test_missing_receipt_fails_real_sdk_drain_without_inventing_playback(tmp_pat
 
 
 def test_public_receipts_reject_replaced_session_and_bad_format_without_effect(
-    tmp_path,
+    tmp_path, carrier,
 ):
     host = SDKHost(
         SimpleNamespace(
-            output=tmp_path, fixture=True, carrier=development_carrier()
+            output=tmp_path, fixture=True, carrier=carrier
         )
     )
     old = None

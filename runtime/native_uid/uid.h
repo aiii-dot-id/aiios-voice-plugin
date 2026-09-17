@@ -15,12 +15,19 @@ extern "C" {
 #endif
 typedef struct AiiUid AiiUid;
 /* Private native-engine ABI, not an SDK extension. The asset owner first
- * verifies the exact 100865597-byte WeSpeaker SHA-256 documented in README.
+ * verifies exact model bytes and the policy binding from model_contract.h.
  * This owner retains model bytes. Explicit cpu or cuda; never backend fallback.
  * ORT_DISABLE_TELEMETRY=1 must precede creation. No network or file discovery.
  */
 AII_UID_API AiiUid* aii_uid_create(const void* model, size_t bytes,
     const char* backend, char* error, size_t error_capacity);
+/* Private native representation of the SAME bound embedding space. Caller
+ * verifies both exact files against model_contract.h before creation. Both
+ * buffers are retained by copy. Explicit ncnn-cpu reference or ncnn-vulkan;
+ * unavailable GPU is a refusal. ORT builds refuse this representation. */
+AII_UID_API AiiUid* aii_uid_create_ncnn(const void* graph, size_t graph_bytes,
+    const void* weights, size_t weight_bytes, const char* backend,
+    char* error, size_t error_capacity);
 /* One embedding worker. Input is complete, immutable PCM16 little endian,
  * mono 16 kHz, 31920..480000 samples (1.995..30 seconds), never cropped/padded.
  * IDs are positive and strictly increasing within this owner. Output is 256

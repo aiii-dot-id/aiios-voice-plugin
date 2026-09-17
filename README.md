@@ -20,5 +20,12 @@ Build the carrier against the pinned Plugin SDK revision named in
 companions are release assets, named by digest in the manifests here; they
 are not source and do not live in this repository.
 
+The integrated source checkpoint, reproducible focused gates and remaining
+release boundaries are recorded in
+[`docs/SOURCE_CLOSEOUT_20260917.md`](docs/SOURCE_CLOSEOUT_20260917.md).
+A clean source landing is not a replacement signature or installed-product
+qualification. Historical evidence audits require the bound external artifacts;
+missing evidence is not silently converted into a passing gate.
+
 Licensed under the Apache License 2.0 (see LICENSE). Third-party models,
 datasets and papers keep their own terms.

@@ -22,7 +22,9 @@ class EvidenceClient:
             bufsize=1,
         )
         self.events = queue.Queue()
-        self.messages = deque(maxlen=4096)  # a bounded record, not a log
+        self._messages = deque(maxlen=4096)  # a bounded record, not a log
+        self._message_lock = threading.Lock()
+        self._messages_dropped = 0
 
         def read():
             try:
@@ -32,11 +34,17 @@ class EvidenceClient:
                         log.flush()
                         if line.startswith("VF102 "):
                             row = json.loads(line[6:])
-                            self.messages.append(row)
+                            with self._message_lock:
+                                if len(self._messages) == self._messages.maxlen:
+                                    self._messages_dropped += 1
+                                self._messages.append(row)
                             self.events.put(row)
             except Exception as exc:  # noqa: BLE001 - propagate protocol failure
                 self.events.put({"event": "protocol_error", "message": repr(exc)})
             finally:
+                # This thread owns the buffered reader. Closing here cannot
+                # wait behind its own read lock, including descendant EOF.
+                self.child.stdout.close()
                 self.events.put({"event": "exited"})
 
         self.reader = threading.Thread(target=read, daemon=True)
@@ -48,6 +56,15 @@ class EvidenceClient:
         except BaseException:
             self.close(abort=True)
             raise
+
+    def record(self):
+        """JSON-safe snapshot; truncation is explicit, not a complete-log claim."""
+        with self._message_lock:
+            return {"events": list(self._messages), "events_dropped": self._messages_dropped}
+
+    @property
+    def messages(self):
+        return self.record()["events"]
 
     def send(self, op, **fields):
         self.child.stdin.write(json.dumps({"op": op, **fields}) + "\n")

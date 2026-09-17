@@ -76,6 +76,18 @@ def resolved(ev, sid):
 
 
 @pytest.mark.asyncio
+async def test_direct_awaitable_api_uses_registered_path(tmp_path, executor):
+    async def send(message):
+        if message.get("type") == "audio":
+            live.acknowledged = message["end_sample"]
+    ev = Evidence(tmp_path, IDENTITY, {}, "test")
+    live = LiveSession(Models(), executor, send, ev, "A complete reply.")
+    await live.synthesize("direct")
+    ev.finish()
+    assert [e["type"] for e in resolved(ev, "direct")] == ["synthesis_end"]
+
+
+@pytest.mark.asyncio
 async def test_a_reply_task_cancelled_before_it_runs_still_resolves_its_synthesis(
     tmp_path, executor
 ):

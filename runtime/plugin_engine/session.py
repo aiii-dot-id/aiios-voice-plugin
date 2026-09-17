@@ -887,13 +887,19 @@ class ResidentEngine:
         executors and audio handles, so every cleanup result is gathered, as the
         abort path gathers them.
         """
+        results = []
         if self.speaker is not None:
             self.speaker.closed = True
         if self.output:
-            self.fence({}, cancel=True)
+            try:
+                self.fence({}, cancel=True)
+            except Exception as error:
+                # Cancellation can fail synchronously. Retain the diagnostic
+                # without stranding the remaining task/output owners.
+                results.append(error)
         for task in tuple(self.tasks):
             task.cancel()
-        results = list(await asyncio.gather(*tuple(self.tasks), return_exceptions=True))
+        results.extend(await asyncio.gather(*tuple(self.tasks), return_exceptions=True))
         if self.output:
             results.extend(
                 await asyncio.gather(
