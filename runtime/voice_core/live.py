@@ -387,9 +387,7 @@ class LiveSession:
             while self.playing and self.application.live(request):
                 await asyncio.sleep(0.01)
         if self.application.live(request):
-            self.cancel_generation = False
-            self.synthesis_task = asyncio.create_task(self.synthesize(sid, text))
-            await asyncio.shield(self.synthesis_task)
+            await asyncio.shield(self.begin_synthesis(sid, text))
 
     async def gpu(self, function, *args, **kwargs):
         return await asyncio.get_running_loop().run_in_executor(
@@ -565,28 +563,48 @@ class LiveSession:
                 }
             )
         elif self.reply:
-            self.cancel_generation = False
-            self.synthesis_task = asyncio.create_task(
-                self.synthesize(f"s{self.turn_number}")
-            )
+            self.begin_synthesis(f"s{self.turn_number}")
 
-    async def synthesize(self, sid, text=None):
+    def begin_synthesis(self, sid, text=None):
+        """Schedule a reply and make it known BEFORE anything can name it.
+
+        The commit and synthesis_start events are journalled here, synchronously,
+        and the id is active from this moment. A barge-in that lands during the
+        first notification write, or between scheduling and the task's first
+        run, therefore finds the synthesis it interrupts, and its
+        interruption_requested follows synthesis_start in the trace. Registering
+        inside the task put interruption_requested first, and the validator
+        refused the whole session at its end (review, 2026-09-16).
+        """
         text = self.reply if text is None else text
         self.active_synthesis = sid
         self.known_synthesis.add(sid)
         self.output_lengths[sid] = self.output_acks[sid] = 0
         self.generated = self.acknowledged = 0
+        self.cancel_generation = False
+        journalled = [
+            self.evidence.emit(
+                "application_event",
+                kind="response_committed",
+                payload_sha256=hashlib.sha256(text.encode()).hexdigest(),
+            ),
+            self.evidence.emit("synthesis_start", synthesis_id=sid),
+        ]
+        self.synthesis_task = asyncio.create_task(
+            self.synthesize(sid, text, journalled)
+        )
+        return self.synthesis_task
+
+    async def synthesize(self, sid, text, journalled):
         job = None
         completed = False
-        await self.event(
-            "application_event",
-            kind="response_committed",
-            payload_sha256=hashlib.sha256(text.encode()).hexdigest(),
-        )
-        await self.event("synthesis_start", synthesis_id=sid)
+        for event in journalled:
+            await self.send({"type": "event", "event": event})
         try:
-            job = self.output.submit(text)
-            self.output_job = job
+            if not self.cancel_generation:
+                # A barge-in before this point already retired the reply.
+                job = self.output.submit(text)
+                self.output_job = job
             while not self.cancel_generation:
                 # Bound outstanding playback to approximately two seconds.
                 while (
