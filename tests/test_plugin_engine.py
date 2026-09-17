@@ -97,8 +97,8 @@ async def test_failure_remains_terminal_and_shutdown_releases_owned_tasks(parts)
 async def test_shutdown_reports_a_stored_synthesis_error_instead_of_raising(parts):
     """A backend fault is kept on the synthesis until it is awaited, and closing
     the output awaits it. Shutdown returns such errors after releasing what it
-    owns; raising them aborted the worker's release of its executors and audio
-    handles (review, 2026-09-16)."""
+    owns; raising them would abort the worker's release of its executors and
+    audio handles."""
     e, models, _, _ = parts
     # The wrong clock is refused by the output service and stored on the job.
     models.tts_next = lambda it: (np.full(10, 0.1, np.float32), 16000, 1)

@@ -1,6 +1,6 @@
 """Input and playback-reference chunks are gapless and non-overlapping PER STREAM,
 as the protocol says: two byte-bound input kinds cannot both occupy one stream's
-samples (review, 2026-09-16)."""
+samples."""
 
 import numpy as np
 import pytest

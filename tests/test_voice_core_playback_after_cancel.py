@@ -1,6 +1,6 @@
 """Playback of audio buffered before a cancellation is a modelled state: the
 validator admits playback_start for a cancelled synthesis as it already admits
-interruption_requested for one (review, 2026-09-16)."""
+interruption_requested for one."""
 
 import pytest
 
