@@ -312,7 +312,10 @@ async def serve(
                 emit({"id": body["id"], "error": str(error)})
     finally:
         stopped.set()
-        await engine.shutdown()
+        # Cleanup errors are reported after every release below, never in its
+        # place: a stored synthesis error used to escape here and leave the
+        # executors and audio handles to the watchdog exit.
+        cleanup_errors = await engine.shutdown()
         wt.cancel()
         await asyncio.gather(wt, return_exceptions=True)
         io_executor.shutdown(wait=False, cancel_futures=True)
@@ -321,6 +324,8 @@ async def serve(
         # the final owner; never report successful release of that process early.
         audio_in.close()
         audio_out.close()
+        for error in cleanup_errors:
+            print("worker cleanup:", error, file=sys.stderr)
 
 
 def main():
