@@ -6,6 +6,8 @@ import zipfile
 
 import pytest
 
+from tests.conftest import skip_unless_shipped
+
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / 'runtime/native_pocket/owned_runtime_replace.h'
 PROBE = r'''
@@ -81,6 +83,7 @@ def test_owned_replacement_and_compiling_mutations(tmp_path, mutation):
 
 @pytest.mark.parametrize('damage', [None, 'geometry', 'backend', 'helper', 'argument', 'parent'])
 def test_exact_geometry_and_private_backend_seam(damage):
+    skip_unless_shipped('scripts.stage_native_single_prepare', 'scripts.audit_native_single_prepare', 'deliverables/')
     from scripts.stage_native_single_prepare import owned_runtime_retirement
     from scripts.audit_native_single_prepare import verify_owned_source
     with zipfile.ZipFile(ROOT / 'deliverables/native-gpu-capacity-20260912-r1/payload.zip') as z:

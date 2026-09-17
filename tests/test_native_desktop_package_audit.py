@@ -8,6 +8,7 @@ import pytest
 from scripts.audit_native_desktop_packages import (
     assert_binary_target, carrier_refresh_evidence, digest, memory_evidence, tar_files,
 )
+from tests.conftest import skip_unless_shipped
 
 
 @pytest.mark.parametrize('damage',[None,'parent','runtime','model','model-root','library','settings','unchanged-carrier'])
@@ -54,6 +55,7 @@ def test_memory_peak_recomputed_from_exact_owner_samples():
 
 @pytest.mark.parametrize('damage',[None,'worker','overlap','late_birth','foreign_parent','unretired','undeclared','reused'])
 def test_startup_carrier_is_accounted_without_admitting_foreign_or_concurrent_owners(damage):
+    skip_unless_shipped('scripts.measure_common_native_checkpoint')
     from scripts.measure_common_native_checkpoint import classify_owners
     args=memory_fixture();memory=args[0];loaded=args[1]['loaded_worker']
     startup={'pid':39,'created':99,'parent_pid':40,'exe':'/cp/runtime/aii-voice-t3',

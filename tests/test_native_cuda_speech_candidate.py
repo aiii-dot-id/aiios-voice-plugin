@@ -3,15 +3,19 @@ from pathlib import Path
 import zipfile
 import pytest
 
+from tests.conftest import skip_unless_shipped
+
 ROOT=Path(__file__).resolve().parents[1]
 
 
 def load(name):
+    skip_unless_shipped('scripts.'+name)
     spec=importlib.util.spec_from_file_location(name,ROOT/'scripts'/f'{name}.py')
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);return mod
 
 
 def test_candidate_changes_only_explicit_backend_admission():
+    skip_unless_shipped('scripts.stage_native_cuda_speech','deliverables/')
     mod=load('stage_native_cuda_speech')
     with zipfile.ZipFile(ROOT/'deliverables/native-tts-owned-retirement-windows-20260913-r1/transfer/source.zip') as z:
         before=z.read('source/original-resident.cpp')
@@ -41,6 +45,7 @@ def test_build_is_cuda_only_and_compiles_only_the_selected_model():
 
 
 def test_complete_qualified_numerical_delta_is_bound_to_original_archive():
+    skip_unless_shipped('deliverables/','artifacts/','scripts.build_native_cuda_speech_windows')
     import json,hashlib,tarfile
     with zipfile.ZipFile(ROOT/'deliverables/native-cuda-speech-windows-20260913-r2/delta.zip') as z,tarfile.open(ROOT/'artifacts/native-pocket-source-20260910-r2/source.tar.gz') as tar:
         delta=json.loads(z.read('manifest.json'));assert len(delta)==6
@@ -55,6 +60,7 @@ def test_complete_qualified_numerical_delta_is_bound_to_original_archive():
 
 
 def test_speed_cannot_compensate_for_noisy_baseline_or_slow_recovery():
+    skip_unless_shipped('scripts.audit_native_cuda_speech')
     # Import through the package so the auditor's sibling import is resolved.
     import sys
     sys.path.insert(0,str(ROOT))
@@ -87,6 +93,7 @@ def test_incremental_continuation_cannot_retry_a_speech_failure():
 
 
 def test_incremental_build_keeps_the_frozen_speech_proof_exact():
+    skip_unless_shipped('deliverables/','scripts.build_native_cuda_speech_windows')
     with zipfile.ZipFile(ROOT/'deliverables/native-cuda-speech-windows-20260913-r2/transfer/source.zip') as z:
         before=z.read('scripts/qualify_native_candidate_windows.py')
     after=(ROOT/'scripts/build_native_cuda_speech_windows.py').read_bytes()

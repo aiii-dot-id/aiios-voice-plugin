@@ -6,10 +6,13 @@ import subprocess
 import sys
 import zipfile
 
+from tests.conftest import skip_unless_shipped
+
 ROOT=Path(__file__).resolve().parents[1]
 
 
 def test_invalid_gpu_evidence_cannot_leave_a_passed_report(tmp_path):
+    skip_unless_shipped('deliverables/', 'scripts.audit_native_single_prepare')
     prior=ROOT/'deliverables/native-tts-bounded-views-windows-20260913-r1'
     with zipfile.ZipFile(prior/'windows-evidence.zip') as z:
         members={n:z.read(n) for n in z.namelist()}
