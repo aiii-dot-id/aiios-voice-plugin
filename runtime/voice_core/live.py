@@ -259,6 +259,7 @@ class LiveSession:
         self.credit = asyncio.Event()
         self.playing = set()
         self.known_synthesis = set()
+        self.resolved_synthesis = set()
         self.interrupted = set()
         self.output_lengths = {}
         self.output_acks = {}
@@ -594,7 +595,36 @@ class LiveSession:
         self.synthesis_task = asyncio.create_task(
             self.synthesize(sid, text, journalled)
         )
+        # The first done callback, so it runs before anything awaiting the task.
+        self.synthesis_task.add_done_callback(partial(self.retire_synthesis, sid))
         return self.synthesis_task
+
+    def resolve_synthesis(self, sid, kind, **fields):
+        """Journal the one terminal event of a synthesis."""
+        self.resolved_synthesis.add(sid)
+        return self.evidence.emit(kind, synthesis_id=sid, **fields)
+
+    def retire_synthesis(self, sid, task):
+        """Resolve a synthesis whose task ended without journalling its terminal.
+
+        synthesis_start is journalled before the task runs. A task cancelled
+        before its first step runs none of synthesize(), and one that fails
+        before its terminal event skips it; either would leave the trace with an
+        unresolved synthesis and the id active. Nothing is journalled once the
+        trace has ended.
+        """
+        if self.active_synthesis == sid:
+            self.active_synthesis = None
+            self.output_job = None
+        if sid in self.resolved_synthesis or self.evidence.ended:
+            return
+        self.resolve_synthesis(
+            sid,
+            "synthesis_cancelled",
+            reason="synthesis_task_cancelled"
+            if task.cancelled()
+            else "synthesis_task_failed",
+        )
 
     async def synthesize(self, sid, text, journalled):
         job = None
@@ -640,11 +670,12 @@ class LiveSession:
                         ).decode(),
                     }
                 )
-            await self.event(
+            terminal = self.resolve_synthesis(
+                sid,
                 "synthesis_end" if completed else "synthesis_cancelled",
-                synthesis_id=sid,
                 **({} if completed else {"reason": self.cancel_reason}),
             )
+            await self.send({"type": "event", "event": terminal})
             await self.send(
                 {"type": "synthesis_done", "synthesis_id": sid, "completed": completed}
             )
