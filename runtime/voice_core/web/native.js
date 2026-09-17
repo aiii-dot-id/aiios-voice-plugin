@@ -33,7 +33,9 @@ $("start").onclick = () => {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => ws.send(JSON.stringify({type:"start", input_kind:"native_microphone", input_uid:$("input").value, output_uid:$("output").value, reply_mode:"application", reply:"Application-driven response."}));
   ws.onmessage = event => {
-    const row = JSON.parse(event.data); log(row);
+    let row;
+    try { row = JSON.parse(event.data); } catch (error) { log({type: "malformed_frame", reason: String(error)}); return; }
+    log(row);
     if (row.type === "reply_requested") {
       pendingReply = row; $("send-reply").disabled = false;
       $("pending-reply").textContent = `Application reply for ${row.turn_id}: ${row.text}. Deadline: 30 seconds.`;
