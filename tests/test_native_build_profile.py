@@ -5,6 +5,13 @@ import subprocess
 import tempfile
 import unittest
 
+import pytest
+
+from tests.conftest import cmake_usable
+
+if not cmake_usable():
+    pytest.skip('cmake on PATH does not run; the build profile is a real configure', allow_module_level=True)
+
 
 class NativeBuildProfile(unittest.TestCase):
     def test_default_release_and_explicit_debug_are_both_honored(self):
