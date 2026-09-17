@@ -421,3 +421,26 @@ async def test_failure_waits_for_unknown_inflight_audio_write(parts):
     finally:
         released.set()
         await e.shutdown()
+
+
+@pytest.mark.cleanup_errors("injected backend cancellation error")
+@pytest.mark.asyncio
+async def test_shutdown_retains_cancel_hook_error_but_releases_tasks(parts):
+    e, models, _, _ = parts
+
+    def failed_cancel():
+        raise RuntimeError("injected backend cancellation error")
+
+    models.cancel_synthesis = failed_cancel
+    try:
+        e.admit("speech.session.open", open_args())
+        await until(lambda: e.lifecycle == "open")
+        e.admit("speech.session.synthesize", {
+            "session_id": e.id, "synthesis_id": "cancel-fault", "text": "A reply."
+        })
+        errors = await e.shutdown()
+        assert any("injected backend cancellation error" in x for x in errors)
+        assert not e.tasks
+    finally:
+        del models.cancel_synthesis
+        await e.shutdown()

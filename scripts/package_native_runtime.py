@@ -109,7 +109,9 @@ def verify(root, expected):
     if root.is_symlink() or manifest.is_symlink() or sha256(manifest) != expected:
         raise ValueError("runtime manifest digest or root binding differs")
     body = json.loads(manifest.read_text())
-    if body["schema"] != "aiii.voice.native-runtime" or body["qualified"] is not False:
+    # This verifies byte custody, not release qualification. The historical
+    # label may be either boolean; neither value bypasses inventory checks.
+    if body["schema"] != "aiii.voice.native-runtime" or type(body.get("qualified")) is not bool:
         raise ValueError("unsupported runtime profile")
     for name in body["files"]:
         safe_relative(name)

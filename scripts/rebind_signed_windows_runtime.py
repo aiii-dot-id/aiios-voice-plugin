@@ -87,7 +87,12 @@ def validate_report(report, parent_digest, before, after):
         name = row['path']
         require(row['before_sha256'] == before[name]['sha256'] and
                 row['sha256'] == after[name]['sha256'] and row['bytes'] == after[name]['bytes'], 'signed byte binding differs: '+name)
-        require(before[name]['sha256'] != after[name]['sha256'], 'signature bytes missing: '+name)
+        action=row.get('action','signed')
+        require(action in ('signed','retained_verified'), 'unknown signing action: '+name)
+        if action=='retained_verified':
+            require(before[name]==after[name], 'retained signed component changed: '+name)
+        else:
+            require(before[name]['sha256'] != after[name]['sha256'], 'signature bytes missing: '+name)
         require(row['subject'] == SUBJECT and bool(row['timestamp_subject']), 'publisher/timestamp differs: '+name)
         require(before[name]['executable'] == after[name]['executable'], 'file mode changed: '+name)
 
@@ -130,8 +135,11 @@ def prepare(parent, signing, out, go, signtool):
     require(sha(signed/'aii-voice-t3.exe') == frozen['carrier_sha256'], 'unexpected prior carrier replacement')
     after = runtime_inventory(signed, target_platform='windows')
     validate_report(report, frozen['runtime_manifest_sha256'], profile['files'], after)
-    for name in OWNED:
-        signing_only_change((parent/'runtime'/name).read_bytes(), (signed/name).read_bytes())
+    for row in report['signed_files']:
+        name=row['path']
+        before_raw=(parent/'runtime'/name).read_bytes();after_raw=(signed/name).read_bytes()
+        if row.get('action','signed')=='retained_verified':require(before_raw==after_raw,'retained executable content changed')
+        else:signing_only_change(before_raw,after_raw)
     signatures = verify_authenticode(signed, OWNED, signtool)
     # Recheck after trust verification, before publishing an output tree.
     require(runtime_inventory(signed, target_platform='windows') == after and sha(report_path) == report_sha, 'signed source changed during trust verification')
@@ -159,7 +167,7 @@ def prepare(parent, signing, out, go, signtool):
         runtime_bytes=sum(p.stat().st_size for p in runtime.rglob('*') if p.is_file()),
         runtime_files=len(after)+2, settings_sha256=sha(out/'settings.json'),
         authenticode_derivation=dict(report_sha256=report_sha, parent_runtime_sha256=frozen['runtime_manifest_sha256'],
-            signed_components=sorted(OWNED), source_delta=source_delta, signatures=signatures,
+            signed_components=sorted(OWNED), retained_components=sorted(r['path'] for r in report['signed_files'] if r.get('action')=='retained_verified'), source_delta=source_delta, signatures=signatures,
             executable_content_preserved=True, models_changed=False, requalification_required=True))
     for name in result['library_hashes']:
         # Frozen loader observations normalize Windows DLL names; the sealed

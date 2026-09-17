@@ -153,7 +153,13 @@ aii_voice_result aii::voice::load_native_models(const aii_voice_paths* p,const c
       const aii::uid::BoundPolicies policies(std::string(policy_json,policy_bytes),
           previous_policy?std::string(previous_policy,previous_bytes):std::string{});
       const auto& policy=policies.current();owner->uid_policies=policies;
+#if defined(AII_UID_NCNN) && defined(AII_MOBILE_COREML_CANDIDATE)
+#error "Choose one explicit UID implementation"
+#endif
       const char* uid_backend="cpu";
+#ifdef AII_UID_NCNN
+      uid_backend="ncnn-vulkan";
+#endif
 #ifdef AII_MOBILE_COREML_CANDIDATE
       uid_backend="coreml-ane";
 #endif

@@ -1,15 +1,9 @@
-"""Evidence this tree does not ship is left out by name, never reported as breakage.
+"""Required tests fail on missing inputs; optional research browsing is explicit.
 
-Much of this suite audits retained build and evidence directories and imports
-helper modules that live beside them. A test file is left out when the code
-that runs as it is imported needs a `scripts.<module>` absent from scripts/, a
-sibling `tests.<module>` that is absent or itself left out, or a path under an
-evidence directory absent from the root; the run's summary names each such
-file with what it lacks. A need inside a test's own body does not leave the
-file out: that test calls `skip_unless_shipped`, which skips it by name, so the
-file's other tests still run and any of them that fails is reported. In a tree
-that carries every need, no file is left out and `skip_unless_shipped` skips
-nothing.
+Historical audit tests require separately retained artifacts. Normal collection
+does not hide absent inputs. Only explicit --allow-missing-evidence browsing
+uses the dependency inventory below, and it cannot be combined with a required
+--fail-on-skips gate. No test-pattern match or missing dependency is a pass.
 """
 
 import ast
@@ -21,13 +15,33 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+ALLOW_MISSING_EVIDENCE = False
+
+
+def pytest_addoption(parser):
+    parser.addoption("--allow-missing-evidence", action="store_true",
+                     help="Exploratory collection only: omit unavailable historical evidence; not a gate")
+    parser.addoption("--fail-on-skips", action="store_true",
+                     help="Fail validation when any selected test is skipped")
+
+
+def pytest_configure(config):
+    global ALLOW_MISSING_EVIDENCE
+    ALLOW_MISSING_EVIDENCE = config.getoption("--allow-missing-evidence")
+    if ALLOW_MISSING_EVIDENCE and config.getoption("--fail-on-skips"):
+        raise pytest.UsageError("a required gate cannot allow missing evidence")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if session.config.getoption("--fail-on-skips") and reporter and reporter.stats.get("skipped"):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def unusable_cmake(fallback=None):
     """The cmake a suite would run, when it exists but does not run; else None.
 
-    A broken launcher is not a tool: the suites that configure real projects
-    skip, naming it, instead of reporting its traceback as a failed contract.
+    A broken launcher fails prerequisite admission instead of skipping proof.
     The cmake on PATH comes first, then the suite's own `fallback` path. When
     no cmake exists at all nothing is skipped, and those suites fail, as a
     native build contract without CMake should."""
@@ -41,7 +55,7 @@ def unusable_cmake(fallback=None):
             return None
     except (OSError, subprocess.SubprocessError):
         pass
-    return cmake
+    pytest.fail("CMake prerequisite does not run: " + cmake, pytrace=False)
 
 
 EVIDENCE_DIRECTORY = re.compile(r"\b(deliverables|artifacts)/")
@@ -130,13 +144,17 @@ def missing_needs(path, root=ROOT, _seen=()):
 
 
 def skip_unless_shipped(*needs, root=ROOT):
-    """Skip the calling test, naming each of `needs` this tree lacks.
+    """Fail on missing body-level inputs; only exploratory browsing may skip.
 
-    For what a test's own body needs and its file does not: the file stays
-    collected, this test is skipped by name, and its siblings still run."""
+    The file stays collected, so its independently runnable siblings still run.
+    The historical helper name is retained for existing artifact-audit callers.
+    """
     missing = [need for need in needs if lacks(need, root)]
     if missing:
-        pytest.skip("not shipped in this tree: " + ", ".join(missing))
+        reason = "not shipped in this tree: " + ", ".join(missing)
+        if ALLOW_MISSING_EVIDENCE:
+            pytest.skip(reason)
+        pytest.fail(reason, pytrace=False)
 
 
 def requested(path, config):
@@ -149,6 +167,8 @@ def requested(path, config):
 
 
 def pytest_ignore_collect(collection_path, config):
+    if not config.getoption("--allow-missing-evidence"):
+        return None
     path = Path(collection_path)
     if path.parent != ROOT / "tests" or not path.name.startswith("test_") or path.suffix != ".py":
         return None

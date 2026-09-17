@@ -103,7 +103,12 @@ def main():
         checkpoint_freeze_sha256=sha(cp/'freeze.json'),qualification_sha256=a.audit_sha256,
         qualification_scope=proof['scope'],runtime_archive=dict(path=str(archive),**declaration),
         source_sha256=sha(__file__),models_in_archive=False,carrier_in_archive=False,
-        signed=False,installed=False,published=False,beta_release_ready=False)
+        signed=False,installed=False,published=False,
+        release_status=dict(runtime_archive='inventory_and_bytes_verified',
+            qualification='provided_audit_passed_at_its_declared_scope',
+            release_signature='not_performed_by_runtime_staging',
+            installed_journey='not_performed_by_runtime_staging',
+            publication='not_performed_by_runtime_staging'))
     with (out/'result.json').open('x') as f: json.dump(result,f,indent=2);f.write('\n')
     print(json.dumps(result))
 

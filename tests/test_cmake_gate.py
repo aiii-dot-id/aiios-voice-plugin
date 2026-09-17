@@ -1,4 +1,4 @@
-"""A cmake suite skips only for a cmake that exists and does not run."""
+"""Broken CMake is a failed prerequisite, never a passing skipped contract."""
 
 import os
 
@@ -34,10 +34,12 @@ def test_a_cmake_that_runs_skips_nothing(tmp_path, monkeypatch):
 def test_a_cmake_that_exists_but_does_not_run_is_named(tmp_path, monkeypatch):
     broken = executable(tmp_path / "bin" / "cmake", 1)
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
-    assert unusable_cmake() == str(broken)
+    with pytest.raises(pytest.fail.Exception, match="CMake prerequisite"):
+        unusable_cmake()
     fallback = executable(tmp_path / "fallback" / "cmake", 1)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    assert unusable_cmake(fallback) == str(fallback)
+    with pytest.raises(pytest.fail.Exception, match="CMake prerequisite"):
+        unusable_cmake(fallback)
     executable(tmp_path / "working" / "cmake", 0)
     monkeypatch.setenv("PATH", str(tmp_path / "working"))
     assert unusable_cmake(fallback) is None  # the cmake on PATH is the one a suite runs

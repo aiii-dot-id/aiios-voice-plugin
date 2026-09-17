@@ -1,8 +1,13 @@
 #include "uid.h"
-#include "cancel_result.h"
+#include "model_contract.h"
 #include "uid_frontend.h"
+#ifdef AII_UID_NCNN
+#include "ncnn_backend.h"
+#else
+#include "cancel_result.h"
 #include "onnxruntime_cxx_api.h"
 #include "../native/platform/coreml_candidate.h"
+#endif
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -22,6 +27,7 @@ void error_text(char* dst, size_t cap, const char* value) noexcept {
     std::memcpy(dst, value, n); dst[n] = 0;
   }
 }
+#ifndef AII_UID_NCNN
 void provider(Ort::SessionOptions& options, const std::string& name) {
   options.SetIntraOpNumThreads(2);
   options.SetInterOpNumThreads(1);
@@ -44,21 +50,32 @@ void provider(Ort::SessionOptions& options, const std::string& name) {
   Ort::ThrowOnError(api.UpdateCUDAProviderOptions(raw, keys, values, 4));
   Ort::ThrowOnError(api.SessionOptionsAppendExecutionProvider_CUDA_V2(options, raw));
 }
+#endif
 }
 
 struct AiiUid {
+#ifdef AII_UID_NCNN
+  uid_detail::NcnnBackend session;
+#else
   std::vector<unsigned char> bytes;
   Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "aii-native-uid"};
   Ort::SessionOptions options;
   Ort::Session session{nullptr};
+#endif
   std::atomic<bool> active{false};
   std::atomic<int> phase{0};
   std::atomic<uint64_t> cancelled{0};
   std::mutex publication;
+#ifndef AII_UID_NCNN
   OrtRunOptions* running = nullptr; // protected by publication; never owns it
   uint64_t running_id = 0;
+#endif
   uint64_t last_started = 0; // embedding worker only
   bool faulted = false;
+#ifdef AII_UID_NCNN
+  AiiUid(const void* graph, size_t graph_size, const void* weights, size_t weight_size,
+         const std::string& backend):session(graph,graph_size,weights,weight_size,backend) {}
+#else
   AiiUid(const void* data, size_t size, const std::string& backend)
       : bytes(static_cast<const unsigned char*>(data), static_cast<const unsigned char*>(data) + size) {
     env.DisableTelemetryEvents();
@@ -80,18 +97,40 @@ struct AiiUid {
         out.GetShape() != std::vector<int64_t>{-1, 256})
       throw std::runtime_error("UID full-context graph geometry changed");
   }
+#endif
 };
 
 AiiUid* aii_uid_create(const void* data, size_t bytes, const char* backend, char* error, size_t cap) {
   try {
+#ifdef AII_UID_NCNN
+    (void)data; (void)bytes; (void)backend;
+    throw std::invalid_argument("this UID build requires its bound native representation");
+#else
     const char* disabled = std::getenv("ORT_DISABLE_TELEMETRY");
     if (!disabled || std::string(disabled) != "1")
       throw std::invalid_argument("ORT_DISABLE_TELEMETRY=1 required before initialization");
-    if (!data || bytes != 100865597 || !backend)
+    if (!data || !aii::uid::model_extent_supported(bytes) || !backend)
       throw std::invalid_argument("UID checkpoint extent/backend missing");
     return new AiiUid(data, bytes, backend);
+#endif
   } catch (const std::exception& e) { error_text(error, cap, e.what()); return nullptr; }
   catch (...) { error_text(error, cap, "UID creation failure"); return nullptr; }
+}
+
+AiiUid* aii_uid_create_ncnn(const void* graph, size_t graph_size,
+    const void* weights, size_t weight_size, const char* backend, char* error, size_t cap) {
+  try {
+#ifdef AII_UID_NCNN
+    if (!graph || !weights || !backend || graph_size!=aii::uid::ncnn_contract.graph_bytes ||
+        weight_size!=aii::uid::ncnn_contract.weight_bytes)
+      throw std::invalid_argument("bound native UID representation extent missing");
+    return new AiiUid(graph,graph_size,weights,weight_size,backend);
+#else
+    (void)graph; (void)graph_size; (void)weights; (void)weight_size; (void)backend;
+    throw std::invalid_argument("native UID representation unsupported by this build");
+#endif
+  } catch (const std::exception& e) { error_text(error,cap,e.what()); return nullptr; }
+  catch (...) { error_text(error,cap,"native UID creation failure"); return nullptr; }
 }
 
 int aii_uid_embed(AiiUid* v, uint64_t id, const uint8_t* pcm, size_t bytes,
@@ -130,6 +169,12 @@ int aii_uid_embed(AiiUid* v, uint64_t id, const uint8_t* pcm, size_t bytes,
     }
     if (frames != expected) throw std::runtime_error("UID full utterance was not preserved");
     if (stopped(&fence)) { error_text(error, cap, "UID utterance cancelled"); return 3; }
+#ifdef AII_UID_NCNN
+    v->phase.store(2);
+    ran = true;
+    const auto values = v->session.run(features,frames,[&] { return stopped(&fence)!=0; });
+    const auto* raw = values.data();
+#else
     const int64_t shape[] = {1, static_cast<int64_t>(frames), 80};
     auto memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     auto tensor = Ort::Value::CreateTensor<float>(memory, features.data(), features.size(), shape, 3);
@@ -157,6 +202,7 @@ int aii_uid_embed(AiiUid* v, uint64_t id, const uint8_t* pcm, size_t bytes,
         info.GetShape() != std::vector<int64_t>{1, 256})
       throw std::runtime_error("UID output geometry changed");
     const auto* raw = values[0].GetTensorData<float>();
+#endif
     std::array<double, 256> result_vector{};
     double sum = 0;
     for (size_t i = 0; i < result_vector.size(); ++i) {
@@ -172,6 +218,10 @@ int aii_uid_embed(AiiUid* v, uint64_t id, const uint8_t* pcm, size_t bytes,
     if (stopped(&fence)) { error_text(error, cap, "UID utterance cancelled"); return 3; }
     std::copy(result_vector.begin(), result_vector.end(), output);
     return 0;
+#ifdef AII_UID_NCNN
+  } catch (const uid_detail::NcnnCancelled& e) {
+    error_text(error,cap,e.what()); return 3;
+#else
   } catch (const Ort::Exception& e) {
     // ORT termination is a per-run request, not a mutation of model weights.
     // Preserve the actual diagnostic even when cancellation is the outcome.
@@ -180,6 +230,7 @@ int aii_uid_embed(AiiUid* v, uint64_t id, const uint8_t* pcm, size_t bytes,
     }
     if (ran) v->faulted = true;
     error_text(error, cap, e.what()); return 4;
+#endif
   } catch (const std::exception& e) {
     if (ran) v->faulted = true;
     error_text(error, cap, e.what()); return 4;
@@ -194,10 +245,12 @@ int aii_uid_cancel_through(AiiUid* v, uint64_t through) {
   try {
     std::lock_guard<std::mutex> lock(v->publication);
     if (through > v->cancelled.load()) v->cancelled.store(through);
+#ifndef AII_UID_NCNN
     if (v->running && v->running_id <= through) {
       auto* status = Ort::GetApi().RunOptionsSetTerminate(v->running);
       if (status) { Ort::GetApi().ReleaseStatus(status); return 4; }
     }
+#endif
     return 0;
   } catch (...) { return 4; }
 }

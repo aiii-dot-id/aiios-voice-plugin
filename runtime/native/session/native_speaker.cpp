@@ -2,6 +2,7 @@
 #include "startup_trace.h"
 #include "worker_json.h"
 #include "../../native_uid/uid.h"
+#include "../../native_uid/model_contract.h"
 #include "../../native_uid/session_evidence.h"
 #include "../vendor/picosha2/picosha2.h"
 #include "../platform/readonly_model.h"
@@ -42,17 +43,37 @@ NativeSpeaker::NativeSpeaker(const std::string& path,const std::string& backend,
         old.minimum_margin!=p_->policy.minimum_margin||old.calibration_sha256==p_->policy.calibration_sha256)
       throw std::invalid_argument("previous UID policy is not a compatible explicit transition");
   }
-  if(p_->policy.embedding_binding!="c61bbdf12d5b69632b12776c23edc2e7155a9e0a028576eb41e509ca2bfb6d6e")
-    throw std::invalid_argument("policy does not bind this native full-context UID frontend/model");
+  const auto& contract=aii::uid::model_contract(p_->policy.embedding_binding);
+#ifdef AII_UID_NCNN
+  if(backend=="ncnn-cpu"||backend=="ncnn-vulkan") {
+    // These two files are a verified representation of the same embedding
+    // space, never a license to reinterpret a different model's enrollments.
+    auto read_bound=[&](const char* name,size_t size) {
+      std::ifstream f(path+"/"+name,std::ios::binary|std::ios::ate);
+      if(!f||f.tellg()!=std::streamoff(size))throw std::invalid_argument("native UID representation size differs");
+      std::vector<unsigned char> b(size);f.seekg(0);f.read(reinterpret_cast<char*>(b.data()),b.size());
+      if(!f)throw std::invalid_argument("native UID representation short read");
+      return b;
+    };
+    const auto& n=aii::uid::ncnn_contract;
+    auto graph=read_bound("model.ncnn.param",n.graph_bytes);
+    auto weights=read_bound("model.ncnn.bin",n.weight_bytes);
+    aii::uid::verify_ncnn(contract,graph.size(),aii::platform::sha256(graph.data(),graph.size()),
+                        weights.size(),aii::platform::sha256(weights.data(),weights.size()));
+    char error[1024]={};
+    p_->model=aii_uid_create_ncnn(graph.data(),graph.size(),weights.data(),weights.size(),backend.c_str(),error,sizeof(error));
+    if(!p_->model)throw std::runtime_error(error);
+    return;
+  }
+#endif
   std::ifstream file(path,std::ios::binary|std::ios::ate);
-  if(!file||file.tellg()!=100865597)throw std::invalid_argument("bound UID model size differs");
-  std::vector<unsigned char> bytes(100865597);file.seekg(0);
+  if(!file||file.tellg()!=std::streamoff(contract.bytes))throw std::invalid_argument("bound UID model size differs");
+  std::vector<unsigned char> bytes(contract.bytes);file.seekg(0);
   file.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
   // Keep full integrity verification; use the same OS-accelerated SHA256
   // implementation as recognition instead of a second portable hot path.
-  if(!file||aii::platform::sha256(bytes.data(),bytes.size())!=
-      "33af8affe6191b1ebd196d2b56e22c2934104cd2764abfdbdd954d3a934eb2a1")
-    throw std::invalid_argument("bound UID model hash differs");
+  if(!file)throw std::invalid_argument("bound UID model short read");
+  aii::uid::verify_model(contract,bytes.size(),aii::platform::sha256(bytes.data(),bytes.size()));
   char error[1024]={};p_->model=aii_uid_create(bytes.data(),bytes.size(),backend.c_str(),error,sizeof(error));
   if(!p_->model)throw std::runtime_error(error);
 }

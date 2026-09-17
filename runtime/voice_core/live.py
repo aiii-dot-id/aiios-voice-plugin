@@ -593,7 +593,7 @@ class LiveSession:
             self.evidence.emit("synthesis_start", synthesis_id=sid),
         ]
         self.synthesis_task = asyncio.create_task(
-            self.synthesize(sid, text, journalled)
+            self._synthesize_registered(sid, text, journalled)
         )
         # The first done callback, so it runs before anything awaiting the task.
         self.synthesis_task.add_done_callback(partial(self.retire_synthesis, sid))
@@ -626,12 +626,16 @@ class LiveSession:
             else "synthesis_task_failed",
         )
 
-    async def synthesize(self, sid, text, journalled):
+    async def synthesize(self, sid, text=None):
+        """Preserve the direct awaitable API on the same registered reply path."""
+        await self.begin_synthesis(sid, text)
+
+    async def _synthesize_registered(self, sid, text, journalled):
         job = None
         completed = False
-        for event in journalled:
-            await self.send({"type": "event", "event": event})
         try:
+            for event in journalled:
+                await self.send({"type": "event", "event": event})
             if not self.cancel_generation:
                 # A barge-in before this point already retired the reply.
                 job = self.output.submit(text)

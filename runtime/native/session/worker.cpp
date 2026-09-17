@@ -794,8 +794,17 @@ class Worker {
     }
     std::shared_ptr<Generation> g;
     uint64_t id = 0;
-    if (const auto *requested = field(a, "synthesis_id");
-        requested && !cJSON_IsNull(requested)) {
+    const bool interrupt = op == "speech.session.stop_playback" ||
+                           op == "speech.session.cancel_synthesis";
+    const auto *requested = field(a, "synthesis_id");
+    // The host names the current generation with an empty ID. Preserve the
+    // existing omitted/null spelling for interruption only: a playback receipt
+    // must identify its generation explicitly, never drift to the newest one.
+    const bool current_target = interrupt &&
+        (!requested || cJSON_IsNull(requested) ||
+         (cJSON_IsString(requested) && requested->valuestring &&
+          requested->valuestring[0] == '\0'));
+    if (!current_target) {
       const auto name = str(requested);
       for (const auto &item : generations_)
         if (item.second->id == name) {
@@ -808,8 +817,7 @@ class Worker {
       g = generations_.at(current_);
       id = current_;
     }
-    if (op == "speech.session.stop_playback" ||
-        op == "speech.session.cancel_synthesis") {
+    if (interrupt) {
       if (g) {
         g->fenced = true;
         if (op == "speech.session.stop_playback")

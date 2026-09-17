@@ -24,6 +24,12 @@
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
 #endif
+#ifdef AII_LINUX_NATIVE_SHA256
+#if !defined(__linux__) || defined(__ANDROID__)
+#error "Linux desktop native SHA256 must be selected explicitly for that target"
+#endif
+#include <openssl/evp.h>
+#endif
 namespace aii::platform {
 namespace {
 [[maybe_unused]] std::string hex(const unsigned char *bytes) {
@@ -100,6 +106,23 @@ std::string sha256(const void *data, size_t bytes) {
   }
   std::array<unsigned char, 32> digest{};
   check(BCryptFinishHash(hash.value, digest.data(), ULONG(digest.size()), 0));
+  return hex(digest.data());
+#elif defined(AII_LINUX_NATIVE_SHA256)
+  // OpenSSL dispatches SHA instructions where available. Keep the complete
+  // model hash and the same pinned digest; never cache or skip verification.
+  std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  if (!ctx || EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr) != 1)
+    throw std::runtime_error("SHA256 initialization failed");
+  for (size_t i = 0; i < bytes;) {
+    const auto n = std::min(bytes - i, size_t(8 * 1024 * 1024));
+    if (EVP_DigestUpdate(ctx.get(), p + i, n) != 1)
+      throw std::runtime_error("SHA256 update failed");
+    i += n;
+  }
+  std::array<unsigned char, 32> digest{};
+  unsigned int length = 0;
+  if (EVP_DigestFinal_ex(ctx.get(), digest.data(), &length) != 1 || length != digest.size())
+    throw std::runtime_error("SHA256 finish failed");
   return hex(digest.data());
 #else
   return portable_sha256(data, bytes);
