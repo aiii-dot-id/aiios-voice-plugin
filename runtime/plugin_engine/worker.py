@@ -272,6 +272,7 @@ async def serve(
     wt = asyncio.create_task(writer())
     for target in (controls, audio_reader):
         threading.Thread(target=target, daemon=True).start()
+    propagating = False
     try:
         while True:
             item = asyncio.create_task(incoming.get())
@@ -310,11 +311,14 @@ async def serve(
                 emit({"id": body["id"], "result": result})
             except (ValueError, RuntimeError) as error:
                 emit({"id": body["id"], "error": str(error)})
+    except BaseException:
+        propagating = True
+        raise
     finally:
         stopped.set()
-        # Cleanup errors are reported after every release below, never in its
-        # place: a stored synthesis error used to escape here and leave the
-        # executors and audio handles to the watchdog exit.
+        # Cleanup errors fail the worker after every release below, never in its
+        # place: raised here, a stored synthesis error would leave the executors
+        # and audio handles to the watchdog exit.
         cleanup_errors = await engine.shutdown()
         wt.cancel()
         await asyncio.gather(wt, return_exceptions=True)
@@ -326,6 +330,10 @@ async def serve(
         audio_out.close()
         for error in cleanup_errors:
             print("worker cleanup:", error, file=sys.stderr)
+        # The carrier joins this process's exit status: a failed cleanup must not
+        # exit as success, and must not replace an error already on its way out.
+        if cleanup_errors and not propagating:
+            raise RuntimeError("worker cleanup failed: " + "; ".join(cleanup_errors))
 
 
 def main():
