@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 
 from scripts.audit_native_enrollment_desktops import sdk_identity
+from tests.conftest import skip_unless_shipped
 
 ROOT=Path(__file__).resolve().parents[1]
 
 
 def actual():
+    skip_unless_shipped('deliverables/')
     proof=ROOT/'deliverables/cp3-enrollment-asr-refresh-packaged-20260913-r2/enrollment/result.json'
     return json.loads(proof.read_text()),json.loads((ROOT/'plugin/sdk-source.json').read_text())
 

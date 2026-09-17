@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from runtime.native_endpoint import backend, profile
+from tests.conftest import skip_unless_shipped
 
 
 def binding(tmp_path):
@@ -156,6 +157,7 @@ def test_cancelled_success_is_not_published_and_recovery_works(tmp_path, monkeyp
 
 
 def test_native_import_contract_cannot_hide_torch():
+    skip_unless_shipped("scripts.prove_windows_packaged_runtime")
     from scripts.prove_windows_packaged_runtime import verify_import_versions
 
     versions = {"numpy": "bound", "onnxruntime-directml": "bound"}

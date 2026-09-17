@@ -13,6 +13,7 @@ from scripts.package_native_runtime import (
     sha256,
     verify,
 )
+from tests.conftest import skip_unless_shipped
 
 
 def test_synthetic_module_attribute_is_not_a_file(tmp_path):
@@ -121,6 +122,7 @@ def test_inventory_detects_tamper_extra_and_links(tmp_path):
 
 
 def test_model_data_never_supplies_catalog(tmp_path):
+    skip_unless_shipped("scripts.verify_snapshot")
     import subprocess
     import sys
 
@@ -134,6 +136,7 @@ def test_model_data_never_supplies_catalog(tmp_path):
 
 
 def test_runtime_resume_reuses_only_exact_bytes(tmp_path):
+    skip_unless_shipped("scripts.package_windows_runtime")
     from scripts.package_windows_runtime import copy_checked
 
     source, target = tmp_path / "source", tmp_path / "output/file"
