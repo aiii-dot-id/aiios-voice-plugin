@@ -601,7 +601,10 @@ def _validate_trace(trace: Any) -> dict[str, Any]:
                 )
         elif kind == "playback_start":
             synthesis = _string(event["synthesis_id"], f"{label}.synthesis_id")
-            if synthesis not in open_synthesis and synthesis not in closed_synthesis:
+            # A client may start playing audio it buffered before generation
+            # was cancelled; interruption already targets such playback, and
+            # playback_start models the same state.
+            if synthesis not in open_synthesis | closed_synthesis | cancelled_synthesis:
                 raise ValueError(f"playback_start has no known synthesis: {synthesis}")
             if synthesis in playing:
                 raise ValueError(f"duplicate playback_start: {synthesis}")
