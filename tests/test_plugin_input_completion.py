@@ -191,3 +191,27 @@ async def test_finish_after_already_finalized_utterances_needs_no_new_transcript
         assert len([x for x in events if x["type"] == "transcript_final"]) == utterances
     finally:
         await e.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_finish_at_a_full_input_queue_is_admitted_whole(parts):
+    """The finish sentinel has a reserved slot: a cutoff is never committed by a
+    finish that then refuses. 64 frames fill the data slots while the consumer
+    has not run; the 65th frame is refused; the finish at their exact end is
+    admitted, its sentinel is queued, and completion follows normally."""
+    e, _, events, _ = parts
+    frame, frames = b"\0\0" * 256, 64
+    try:
+        e.admit("speech.session.open", open_args())
+        await until(lambda: e.lifecycle == "open")
+        for seq in range(frames):
+            e.feed(Frame(PCM, 7, seq + 1, seq * 256, frame))
+        assert e.input_queue.qsize() == frames
+        with pytest.raises(Refused, match="INPUT_OVERFLOW"):
+            e.feed(Frame(PCM, 7, frames + 1, frames * 256, frame))
+        finish(e, frames * 256)
+        assert e.cutoff == frames * 256 and e.input_signalled
+        await until(e.input_done.is_set)
+        completion(e, events, frames * 256)
+    finally:
+        await e.shutdown()
