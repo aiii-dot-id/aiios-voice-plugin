@@ -76,6 +76,7 @@ type carrier struct {
 	readDone  chan struct{}
 	mu        sync.Mutex
 	session   *aiiosdk.Session
+	readySeen bool   // one readiness per worker lifetime; guarded by mu
 	id        uint64 // owned by SDK admission goroutine
 	settings  chan settingsQuery
 	snapshots chan snapshotQuery
@@ -211,12 +212,18 @@ func (c *carrier) read() {
 				return
 			}
 		} else if len(m.Ready) != 0 {
-			select {
-			case c.ready <- m:
-			default:
+			// A worker announces readiness once. The channel's capacity of one
+			// refused a second announcement only while the first still sat in
+			// it; once run() had taken it, a repeat was buffered and forgotten.
+			c.mu.Lock()
+			seen := c.readySeen
+			c.readySeen = true
+			c.mu.Unlock()
+			if seen {
 				c.fail(errors.New("duplicate worker readiness"))
 				return
 			}
+			c.ready <- m // capacity one, and this is the only send
 		} else if len(m.Event) != 0 {
 			select {
 			case c.events <- m.Event:
