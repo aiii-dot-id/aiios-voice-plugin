@@ -48,6 +48,8 @@ def parts():
 
 def test_sdk_audio_vectors_and_truncation():
     source = SDK_SOURCE / "vectors/audio_framing.json"
+    if not source.is_file():
+        pytest.skip("the pinned SDK source is not extracted under .build; see plugin/NATIVE_BUILD.md")
     data = json.loads(source.read_text())
     encoded = bytes.fromhex(data["hex"])
     reader = io.BytesIO(encoded)

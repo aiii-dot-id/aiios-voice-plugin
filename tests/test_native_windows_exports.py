@@ -5,6 +5,13 @@ import subprocess
 import tempfile
 import unittest
 
+import pytest
+
+from tests.conftest import cmake_usable
+
+if not cmake_usable():
+    pytest.skip('cmake on PATH does not run; the export guard is a cmake script', allow_module_level=True)
+
 ROOT = Path(__file__).resolve().parents[1] / 'runtime/native/session'
 CM = shutil.which('cmake') or '/opt/homebrew/bin/cmake'
 
