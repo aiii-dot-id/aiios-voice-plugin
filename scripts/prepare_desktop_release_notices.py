@@ -134,28 +134,42 @@ class Bundle:
 def model_notices(b):
     hf = 'https://huggingface.co/'
     gh = 'https://raw.githubusercontent.com/'
+    # A notice fetched at a pinned revision is bound to the digest the released
+    # package records for it; a page that can change is recognized by its marker.
     sources = [
-        ('nemotron-asr/README.md', hf + 'nvidia/nemotron-3.5-asr-streaming-0.6b/raw/1c8deaecc64b91f034d73e08dd8b64625eb3395d/README.md', 'nemotron-asr', 'openmdw'),
-        ('pocket-tts/README.md', hf + 'kyutai/pocket-tts-without-voice-cloning/raw/d29db7978e464fb90cb3359ee0c69a273b9142cc/README.md', 'pocket-tts', 'cc-by-4.0'),
-        ('pocket-voice-embeddings/README.md', hf + 'kyutai/pocket-tts-without-voice-cloning/raw/e81d79e8194ad4c7ce879c87a4258ef20cbf2487/README.md', 'pocket-voice-embeddings', 'cc-by-4.0'),
-        ('pocket-voice-embeddings/reference-sources.md', hf + 'kyutai/tts-voices/raw/323332d33f997de8394f24a193e1a76df720e01a/README.md', 'pocket-voice-embeddings', 'Alba'),
-        ('pocket-config/LICENSE', gh + 'kyutai-labs/pocket-tts/896e934690afc0e1047a3667a13514386c1420fc/LICENSE', 'pocket-config', 'Permission'),
-        ('silero-vad/README.md', hf + 'onnx-community/silero-vad/raw/e71cae966052b992a7eca6b17738916ce0eca4ec/README.md', 'silero-vad', 'license: mit'),
-        ('silero-vad/upstream-LICENSE', gh + 'snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE', 'silero-vad', 'Silero Team'),
-        ('smart-turn/README.md', hf + 'pipecat-ai/smart-turn-v3/raw/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/README.md', 'smart-turn', 'bsd-2-clause'),
-        ('smart-turn/upstream-LICENSE', gh + 'pipecat-ai/smart-turn/24c720337e17befe0413bbc93b3504036c3a3bdc/LICENSE', 'smart-turn', 'Daily'),
-        ('wespeaker-uid/catalog.md', gh + 'wenet-e2e/wespeaker/dfa741957e5c11f477623b6e583d67d0af25ee88/docs/pretrained.md', 'wespeaker-uid', 'VoxBlink'),
-        ('wespeaker-uid/voxblink2-LICENSE', gh + 'VoxBlink2/ScriptsForVoxBlink2/50846d6540783824476e16c006f4a0fe27e70683/LICENSE', 'wespeaker-uid', 'CC BY-NC-SA 4.0'),
-        ('wespeaker-uid/voxblink2-model-terms.html', 'https://voxblink2.github.io/', 'wespeaker-uid', 'license of the model is also'),
-        ('wespeaker-uid/voxceleb-terms.html', 'https://mm.kaist.ac.kr/datasets/voxceleb/', 'wespeaker-uid', 'Attribution'),
-        ('terms/CC-BY-4.0.txt', 'https://creativecommons.org/licenses/by/4.0/legalcode.txt', 'common-terms', 'Attribution 4.0'),
-        ('terms/CC-BY-NC-SA-4.0.txt', 'https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.txt', 'common-terms', 'NonCommercial'),
-        ('terms/CC0-1.0.txt', 'https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt', 'common-terms', 'CC0 1.0'),
-        ('terms/OpenMDW-1.1.html', 'https://openmdw.ai/license/1-1/', 'nemotron-asr', 'OpenMDW'),
-        ('asmjit/LICENSE.md', gh + 'asmjit/asmjit/e5d7c0bd5d9aec44d68830187138149e6a8c4e32/LICENSE.md', 'asmjit', 'Copyright'),
+        ('nemotron-asr/README.md', hf + 'nvidia/nemotron-3.5-asr-streaming-0.6b/raw/1c8deaecc64b91f034d73e08dd8b64625eb3395d/README.md', 'nemotron-asr', 'openmdw',
+         'a3344caadf796c084c6b90a9fa5978068fd45e3a019790bebe50489bb3c0f7b7'),
+        ('pocket-tts/README.md', hf + 'kyutai/pocket-tts-without-voice-cloning/raw/d29db7978e464fb90cb3359ee0c69a273b9142cc/README.md', 'pocket-tts', 'cc-by-4.0',
+         'ae2ebac6f8039d761ca90e2b742136dce9d7872ec8dd2105e3b2de1e3021e3aa'),
+        ('pocket-voice-embeddings/README.md', hf + 'kyutai/pocket-tts-without-voice-cloning/raw/e81d79e8194ad4c7ce879c87a4258ef20cbf2487/README.md', 'pocket-voice-embeddings', 'cc-by-4.0',
+         'ae2ebac6f8039d761ca90e2b742136dce9d7872ec8dd2105e3b2de1e3021e3aa'),
+        ('pocket-voice-embeddings/reference-sources.md', hf + 'kyutai/tts-voices/raw/323332d33f997de8394f24a193e1a76df720e01a/README.md', 'pocket-voice-embeddings', 'Alba',
+         '47c610f38e0e0bfb4b353a2afa84a5277b748b1b808d5f77fb8ef74fb836689b'),
+        ('pocket-config/LICENSE', gh + 'kyutai-labs/pocket-tts/896e934690afc0e1047a3667a13514386c1420fc/LICENSE', 'pocket-config', 'Permission',
+         '23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3'),
+        ('silero-vad/README.md', hf + 'onnx-community/silero-vad/raw/e71cae966052b992a7eca6b17738916ce0eca4ec/README.md', 'silero-vad', 'license: mit',
+         '394ac7912169c60fa95cc6c33c615f78368749f0f305b6cb43058a28233cf00a'),
+        ('silero-vad/upstream-LICENSE', gh + 'snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE', 'silero-vad', 'Silero Team',
+         '2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b'),
+        ('smart-turn/README.md', hf + 'pipecat-ai/smart-turn-v3/raw/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/README.md', 'smart-turn', 'bsd-2-clause',
+         '8b87ad1bb42432c1c8221944a7de5a0d1a52c2162af6f447ee9522530b38f199'),
+        ('smart-turn/upstream-LICENSE', gh + 'pipecat-ai/smart-turn/24c720337e17befe0413bbc93b3504036c3a3bdc/LICENSE', 'smart-turn', 'Daily',
+         '0d66364067f678c08586ebb60a16a2aed4fa081ec11057df35585759ce0e774f'),
+        ('wespeaker-uid/catalog.md', gh + 'wenet-e2e/wespeaker/dfa741957e5c11f477623b6e583d67d0af25ee88/docs/pretrained.md', 'wespeaker-uid', 'VoxBlink',
+         '34a46fc9faeb6a5c8204c840a06b1ca94fc5ac3c52d5460f5bd6c1bf9aa701cf'),
+        ('wespeaker-uid/voxblink2-LICENSE', gh + 'VoxBlink2/ScriptsForVoxBlink2/50846d6540783824476e16c006f4a0fe27e70683/LICENSE', 'wespeaker-uid', 'CC BY-NC-SA 4.0',
+         'c6c9e95e3971304341fd900d62334eaa0418644b630a351a35c839ab1caf1e23'),
+        ('wespeaker-uid/voxblink2-model-terms.html', 'https://voxblink2.github.io/', 'wespeaker-uid', 'license of the model is also', None),
+        ('wespeaker-uid/voxceleb-terms.html', 'https://mm.kaist.ac.kr/datasets/voxceleb/', 'wespeaker-uid', 'Attribution', None),
+        ('terms/CC-BY-4.0.txt', 'https://creativecommons.org/licenses/by/4.0/legalcode.txt', 'common-terms', 'Attribution 4.0', None),
+        ('terms/CC-BY-NC-SA-4.0.txt', 'https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.txt', 'common-terms', 'NonCommercial', None),
+        ('terms/CC0-1.0.txt', 'https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt', 'common-terms', 'CC0 1.0', None),
+        ('terms/OpenMDW-1.1.html', 'https://openmdw.ai/license/1-1/', 'nemotron-asr', 'OpenMDW', None),
+        ('asmjit/LICENSE.md', gh + 'asmjit/asmjit/e5d7c0bd5d9aec44d68830187138149e6a8c4e32/LICENSE.md', 'asmjit', 'Copyright',
+         'c8d30b463d35bd5a14b868bae5d8345a1a77cbc6b4a94669f437c619f2ebef61'),
     ]
-    for name, url, group, marker in sources:
-        b.public('notices/' + name, url, group, marker)
+    for name, url, group, marker, sha256 in sources:
+        b.public('notices/' + name, url, group, marker, sha256=sha256)
     # The Windows wheel has a different Torch git version from the Mac
     # reference. Bind the actual wheel -> its submodules, not a nearby build.
     submodules = [
