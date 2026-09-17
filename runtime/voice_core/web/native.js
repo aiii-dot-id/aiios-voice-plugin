@@ -35,6 +35,7 @@ $("start").onclick = () => {
   ws.onmessage = event => {
     let row;
     try { row = JSON.parse(event.data); } catch (error) { log({type: "malformed_frame", reason: String(error)}); return; }
+    if (!row || typeof row !== "object" || Array.isArray(row)) { log({type: "malformed_frame", reason: "not a JSON object"}); return; }
     log(row);
     if (row.type === "reply_requested") {
       pendingReply = row; $("send-reply").disabled = false;
