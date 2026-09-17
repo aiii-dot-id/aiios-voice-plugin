@@ -1,6 +1,6 @@
 # Source-bound native voice carrier
 
-The normal carrier now uses SDK `92a42656a039e916140d689342506122185349c5`
+The normal carrier now uses SDK `d75105d53db01b8399e9fb67a37850cc0ffe36d9`
 and its generic `Control.Answer` admission contract. One ordered private writer
 and reply reader retain the control until the actual worker verdict arrives;
 neither inference nor a delayed verdict holds the SDK admission lane. There is
@@ -12,7 +12,7 @@ remain separate. Neither model loading nor signing is performed by this builder.
 
 The landed pin preserves emitted confirmation flags and supports several
 interfaces. Enrollment-enabled emission contains eight `speech.session`
-controls plus four `speaker.uid` operations; only the latter's three mutations
+controls plus six `speaker.uid` operations; only the latter's five mutations
 require operator confirmation. The package builder partitions the actual emitted
 methods rather than hiding enrollment beneath the lifecycle interface.
 
@@ -52,7 +52,7 @@ python -m scripts.build_plugin_carrier --verify
 python -m scripts.build_plugin_carrier --bundle /absolute/new/carrier-source.zip
 ```
 
-Outputs are under `.build/native-sdk-92a4265/`: macOS arm64 plain and race,
+Outputs are under `.build/native-sdk-d75105d/`: macOS arm64 plain and race,
 Ubuntu/Linux amd64 and Windows amd64 plain executables plus `build.json`.
 The build inventory records exact source digests, toolchain, target, race mode
 and executable hashes. Source changes during compilation fail the build. An
@@ -70,7 +70,7 @@ repository write, installation or audio-device access happens during build.
 
 ## Launch boundary
 
-The carrier declares the SDK's eight controls and four enrollment operations
+The carrier declares the SDK's eight controls and six speaker-management operations
 without loading a worker when `AIISDK_DESCRIBE=1`. Installed native activation
 is zero-argument and binds its worker from the sealed runtime manifest; explicit
 worker commands are a development-proof path, not an installed requirement.
@@ -91,3 +91,9 @@ Current-binding Windows/Ubuntu native execution and the current-host browser
 gate are still required; historical results on the old binding do not certify
 the new executable. Neither set of checks replaces installed physical browser
 conversation, UID feature completion or human-quality qualification.
+
+The beta.3 assembly targets AII OS 0.1.7 or newer. Its accelerator declarations
+include a 180000 ms startup allowance and the unchanged declared host-memory
+reservations. Device memory is omitted where unknown. Hearing/speaking setting
+scopes are serialized by this pinned SDK; the host enforces the version window.
+These declarations do not substitute for installed-path execution evidence.

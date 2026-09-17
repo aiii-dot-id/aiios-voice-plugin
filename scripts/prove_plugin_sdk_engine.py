@@ -553,9 +553,8 @@ def run(
         else:
             from scripts.audio_contract import normalize_pcm_wav
 
-            path = (
-                ROOT / "deliverables/speech-output/validation-20260907-r2/recovery.wav"
-            )
+            path = Path(getattr(args, "recorded_input", None) or
+                ROOT / "deliverables/speech-output/validation-20260907-r2/recovery.wav")
             samples = np.rint(
                 np.clip(normalize_pcm_wav(path, 16000).samples, -1, 32767 / 32768)
                 * 32768
