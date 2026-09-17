@@ -22,6 +22,13 @@ from runtime.voice_core.live import CHUNK, LiveSession
 from .audio import DISCONTINUITY, END, PCM, Frame
 from .capture import capture_processing
 
+# The bounded input queue admits this many PCM frames. One more slot is reserved
+# for the end-of-input sentinel, so a finish can never be refused after its
+# cutoff is committed: the queue and the 2.048-second admission guard met at
+# exactly 64 frames, and a legal finish at that moment committed the cutoff,
+# armed the tail deadline, then refused (review, 2026-09-16).
+INPUT_QUEUE_FRAMES = 64
+
 
 class Refused(ValueError):
     def __init__(self, code, message):
@@ -325,7 +332,7 @@ class ResidentEngine:
         self.drain_changed = asyncio.Event()
         self.abort_requested = False
         self.pending_end = None
-        self.input_queue = asyncio.Queue(maxsize=64)
+        self.input_queue = asyncio.Queue(maxsize=INPUT_QUEUE_FRAMES + 1)
         self.effective_settings = None
         self.capture_processing = processing
         if self.speaker_tools is not None:
@@ -505,11 +512,11 @@ class ResidentEngine:
             raise Refused("INPUT_CUTOFF", "frame exceeds admitted boundary")
         if frame.kind == END and self.cutoff is not None and end != self.cutoff:
             raise Refused("INPUT_TAIL", "end before required tail")
-        try:
-            if frame.kind == PCM:
-                self.input_queue.put_nowait(frame.pcm)
-        except asyncio.QueueFull as error:
-            raise Refused("INPUT_OVERFLOW", "bounded input queue full") from error
+        if frame.kind == PCM:
+            # Data never takes the sentinel's reserved slot.
+            if self.input_queue.qsize() >= INPUT_QUEUE_FRAMES:
+                raise Refused("INPUT_OVERFLOW", "bounded input queue full")
+            self.input_queue.put_nowait(frame.pcm)
         self.input_stream, self.input_seq, self.received = frame.stream, frame.seq, end
         if frame.kind == PCM and self.speaker is not None:
             self.speaker.feed(frame.start, frame.pcm)
@@ -520,10 +527,9 @@ class ResidentEngine:
 
     def end_input(self):
         if not self.input_signalled:
-            try:
-                self.input_queue.put_nowait(None)
-            except asyncio.QueueFull as error:
-                raise Refused("INPUT_OVERFLOW", "tail completion queue full") from error
+            # The reserved slot: this put cannot be refused, so a committed
+            # cutoff is always followed by its sentinel.
+            self.input_queue.put_nowait(None)
             self.input_signalled = True
 
     def finish(self, args):
