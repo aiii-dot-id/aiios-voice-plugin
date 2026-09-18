@@ -120,7 +120,7 @@ func declaredPlugin() *aiiosdk.Plugin {
 				"list":            {`{}`},
 				"enroll":          {`{"capture_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","speaker_id":"sam","label":"Sam"}`},
 				"remove":          {`{"speaker_id":"COPY_FROM_SPEAKER_LIST"}`},
-				"reset":           {`{}`, `{"recovery":{"enrollment_sha256":"COPY_FROM_SPEAKER_LIST_RECOVERY","captures_sha256":"COPY_FROM_SPEAKER_LIST_RECOVERY"}}`},
+				"reset":           {`{}`, `{"recovery":{"enrollment_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","captures_sha256":"absent"}}`},
 				"discard_capture": {`{"capture_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`},
 				"upgrade_policy":  {`{}`},
 			}[name],

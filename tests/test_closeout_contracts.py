@@ -10,6 +10,15 @@ import pytest
 
 from scripts.assemble_guided_beta_candidate import uid_replacement
 from scripts.package_native_runtime import runtime_inventory, sha256, verify
+from scripts.validate_source_closeout import validate_environment
+
+
+def test_source_gate_refuses_missing_test_prerequisites_before_running():
+    with pytest.raises(ValueError, match="Python 3.11"):
+        validate_environment((3, 9), lambda name: object())
+    with pytest.raises(ValueError, match="pytest_asyncio"):
+        validate_environment((3, 12), lambda name: None if name == "pytest_asyncio" else object())
+    validate_environment((3, 12), lambda name: object())
 
 
 @pytest.mark.parametrize("qualified", [True, False])

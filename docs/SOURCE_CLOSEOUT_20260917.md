@@ -108,12 +108,14 @@ outside the source inventory. Selected evidence SHA-256 values:
 ## Reproduce the required scope
 
 Use the exact SDK pin and archive verification in `plugin/NATIVE_BUILD.md`,
-Go 1.27, a Python environment with the selected tests' dependencies, and a
-working CMake/C++ toolchain. SDK pin is unchanged:
-`92a42656a039e916140d689342506122185349c5`; archive SHA-256 is
-`b56afc82b7172babfd2a749f80f5a1748a07a178d335aae88063411ac195298b`.
+Go 1.27, Python 3.11+ with the pinned test dependencies, and a working CMake/C++
+toolchain. `plugin/sdk-source.json` is the authority for the current SDK pin
+and archive SHA-256; the build verifies both without fetching a floating head.
 
 ```sh
+python3.12 -m venv .build/test-venv
+. .build/test-venv/bin/activate
+python -m pip install -r requirements-test.txt
 python -m scripts.build_plugin_carrier --output .build/native-sdk-closeout
 cmake -S runtime/native/session -B .build/session-contracts \
   -DAII_WORKER_FIXTURE=ON \

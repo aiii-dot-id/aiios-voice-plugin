@@ -1,0 +1,4 @@
+# Source/fixture validation only; not shipped runtime dependencies. Python 3.11+.
+pytest==8.3.5
+pytest-asyncio==0.26.0
+numpy==2.2.6

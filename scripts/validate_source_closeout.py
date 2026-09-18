@@ -4,6 +4,7 @@ The historical audit tests outside this named scope keep their external inputs.
 Missing selected tests, skips, empty collection and stale carriers fail this gate.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,18 @@ TESTS = (
     "test_native_capture_duration", "test_native_settings_packaging", "test_beta3_release_contract",
     "test_native_drain_progress",
     "test_native_lifetime",
+    "test_plugin_sdk_declaration",
 )
+
+
+def validate_environment(version=None, find_spec=importlib.util.find_spec):
+    version = sys.version_info if version is None else version
+    if version < (3, 11):
+        raise ValueError("source gate requires Python 3.11+; see requirements-test.txt")
+    missing = [name for name in ("pytest", "pytest_asyncio", "numpy") if find_spec(name) is None]
+    if missing:
+        raise ValueError("source gate dependencies missing: " + ", ".join(missing)
+                         + "; install requirements-test.txt in an isolated environment")
 
 
 def main():
@@ -36,6 +48,7 @@ def main():
     parser.add_argument("--native-worker", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    validate_environment()
     build = args.carrier_build.resolve(strict=True)
     worker = args.native_worker.resolve(strict=True)
     verify_build(build)
