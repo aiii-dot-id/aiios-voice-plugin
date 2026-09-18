@@ -1,0 +1,9 @@
+{
+  "title": "AII Voice",
+  "description": "Native speech recognition and synthesis, ten selectable English voices, active voice-activity detection with an adjustable pause, interruption and recovery, and guided speaker enrollment and identification. One signed package selects the companion runtime and model data for macOS Apple Silicon, Ubuntu x86-64 or Windows x86-64. AII OS owns downloads, integrity verification, installation, audio, permissions and updates; no system Python is required. Desktop beta: English only. Speaker identification is probabilistic evidence, not authentication. Read the release notes for prerequisites, settings and qualification limits. Third-party model and runtime components retain their own licenses.",
+  "publisher": "AIII",
+  "homepage": "https://github.com/aiii-dot-id/aiios-voice-plugin",
+  "license": "Apache-2.0",
+  "category": "voice",
+  "keywords": ["speech", "voice", "STT", "TTS", "VAD", "speaker identification"]
+}

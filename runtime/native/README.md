@@ -14,13 +14,14 @@ and `ATEN_ROOT`. These must name preverified dependencies. Existing paths are
 checked here; path existence is not a substitute for the recipe's hashes.
 The build does not fetch dependencies or search for a system Python/runtime.
 
-This is **not** the complete common voice engine. The private C++ session owner
-now composes real ASR/VAD/endpoint/TTS on Mac and its model-free contracts run on
-Mac, Ubuntu, Windows and Pixel. See [its boundary](session/README.md). Complete
-SDK/profile/UID integration, provider placement, release packaging and mobile
-linkage still need qualification. The existing component targets are shared libraries;
-this does not yet implement the intended app-linked iOS build. Building on one
-OS is not qualification on another.
+The private C++ session owner composes real ASR/VAD/endpoint/TTS/UID on all three
+desktops and connects through the Go carrier and Plugin SDK. See
+[its boundary](session/README.md) and the artifact-specific
+[desktop handoff](../../docs/DESKTOP_BETA4_HANDOFF_20260918.md).
+Installed browser acceptance remains separate from model and transport proofs.
+The existing component targets are shared libraries; mobile source and earlier
+component checks are not a qualified app-linked iOS/Android release. Building
+on one OS is not qualification on another.
 
 The architecture, capability-preservation rules and executable next milestones
 are in [the common runtime plan](../../docs/COMMON_NATIVE_RUNTIME_20260911.md).
