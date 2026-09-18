@@ -122,6 +122,8 @@ class Worker {
            input_received_ = 0, current_ = 0, input_final_sequence_ = 0;
   uint32_t stream_counter_ = 0, input_stream_ = 0, input_seq_ = 0;
   bool input_started_ = false, end_seen_ = false;
+  uint64_t input_limit_ = 0;
+  bool capture_limit_reached_ = false;
   bool waiting_settings_ = false, pending_audio_ = false, abort_ = false,
        quit_ = false;
   Clock::time_point opening_deadline_, closing_deadline_, exit_deadline_;
@@ -401,6 +403,7 @@ class Worker {
       put(complete, "end_sample", number(snapshot_.cutoff));
       put(complete, "processed_end_sample", number(snapshot_.recognized));
       put(complete, "sequence", number(input_final_sequence_));
+      if(capture_limit_reached_)put(complete,"reason",string("capture_limit"));
     }
     put(r, "input_completion", std::move(complete));
     auto synth = object();
@@ -499,6 +502,8 @@ class Worker {
     generations_.clear();
     input_started_ = false;
     end_seen_ = false;
+    input_limit_ = 0;
+    capture_limit_reached_ = false;
     input_received_ = input_final_sequence_ = 0;
     snapshot_ = {};
     capture_=std::move(capture);capture_result_=null();capture_cancelled_=false;
@@ -553,13 +558,14 @@ class Worker {
             "host settings unavailable");
     const auto *values = field(p, "values");
     const auto config=OperatorSettings::read(values);
+    input_limit_=aii::voice::capture_samples(config.capture_limit_minutes);
     effective_=config.effective();
     waiting_settings_ = false;
     opening_ = std::async(std::launch::async, [&, config] {
       aii_voice_error e{};
       aii_voice_session *s = nullptr;
       const auto speech=config.speech();
-      core(aii_voice_open_configured(models_, &config.control, &speech, &s, &e), e);
+      core(aii_voice_open_with_capture_limit(models_, &config.control, &speech, config.capture_limit_minutes, &s, &e), e);
       return s;
     });
   }
@@ -762,7 +768,7 @@ class Worker {
     if (op == "speech.session.finish_input") {
       require(str(field(a, "stream_id")) == input_handle_,
               "foreign input handle");
-      const auto end = integer(field(a, "end_sample"), 16000 * 1800);
+      const auto end = integer(field(a, "end_sample"), input_limit_ ? input_limit_ : aii::voice::input_clock_max);
       core(aii_voice_finish_input(session_, end, &error_), error_);
       core(aii_voice_status(session_, &snapshot_, &error_), error_);
       auto r = accepted();
@@ -996,6 +1002,7 @@ class Worker {
         put(data, "stream_id", string(input_handle_));
         put(data, "end_sample", number(e.start));
         put(data, "processed_end_sample", number(e.end));
+        if(*text)put(data,"reason",string(text));
         input_final_sequence_ = sequence_ + 1;
       } else if (!e.generation) {
         put(data, "start_sample", number(e.start));
@@ -1114,6 +1121,15 @@ class Worker {
     }
     if (!input_pending_)
       return;
+    // The host may already have queued more capture when the engine's finite
+    // cutoff arrives. Retire those bytes without admitting them as speech or
+    // faulting a completed input. Only the same input stream may be retired.
+    if(capture_limit_reached_) {
+      const auto& f=*input_pending_;
+      require(f.stream==input_stream_ && f.kind!=2,"foreign/discontinuous input after capture limit");
+      input_pending_.reset();
+      return;
+    }
     if (lifecycle_ == "closed" && input_final_sequence_) {
       const auto &f = *input_pending_;
       require(!end_seen_ && f.kind == 3 && f.start == input_received_ &&
@@ -1167,12 +1183,14 @@ class Worker {
     }
     if (f.kind == 1) {
       require(!f.pcm.empty(), "empty PCM");
+      const auto count=input_limit_ ? std::min<uint64_t>(f.pcm.size(),input_limit_-input_received_) : f.pcm.size();
       const auto rc = aii_voice_feed(session_, f.start, f.pcm.data(),
-                                     f.pcm.size(), &error_);
+                                     count, &error_);
       if (rc == AII_VOICE_AGAIN)
         return;
       core(rc, error_);
-      input_received_ += f.pcm.size();
+      input_received_ += count;
+      capture_limit_reached_=input_limit_ && input_received_==input_limit_;
     } else {
       core(aii_voice_finish_input(session_, f.start, &error_), error_);
       end_seen_ = true;
@@ -1346,6 +1364,12 @@ public:
 } // namespace
 int main(int argc, char **argv) {
   try {
+    // Package builders ask the exact worker for its declaration. No model,
+    // private state, audio pipe or resident protocol is opened by this path.
+    if(argc==2 && std::string(argv[1])=="--describe-settings") {
+      std::cout<<encode(OperatorSettings::declarations())<<'\n';
+      return 0;
+    }
     const int wire = protocol_stdout();
     std::optional<InstalledProfile> installed;
     std::array<char*,11> pointers{};

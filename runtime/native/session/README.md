@@ -25,6 +25,42 @@ final block is padded for VAD only,
 not counted as real recognition input. `input_finished` follows consumed input
 and final transcript publication, including the silent case.
 
+### Listening duration
+
+`capture_limit_minutes` is a whole-number hearing setting, default **30**.
+**0 disables automatic duration stopping.** Positive values count captured
+audio, including silence, at the engine's 16 kHz clock; they do not count time
+while no audio arrives. This is independent of the VAD turn pause and the
+separate 30-second guided-enrollment recording bound. Changes are pinned at
+the next session open and included in the existing effective settings readback.
+The integer range is 0..4294967295, a representation bound, not a model or
+hardware safety claim; sample conversion uses 64-bit arithmetic.
+
+At a positive limit, the adapter splits a crossing packet at the exact cutoff,
+finalizes the accepted input tail, and emits `input_finished` with
+`reason: capture_limit` after the final transcript. `status.input_completion`
+carries the same reason. Capture already in flight beyond the cutoff is not
+transcribed; the host must stop capture on completion, finish pending answer
+work and request normal drain. This is a visible completion, not an inference
+fault or an automatic rollover. An explicitly requested earlier Finish still
+wins. Stop, Cancel, Finish, Abort, bounded queues and missing-tail deadlines
+remain effective when the duration limit is disabled.
+
+The additive C entry `aii_voice_open_with_capture_limit` supplies the value;
+existing entrypoints and struct layouts retain the 30-minute default. C callers
+must split packets at a finite cutoff themselves. The core auto-finalizes at
+that exact boundary. Tests use deterministic model doubles with more than
+30 minutes of audio-clock input; this is not physical-audio or multi-day soak
+qualification. In particular, duration-unlimited does not remove the existing
+4096-generation history/admission bound: completed-generation retirement is a
+separate known limitation, not certified away by these duration tests.
+
+The worker's `--describe-settings` emits its compiled declaration without
+loading models. Candidate rebuilds replace `resources/settings.json` from
+that output and rebind the runtime inventory. Unified desktop assembly reads
+those bound declarations from all three archives and refuses disagreement or
+the old seven-setting surface; it no longer inherits a stale parent template.
+
 Synthesis output uses a 24 kHz clock. Generated, queued, delivered and rendered
 are different quantities. An interruption removes queued PCM from every
 unrendered generation and independently asks the backend to cancel. END is not

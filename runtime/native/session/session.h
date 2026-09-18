@@ -1,4 +1,5 @@
 #pragma once
+#include "capture_limit.h"
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -63,7 +64,13 @@ struct SpeakerIdentifier {
   virtual std::string identify(uint64_t, const std::vector<float>&) = 0;
   virtual void cancel() noexcept = 0;
 };
-struct Settings { uint32_t pause_ms = 768; float speech_threshold = .5f; uint32_t input_tail_timeout_ms = 3000; SpeechSettings speech{}; };
+struct Settings {
+  uint32_t pause_ms = 768;
+  float speech_threshold = .5f;
+  uint32_t input_tail_timeout_ms = 3000;
+  SpeechSettings speech{};
+  uint32_t capture_limit_minutes = default_capture_limit_minutes; // 0: no duration stop
+};
 struct Event {
   uint64_t sequence = 0, turn = 0, generation = 0, start = 0, end = 0;
   std::string kind, text;

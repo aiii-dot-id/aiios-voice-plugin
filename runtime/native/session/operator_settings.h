@@ -1,5 +1,6 @@
 #pragma once
 #include "c_api.h"
+#include "capture_limit.h"
 #include "worker_json.h"
 #include <array>
 namespace aii::voice::wire {
@@ -11,6 +12,7 @@ struct OperatorSettings {
   std::string voice="alba",tts_language="en",stt_language="en";
   float temperature=.3f;
   uint32_t seed=20260908;
+  uint32_t capture_limit_minutes=aii::voice::default_capture_limit_minutes;
   aii_voice_speech_settings speech() const {return {voice.c_str(),tts_language.c_str(),stt_language.c_str(),temperature,seed};}
   static double fraction(const cJSON* v,double low,double high) {
     require(cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && v->valuedouble>=low && v->valuedouble<=high,"numeric setting outside supported range");return v->valuedouble;
@@ -20,6 +22,7 @@ struct OperatorSettings {
     for(auto* v=values->child;v;v=v->next) {
       const std::string key=v->string;
       if(key=="turn_pause_ms") {result.control.pause_ms=uint32_t(integer(v,5000));require(result.control.pause_ms>=320,"pause must be 320..5000 ms");}
+      else if(key=="capture_limit_minutes")result.capture_limit_minutes=uint32_t(integer(v,UINT32_MAX));
       else if(key=="vad_threshold")result.control.speech_threshold=float(fraction(v,.05,.95));
       else if(key=="tts_temperature")result.temperature=float(fraction(v,0,1));
       else if(key=="tts_seed")result.seed=uint32_t(integer(v,4294967295ULL));
@@ -35,6 +38,7 @@ struct OperatorSettings {
   }
   Json effective() const {
     auto j=object();put(j,"turn_pause_ms",number(control.pause_ms));
+    put(j,"capture_limit_minutes",number(capture_limit_minutes));
     put(j,"vad_threshold",own(cJSON_CreateNumber(control.speech_threshold)));
     put(j,"tts_voice",string(voice));put(j,"tts_language",string(tts_language));put(j,"stt_language",string(stt_language));
     put(j,"tts_temperature",own(cJSON_CreateNumber(temperature)));put(j,"tts_seed",number(seed));return j;
@@ -57,6 +61,7 @@ struct OperatorSettings {
       auto row=add(key,type,title,description);put(row,"minimum",own(cJSON_CreateNumber(low)));put(row,"maximum",own(cJSON_CreateNumber(high)));cJSON_AddItemToArray(out.get(),row.release());
     };
     numeric("turn_pause_ms","integer","Speaking pause (VAD, ms)",320,5000,"Voice activity detection is always enabled. Minimum silence before turn completion; short pauses retain speech and semantic handling may extend it. Applies next session; does not delay interruption.");
+    numeric("capture_limit_minutes","integer","Listening session limit (minutes; 0 = no automatic stop)",0,UINT32_MAX,"Captured audio minutes, including silence. 0 means no automatic stop. Positive limits finalize accepted input. Applies next session; separate from VAD pause and enrollment. Stop, Finish and Abort remain available.");
     numeric("vad_threshold","number","Speech detection (VAD) threshold",.05,.95,"Voice activity detection is always enabled. Higher values require stronger speech evidence. Applies next session; changing this can miss quiet speech.");
     numeric("tts_temperature","number","Voice variation",0,1,"Advanced sampling control. Applies next session; higher values may reduce consistency.");
     numeric("tts_seed","integer","Synthesis seed",0,4294967295.0,"Stable sampling seed. Applies next session. Does not enroll or identify a speaker.");

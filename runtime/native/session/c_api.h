@@ -113,6 +113,11 @@ aii_voice_result aii_voice_open(aii_voice_models*, const aii_voice_settings*, ai
 /* Settings are pinned for the session. Unknown languages/voices are refused;
  * open is initialization work and never runs on the interruption lane. */
 aii_voice_result aii_voice_open_configured(aii_voice_models*, const aii_voice_settings*, const aii_voice_speech_settings*, aii_voice_session**, aii_voice_error*);
+/* Additive ABI: prior entrypoints retain the 30-minute default and their
+ * struct layouts. 0 disables duration stopping, not queue/cancellation bounds.
+ * Input packets must not cross the finite limit; at the exact limit the core
+ * finalizes input and emits input_finished with reason capture_limit. */
+aii_voice_result aii_voice_open_with_capture_limit(aii_voice_models*, const aii_voice_settings*, const aii_voice_speech_settings*, uint32_t capture_limit_minutes, aii_voice_session**, aii_voice_error*);
 /* Release refuses a live owner. Abort is admission-only; wait is explicitly
  * separate. Never free an executing kernel. The outer supervisor owns kill. */
 aii_voice_result aii_voice_release(aii_voice_session**, aii_voice_error*);
