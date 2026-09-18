@@ -1,6 +1,7 @@
 #include "snapshot_bridge.h"
 #include "../../native_uid/snapshot.h"
 #include "../vendor/picosha2/picosha2.h"
+#include <chrono>
 #include <future>
 #include <iostream>
 using namespace aii::voice;
