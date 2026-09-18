@@ -73,9 +73,10 @@ def release_contract(cfg):
             raise ValueError('new device reservation needs independently measured justification')
         if type(profile.get('startup_ms')) is not int or not 1 <= profile['startup_ms'] <= 3600000:
             raise ValueError('explicit bounded startup_ms required')
-    # Several 0.1.7 builds precede engine-initiated input completion. Never
-    # admit them for a finite capture limit. The host must publish a new,
-    # capability-bearing release; installed qualification remains mandatory.
+    # Operator-confirmed release floor (host exchange 20260918-1843): no
+    # 0.1.8 release preceded optional input; it carries that and engine-initiated
+    # completion. Qualify against the exact capability-bearing host artifact,
+    # not an earlier staged build that happens to print the same version.
     cfg['aiios_min_version'] = '0.1.8'
 
 

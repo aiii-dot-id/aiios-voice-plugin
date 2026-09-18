@@ -2,3 +2,7 @@
 pytest==8.3.5
 pytest-asyncio==0.26.0
 numpy==2.2.6
+# Recorded-speech qualification resamples the bound WAV; never shipped.
+scipy==1.15.3
+# Integrity/package helpers import these even for native runtime validation.
+packaging==25.0
