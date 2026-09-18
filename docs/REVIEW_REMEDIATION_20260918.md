@@ -41,3 +41,12 @@ Native tests cover old-model/corrupt/zero-byte/missing profiles, old captures,
 fresh enrollment after recovery, stale confirmation, denied reads, failed and
 unsynced archive publication, and each partially failed reset. Carrier tests
 hold the exact argument, confirmation, fixed-path and immutable-archive bounds.
+
+## V3 — Reject the ambiguous host version
+
+The candidate now declares a minimum of 0.1.8. All 0.1.7 builds are excluded,
+including the ones that accepted the settings but could not stop browser capture
+when the engine completed input. This is a minimum requirement, not a claim
+that a new host release has already shipped. The host agent has been asked to
+assign and qualify the supporting release. Publication/installed-product closure
+still requires that release and the finite-limit/status-reconciliation journey.

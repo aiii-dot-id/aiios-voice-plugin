@@ -17,7 +17,7 @@ def test_declarations_preserve_runtime_choices_and_settings():
     cfg = example()
     prior = copy.deepcopy(cfg)
     release_contract(cfg)
-    assert cfg.pop('aiios_min_version') == '0.1.7'
+    assert cfg.pop('aiios_min_version') == '0.1.8'
     for variant in cfg['variants']:
         assert variant['accelerator'].pop('startup_ms') == 180000
         assert 'device_memory_bytes' not in variant['accelerator']
