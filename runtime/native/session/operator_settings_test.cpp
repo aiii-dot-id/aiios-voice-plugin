@@ -7,6 +7,7 @@ int main(int argc,char** argv) {
     auto decls=OperatorSettings::declarations(),declared=object();require(cJSON_GetArraySize(decls.get())==8,"settings declaration incomplete");
     size_t vad=0;for(auto* row=decls->child;row;row=row->next) {
       const auto key=str(field(row,"key"),32);
+      require(str(field(row,"scope"))==(key.rfind("tts_",0)==0?"speaking":"hearing"),"compiled setting scope differs");
       str(field(row,"title"),64);str(field(row,"description"),256); // SDK byte bounds
       if(key=="turn_pause_ms"||key=="vad_threshold") {
         ++vad;require(str(field(row,"title")).find("VAD")!=std::string::npos&&

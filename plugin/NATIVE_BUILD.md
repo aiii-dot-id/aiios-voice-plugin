@@ -1,6 +1,6 @@
 # Source-bound native voice carrier
 
-The normal carrier now uses SDK `d75105d53db01b8399e9fb67a37850cc0ffe36d9`
+The normal carrier now uses SDK `8155af048f312faec9000defe294b0086b28b62c`
 and its generic `Control.Answer` admission contract. One ordered private writer
 and reply reader retain the control until the actual worker verdict arrives;
 neither inference nor a delayed verdict holds the SDK admission lane. There is
@@ -52,7 +52,7 @@ python -m scripts.build_plugin_carrier --verify
 python -m scripts.build_plugin_carrier --bundle /absolute/new/carrier-source.zip
 ```
 
-Outputs are under `.build/native-sdk-d75105d/`: macOS arm64 plain and race,
+Outputs are under `.build/native-sdk-8155af0/`: macOS arm64 plain and race,
 Ubuntu/Linux amd64 and Windows amd64 plain executables plus `build.json`.
 The build inventory records exact source digests, toolchain, target, race mode
 and executable hashes. Source changes during compilation fail the build. An
@@ -92,8 +92,10 @@ gate are still required; historical results on the old binding do not certify
 the new executable. Neither set of checks replaces installed physical browser
 conversation, UID feature completion or human-quality qualification.
 
-The beta.3 assembly targets AII OS 0.1.7 or newer. Its accelerator declarations
-include a 180000 ms startup allowance and the unchanged declared host-memory
-reservations. Device memory is omitted where unknown. Hearing/speaking setting
-scopes are serialized by this pinned SDK; the host enforces the version window.
+Current assembly excludes AII OS before 0.1.8 for engine-initiated input
+completion. Output-only publication must additionally bind the release carrying
+that host contract. Its accelerator declarations come from explicit reviewed
+per-platform inputs, never historical paths or blanket startup overrides.
+Device memory is omitted where unknown. Hearing/speaking scopes originate in
+the built worker, are serialized by this SDK, and are not invented by packaging.
 These declarations do not substitute for installed-path execution evidence.

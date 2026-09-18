@@ -24,64 +24,59 @@ from scripts.intel_openmp_redist import verified_notices as openmp_notices
 
 TEMPLATE=ROOT/'deliverables/desktop-beta-release-20260915-r1/portable-windows-family-r1/author'
 TEMPLATE_SHA='d6c0cee9feab43bf6c07a79ad870966a10cff342d9b0406b2e8b4297e50a9a7b'
-STAGES={
- 'macos':ROOT/'deliverables/beta1-runtime-assets-20260916-r2/macos',
- 'linux':ROOT/'deliverables/beta1-runtime-assets-20260916-r2/linux',
- 'windows':ROOT/'deliverables/beta1-unsigned-windows-companion-20260916-r1'}
-CARRIERS={
- 'macos':ROOT/'deliverables/macos-guided-beta1-20260916-r2/run/checkpoint/runtime/aii-voice-t3',
- 'linux':ROOT/'.build/linux-release-checkpoint-20260916-r1/runtime/aii-voice-t3',
- 'windows':STAGES['windows']/'aii-voice-t3.exe'}
+PLATFORMS = frozenset(('macos', 'linux', 'windows'))
 
 
 def candidate_inputs(path):
     """Select explicit immutable staging, never guess the latest directory."""
     if path is None:
-        return STAGES, CARRIERS
+        raise ValueError('explicit candidate input manifest required; historical stages are not release defaults')
     rows = json.loads(path.read_text())
-    if set(rows) != set(STAGES): raise ValueError('all three desktop bindings required')
-    stages, carriers = {}, {}
+    if not isinstance(rows, dict) or set(rows) != PLATFORMS:
+        raise ValueError('all three desktop bindings required')
+    stages, carriers, accelerators = {}, {}, {}
     for platform, row in rows.items():
+        if not isinstance(row, dict) or not isinstance(row.get('accelerator'), dict):
+            raise ValueError('explicit accelerator declaration required: ' + platform)
+        accelerators[platform] = copy.deepcopy(row['accelerator'])
         stages[platform] = Path(row['stage']).resolve()
         carriers[platform] = Path(row['carrier']).resolve()
         if sha(stages[platform] / 'result.json') != row['stage_sha256']:
             raise ValueError('staging result changed: ' + platform)
         if sha(carriers[platform]) != row['carrier_sha256']:
             raise ValueError('carrier changed: ' + platform)
-    return stages, carriers
+    return stages, carriers, accelerators
 
 
 def operator_setup(platform):
     """AII OS 0.1.7 consumes the package declaration; no config edit needed."""
-    if platform not in STAGES:
+    if platform not in PLATFORMS:
         raise ValueError('unsupported desktop setup')
     return {}
 
 
 def release_contract(cfg):
     """Apply agreed metadata without changing models, budgets or setting values."""
-    scopes = {'stt_language': 'hearing', 'turn_pause_ms': 'hearing', 'capture_limit_minutes': 'hearing',
-              'vad_threshold': 'hearing', 'tts_voice': 'speaking',
-              'tts_language': 'speaking', 'tts_temperature': 'speaking',
-              'tts_seed': 'speaking'}
-    if {v['platform'] for v in cfg['variants']} != set(STAGES) or len(cfg['variants']) != 3:
+    keys = {'stt_language', 'turn_pause_ms', 'capture_limit_minutes', 'vad_threshold',
+            'tts_voice', 'tts_language', 'tts_temperature', 'tts_seed'}
+    if {v['platform'] for v in cfg['variants']} != PLATFORMS or len(cfg['variants']) != 3:
         raise ValueError('exact desktop variants required')
-    if {s['key'] for s in cfg['settings']} != set(scopes) or len(cfg['settings']) != len(scopes):
+    if {s['key'] for s in cfg['settings']} != keys or len(cfg['settings']) != len(keys):
         raise ValueError('review scope for changed settings')
+    if any(s.get('scope') not in ('hearing', 'speaking', 'session') for s in cfg['settings']):
+        raise ValueError('compiled setting scope required; packaging does not invent it')
     for v in cfg['variants']:
         profile = v['accelerator']
         if type(profile.get('memory_bytes')) is not int or profile['memory_bytes'] <= 0:
             raise ValueError('existing positive host reservation required')
         if 'device_memory_bytes' in profile:
             raise ValueError('new device reservation needs independently measured justification')
+        if type(profile.get('startup_ms')) is not int or not 1 <= profile['startup_ms'] <= 3600000:
+            raise ValueError('explicit bounded startup_ms required')
     # Several 0.1.7 builds precede engine-initiated input completion. Never
     # admit them for a finite capture limit. The host must publish a new,
     # capability-bearing release; installed qualification remains mandatory.
     cfg['aiios_min_version'] = '0.1.8'
-    for v in cfg['variants']:
-        v['accelerator']['startup_ms'] = 180000
-    for setting in cfg['settings']:
-        setting['scope'] = scopes[setting['key']]
 
 
 def current_windows_notices(profile, artifact_root=ROOT):
@@ -185,7 +180,7 @@ def uid_replacement(cfg,index,model_template,notice_root):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True)
-    p.add_argument('--inputs',type=Path,help='Explicit stage and carrier paths with SHA-256 bindings')
+    p.add_argument('--inputs',type=Path,required=True,help='Explicit stage/carrier SHA-256 bindings and per-platform accelerator declarations')
     p.add_argument('--uid-model-template',type=Path)
     p.add_argument('--uid-notices',type=Path)
     p.add_argument('--uid-model-template-sha256')
@@ -196,7 +191,7 @@ def main():
     a=p.parse_args();out=a.out.resolve();pin,_=verify_sdk()
     artifact_root=a.artifact_root.resolve()
     template=artifact_root/TEMPLATE.relative_to(ROOT)
-    stages, carriers = candidate_inputs(a.inputs)
+    stages, carriers, accelerators = candidate_inputs(a.inputs)
     if sha(template/'plugin.json')!=TEMPLATE_SHA:raise ValueError('template changed')
     cfg=json.loads((template/'plugin.json').read_text())
     # Notice selection and model selection form one atomic packaging decision.
@@ -227,6 +222,8 @@ def main():
             raise ValueError('desktop runtime settings declarations disagree')
         settings = declared
     cfg['settings'] = settings
+    for variant in cfg['variants']:
+        variant['accelerator'] = accelerators[variant['platform']]
     release_contract(cfg)
     descriptors=json.loads(subprocess.check_output([str(carriers['macos'])],env={'PATH':'','AIISDK_DESCRIBE':'1'},timeout=10))
     cfg['interfaces']=enrollment_interfaces(descriptors)
@@ -259,7 +256,7 @@ def main():
         scope='Operator-reviewed merge into existing host config; never replace config.json. No plugin self-authorization.',
         restart_required=False,
         platforms={p:operator_setup(p) for p in plans},
-        rationale='AII OS 0.1.7 consumes startup_ms=180000 from each accelerator profile, subject to operator ceilings and overrides. memory_bytes retains the existing host reservation, not a measured peak. Unmeasured device memory is omitted, not zero.',
+        rationale='AII OS consumes the explicit per-platform startup allowance subject to operator ceilings and overrides. memory_bytes is a declared host reservation, not a measured peak. Unmeasured device memory is omitted, not zero.',
         automatic_configuration=False))
     # Notices are original texts with exact attribution. Rebind the one stale
     # execution description; do not represent notice collection as clearance.

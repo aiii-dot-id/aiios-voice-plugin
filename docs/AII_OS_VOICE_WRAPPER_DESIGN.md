@@ -1,5 +1,10 @@
 # AII Voice: thin native T3 wrapper
 
+Historical design/checkpoint record. For the current implemented native
+session, UID/setting boundaries and output-only contract, read
+[NATIVE_SESSION_CONTRACT.md](NATIVE_SESSION_CONTRACT.md). The dated limitations
+and SDK pins below describe their original evidence, not the current release.
+
 Design checkpoint: 2026-09-08, corrected by explicit operator direction.
 Newest execution: the [runtime-bound Mac carrier](../deliverables/plugin-sdk-engine-20260908/PACKAGED_RUNTIME_MILESTONE.md)
 launches with no arguments and passes real speech under containment denying

@@ -38,7 +38,9 @@ def test_compiled_declaration_reaches_runtime_and_package(tmp_path):
     assert observed == declared
     cfg = example()
     cfg['settings'] = observed
+    before = copy.deepcopy(observed)
     release_contract(cfg)
+    assert cfg['settings'] == before, 'packager changed the compiled declaration'
     assert next(s for s in cfg['settings'] if s['key'] == 'capture_limit_minutes')['scope'] == 'hearing'
     changed = copy.deepcopy(profile)
     changed['files']['resources/settings.json']['sha256'] = '0'*64
