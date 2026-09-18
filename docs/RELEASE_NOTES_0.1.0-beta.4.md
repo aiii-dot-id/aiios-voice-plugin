@@ -1,9 +1,9 @@
-# AII Voice 0.1.0-beta.4 — prepared release notes
+# AII Voice 0.1.0-beta.4 — desktop beta
 
-Publication status: **prepared, not published**. The final installed/browser
-gate, endurance result and public download readback must be recorded before
-calling this release qualified. This file is the release-note draft, not an
-announcement that the catalog has changed.
+This is an operator-requested **desktop prerelease**, not a completed
+human-quality qualification. Current-host installed/browser acceptance and
+the actual eight-hour endurance result remain open at publication preparation.
+Successful public download/hash readback is a separate publication check.
 
 ## Changes
 
@@ -21,9 +21,8 @@ announcement that the catalog has changed.
   automatically discarded or reinterpreted.
 - Package/catalog host-floor checks, source-only CI, build instructions and
   operator/release documentation are included in the source handoff.
-- The exact sealed Plugin SDK source archive is a developer release asset,
-  because its authoring commit is not in the clean public SDK mirror. It is
-  not downloaded or installed by the plugin and does not change its binaries.
+- SDK and AII OS repository publication are owned separately. No SDK checkout
+  or system Python is downloaded or required by the installed plugin.
 
 ## Requirements and limits
 

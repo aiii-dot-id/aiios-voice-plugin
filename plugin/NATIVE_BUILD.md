@@ -43,10 +43,10 @@ the repository named in `sdk-source.json`. Save the unmodified tar at its
 `archive` path and extract to its `source` path. The builder checks the tar's
 SHA-256, every extracted file, absence of extra files, and the native Go module's
 replacement binding. Do not substitute an arbitrary checkout of main.
-The pinned authoring commit is not a public-mirror commit. The exact sealed
-SDK source tar is included in beta.4's prepared developer assets; see
-`docs/DEVELOPMENT.md` for its size, hash and planned release URL. The SDK pin,
-archive bytes, native module replacement and qualified carrier remain unchanged.
+The pinned authoring commit is not a public-mirror commit. The SDK owner is
+handling public SDK source delivery separately; see `docs/DEVELOPMENT.md`.
+The SDK pin, sealed archive bytes, native module replacement and qualified
+carrier remain unchanged. No SDK source checkout is needed for installation.
 
 With Go 1.27.0 installed on the Apple Silicon build machine:
 
