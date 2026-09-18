@@ -19,6 +19,7 @@ EXPORTS
     aii_voice_synthesize
     aii_voice_stop_playback
     aii_voice_cancel_synthesis
+    aii_voice_release_generation
     aii_voice_playback
     aii_voice_close
     aii_voice_wait

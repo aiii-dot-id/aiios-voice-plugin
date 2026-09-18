@@ -109,6 +109,9 @@ class Session {
   void interrupt(uint64_t generation);
   void stop_playback(uint64_t generation);
   void cancel_synthesis(uint64_t generation);
+  // Release settled compute/audio custody after the composition has retained
+  // its receipt/idempotency evidence. Monotonic admission still fences reuse.
+  void release_generation(uint64_t generation);
   GenerationSnapshot generation(uint64_t id) const;
   bool event(Event&);
   bool audio(Audio&);

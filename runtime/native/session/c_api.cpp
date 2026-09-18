@@ -117,6 +117,9 @@ aii_voice_result aii_voice_stop_playback(aii_voice_session* s,uint64_t id,aii_vo
 aii_voice_result aii_voice_cancel_synthesis(aii_voice_session* s,uint64_t id,aii_voice_error* e) {
   return call(e,[&]{get(s).cancel_synthesis(id);return AII_VOICE_OK;});
 }
+aii_voice_result aii_voice_release_generation(aii_voice_session* s,uint64_t id,aii_voice_error* e) {
+  return call(e,[&]{get(s).release_generation(id);return AII_VOICE_OK;});
+}
 aii_voice_result aii_voice_playback(aii_voice_session* s,uint64_t id,uint64_t n,uint8_t terminal,uint8_t stopped,aii_voice_error* e) {
   return call(e,[&]{need(terminal<=1 && stopped<=1,"strict boolean required");get(s).playback(id,n,terminal,stopped);return AII_VOICE_OK;});
 }

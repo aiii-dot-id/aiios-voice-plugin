@@ -98,6 +98,21 @@ void admission_and_receipts() {
   while(s.event(event)) finals+=event.kind=="transcript_final";
   check(finals==0,"silence invented transcript");
 }
+void settled_generation_custody(){
+  Asr a;Detector v;End e;Tts t;Session s(a,v,e,t);
+  s.synthesize(1,"Settlement.");
+  refuses([&]{s.release_generation(1);},"live generation released");
+  until([&]{return !s.status().synthesizing;});
+  Audio audio;uint64_t samples=0;while(s.audio(audio))samples+=audio.pcm.size();
+  refuses([&]{s.release_generation(1);},"receipt debt released");
+  s.playback(1,samples,true,false);
+  refuses([&]{s.release_generation(1);},"unconsumed events released");
+  Event event;while(s.event(event)){}
+  s.release_generation(1);
+  refuses([&]{s.generation(1);},"released job still retained");
+  refuses([&]{s.synthesize(1,"Replay.");},"monotonic fence forgotten");
+  s.synthesize(2,"Next.");s.close(true);check(s.wait_closed(1000),"owners did not retire");
+}
 void independent_interruption(uint32_t capture_minutes=default_capture_limit_minutes) {
   Asr a; a.released=false; Detector v; End e; Tts t;
   Settings settings;settings.capture_limit_minutes=capture_minutes;
@@ -289,6 +304,7 @@ void bounded_read_keeps_custody() {
 }
 int main() {
   try {
+    settled_generation_custody();
     admission_and_receipts(); std::cout<<"receipt-held drain and exact terminal evidence PASS\n";
     independent_interruption(); std::cout<<"interruption bypasses blocked recognition; prefix and recovery PASS\n";
     independent_interruption(0);std::cout<<"unlimited duration retains bounded backpressure and independent interruption PASS\n";
