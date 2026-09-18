@@ -74,7 +74,10 @@ def release_contract(cfg):
             raise ValueError('existing positive host reservation required')
         if 'device_memory_bytes' in profile:
             raise ValueError('new device reservation needs independently measured justification')
-    cfg['aiios_min_version'] = '0.1.7'
+    # Several 0.1.7 builds precede engine-initiated input completion. Never
+    # admit them for a finite capture limit. The host must publish a new,
+    # capability-bearing release; installed qualification remains mandatory.
+    cfg['aiios_min_version'] = '0.1.8'
     for v in cfg['variants']:
         v['accelerator']['startup_ms'] = 180000
     for setting in cfg['settings']:
