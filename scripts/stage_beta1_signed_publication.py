@@ -4,7 +4,6 @@ from datetime import datetime,timezone
 import json
 from pathlib import Path
 import subprocess
-from scripts.build_plugin_carrier import ROOT
 from scripts.repackage_native_schemas import read_package
 from scripts.stage_desktop_publication import dependencies,upstream_rows,platform_plan,clean_url,release_name,REPOSITORY
 from scripts.prepare_desktop_distribution import copy_asset,emit,put,sha
@@ -33,7 +32,7 @@ def handoff_status(index):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    for n in ('candidate','signed','host-verification','generated','upstream','out'):p.add_argument('--'+n,type=Path,required=True)
+    for n in ('candidate','signed','host-verification','generated','upstream','out','sdk-tool'):p.add_argument('--'+n,type=Path,required=True)
     a=p.parse_args();out=a.out.resolve();candidate=a.candidate.resolve();signed=a.signed.resolve()
     verdict=json.loads(a.host_verification.read_text());h=sha(signed)
     if not (verdict['passed'] and verdict['tier']=='T3' and verdict['signed_package_sha256']==h
@@ -64,11 +63,12 @@ def main():
     for row in prepared:copy_asset(row['source'],out/row['file'],row['size'],row['sha256'])
     rows=[{k:v for k,v in r.items() if k!='source'} for r in prepared]
     setup=json.loads((candidate/'operator-setup.json').read_text())
-    sdk=ROOT/'deliverables/beta1-runtime-assets-20260916-r2/macos/aiisdk'
+    sdk=a.sdk_tool.resolve();sdk_sha=sha(sdk)
     cmd=[str(sdk),'publish','-tier','T3','-pkg',str(signed),'-url',url]
     r=subprocess.run(cmd,cwd=candidate/'author',capture_output=True,timeout=45)
     put(out/'catalog.stdout',r.stdout);put(out/'catalog.stderr',r.stderr)
     if r.returncode:raise ValueError('SDK refused signed catalog input')
+    if sha(sdk)!=sdk_sha:raise ValueError('SDK publisher changed during catalog generation')
     catalog=json.loads(r.stdout);check_catalog(catalog,manifest,h,signed.stat().st_size,url)
     emit(out/'catalog-entry.json',catalog)
     index=json.loads(files['notices/INDEX.json'])
@@ -76,7 +76,7 @@ def main():
     plan=dict(schema='aiii-voice-signed-desktop-publication-handoff',utc=datetime.now(timezone.utc).isoformat(),
         repository=REPOSITORY,release_tag='v'+manifest['version'],signed_package_sha256=h,
         assets=rows,upstream=external,platforms=platform_plan(targets,setup),
-        host_verification_sha256=sha(a.host_verification),catalog_entry_sha256=sha(out/'catalog-entry.json'),
+        host_verification_sha256=sha(a.host_verification),catalog_entry_sha256=sha(out/'catalog-entry.json'),sdk_tool_sha256=sdk_sha,
         upstream_evidence_sha256=sha(a.upstream),distribution_review_complete=index['distribution_review_complete'],
         distribution_open_items=index['open_items'],signed=True,tier='T3',catalog_entry_generated=True,
         published=False,installed=False,release_status=status,
