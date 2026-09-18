@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
+	"strings"
 	"time"
 )
 
@@ -37,7 +38,7 @@ func hexDigest(s string) bool {
 	return e == nil && len(b) == 32 && hex.EncodeToString(b) == s
 }
 func (q snapshotQuery) valid() bool {
-	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures") || q.Offset > q.limit() {
+	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && !q.recovery()) || q.Offset > q.limit() {
 		return false
 	}
 	switch q.Action {
@@ -47,17 +48,29 @@ func (q snapshotQuery) valid() bool {
 		data, e := base64.StdEncoding.Strict().DecodeString(q.Data)
 		return hexDigest(q.Upload) && e == nil && len(data) > 0 && len(data) <= snapshotPageBytes && base64.StdEncoding.EncodeToString(data) == q.Data && q.Offset == 0 && !q.Digest && q.SHA == "" && q.Expected == "" && !q.Absent
 	case "publish":
+		if q.recovery() && (q.SHA != strings.TrimPrefix(q.Resource, "recovery:") || (!q.Absent && q.Expected != q.SHA)) {
+			return false
+		}
 		return hexDigest(q.Upload) && hexDigest(q.SHA) && ((q.Absent && q.Expected == "") || (!q.Absent && hexDigest(q.Expected))) && q.Data == "" && !q.Append && q.Offset == 0 && !q.Digest
 	}
 	return false
 }
+func (q snapshotQuery) recovery() bool {
+	return strings.HasPrefix(q.Resource, "recovery:") && hexDigest(strings.TrimPrefix(q.Resource, "recovery:"))
+}
 func (q snapshotQuery) limit() uint64 {
+	if q.recovery() {
+		return 12 << 20
+	}
 	if q.Resource == "captures" {
 		return snapshotPageBytes
 	}
 	return 8 << 20
 }
 func (q snapshotQuery) stagePath() string {
+	if q.recovery() {
+		return "uid/.recovery-" + q.Upload + ".pending"
+	}
 	if q.Resource == "captures" {
 		return "uid/.captures-" + q.Upload + ".pending"
 	}
@@ -66,6 +79,9 @@ func (q snapshotQuery) stagePath() string {
 func (q snapshotQuery) target() string {
 	if q.Action == "stage" {
 		return q.stagePath()
+	}
+	if q.recovery() {
+		return "uid/recovery-" + strings.TrimPrefix(q.Resource, "recovery:") + ".json"
 	}
 	if q.Resource == "captures" {
 		return pendingCapturesPath

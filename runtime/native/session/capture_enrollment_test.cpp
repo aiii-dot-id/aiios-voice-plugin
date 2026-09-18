@@ -1,4 +1,5 @@
 #include "capture_enrollment.h"
+#include "uid_recovery.h"
 #include "../vendor/picosha2/picosha2.h"
 #include <iostream>
 #include <optional>
@@ -29,6 +30,7 @@ PendingCapture evidence(unsigned number=0){
 // two fixed files, staging, generation comparison, receipts and readback.
 struct Host {
   std::optional<std::string> profile,pending;
+  std::map<std::string,std::optional<std::string>> archives;
   std::map<std::string,std::string> staged;
   std::vector<std::string> publications;
   std::string fail_publish,unsynced,lost_receipt,bad_read,denied_read,corrupt_readback;
@@ -49,8 +51,9 @@ struct Host {
   void answer(Json request){
     auto* q=field(request.get(),"snapshot_request");
     const std::string key=field(q,"resource")?str(field(q,"resource")):"enrollment";
-    check(key=="captures"||key=="enrollment","arbitrary private resource");
-    auto& current=key=="captures"?pending:profile;
+    check(key=="captures"||key=="enrollment"||key.rfind("recovery:",0)==0,"arbitrary private resource");
+    const auto fault_key=key.rfind("recovery:",0)==0?"recovery":key;
+    auto& current=key=="captures"?pending:key=="enrollment"?profile:archives[key];
     auto reply=object();put(reply,"id",clone(field(q,"id")));put(reply,"session_id",clone(field(q,"session_id")));
     auto error=[&](const char* why,const char* code){put(reply,"error",string(why));put(reply,"reason_code",string(code));};
     const auto* action=field(q,"action");
@@ -73,7 +76,7 @@ struct Host {
       auto v=object();put(v,"bytes",number(chunk.size()));put(v,"size",number(staged[key].size()));put(reply,"value",std::move(v));
     }else{
       check(str(action)=="publish","unknown action");publications.push_back(key);
-      if(fail_publish==key)error("generation changed","FS_GENERATION_MISMATCH");
+      if(fail_publish==fault_key)error("generation changed","FS_GENERATION_MISMATCH");
       else {
         if(current)check(str(field(q,"expected_sha256"),64)==hash(*current),"profile/capture CAS base ignored");
         else check(flag(field(q,"expected_absent")),"absent file not guarded");
@@ -89,8 +92,8 @@ struct Host {
         if(lost_receipt==key)error("receipt unavailable after rename","FS_IO_FAILED");
         else {
           auto v=object();put(v,"size",number(current->size()));put(v,"sha256",string(hash(*current)));
-          put(v,"replaced",boolean(replaced));put(v,"durable",boolean(unsynced!=key));
-          put(v,"durability",string(unsynced==key?"unknown":"synced"));put(reply,"value",std::move(v));
+          put(v,"replaced",boolean(replaced));put(v,"durable",boolean(unsynced!=fault_key));
+          put(v,"durability",string(unsynced==fault_key?"unknown":"synced"));put(reply,"value",std::move(v));
         }
       }
     }
@@ -207,11 +210,57 @@ void process_step(const std::string& mode,const std::filesystem::path& directory
   }else throw std::invalid_argument("unknown process step");
   std::cout<<"fresh-process "<<mode<<" PASS; fixture broker, no host durability or acoustic claim\n";
 }
+void recovery_contract(){
+  const auto p=policy();BoundPolicies bound(p.canonical);
+  const auto old=read_policy("{\"calibration_sha256\":\""+std::string(64,'c')+"\",\"embedding_binding\":\""+std::string(64,'d')+"\",\"minimum_enrollment_samples\":1,\"minimum_margin\":0.105,\"threshold\":0.56}");
+  for(const std::string kind:{"old","corrupt","empty","absent"}){
+    Host host;
+    if(kind=="old")host.profile=write_snapshot({old.policy,9,{}},old);
+    else if(kind!="absent")host.profile=kind=="empty"?"":"{broken";
+    Vector v{};v[0]=1;
+    const auto old_capture=make_pending_capture(hash("old request"),1,32000,old.policy.embedding_binding,{hash("old recording"),v});
+    host.pending=write_captures({3,{old_capture}},old.policy.embedding_binding);
+    const auto before=inspect_uid(host.bridge,bound);
+    check(before.profile_state==(kind=="old"?"incompatible":kind=="absent"?"absent":"corrupt"),"recovery misclassified profile");
+    check(before.captures_state=="incompatible","old capture was silently relabelled");
+    auto result=recover_uid(host.bridge,bound,before.profile_hash(),before.captures_hash(),hash("confirmed"));
+    const auto archive=str(field(result.get(),"recovery_archive_sha256"),64);
+    check(host.archives.at("recovery:"+archive).has_value(),"missing archive");
+    auto saved=parse(*host.archives.at("recovery:"+archive));
+    if(before.profile_absent)check(cJSON_IsNull(field(saved.get(),"enrollment_b64")),"absence fabricated old bytes");
+    else check(decode_base64(field(saved.get(),"enrollment_b64")->valuestring,8u<<20)==before.profile,"original corrupt/old profile not preserved");
+    check(decode_base64(str(field(saved.get(),"captures_b64"),100000),65536)==before.captures,"old capture not preserved");
+    check(bound.read(*host.profile).speakers.empty()&&read_captures(*host.pending,p.policy.embedding_binding).captures.empty(),"recovery did not establish current empty stores");
+    CaptureEnrollment flow(host.bridge,p);auto c=evidence();flow.retain(c,hash("fresh"));
+    auto enrolled=flow.confirm(c.id,"sam","Sam",hash("fresh confirmation"));
+    check(enrolled.enrollment_durable&&bound.read(*host.profile).speakers.size()==1,"fresh enrollment after recovery failed");
+    refused([&]{recover_uid(host.bridge,bound,before.profile_hash(),before.captures_hash(),hash("stale confirmation"));},"changed since confirmation");
+  }
+  for(const std::string fault:{"read","archive-failed","archive-unsynced","captures","enrollment"}){
+    Host host;host.profile="corrupt profile";host.pending="corrupt captures";
+    auto before=inspect_uid(host.bridge,bound);
+    if(fault=="read")host.denied_read="enrollment";
+    else if(fault=="archive-failed")host.fail_publish="recovery";
+    else if(fault=="archive-unsynced")host.unsynced="recovery";
+    else host.fail_publish=fault;
+    refused([&]{recover_uid(host.bridge,bound,before.profile_hash(),before.captures_hash(),hash("act"));},
+        fault=="read"?"unavailable":fault=="archive-failed"?"not published":fault=="archive-unsynced"?"original stores unchanged":"originals preserved");
+    check(host.profile==before.profile,"failed recovery altered original profile");
+    if(fault!="enrollment")check(host.pending==before.captures,"failed archive/capture publication changed pending evidence");
+    if(fault=="read")check(host.publications.empty(),"unreadable treated as absent");
+    if(fault=="captures"||fault=="enrollment"){
+      check(host.archives.size()==1&&host.archives.begin()->second.has_value(),"recovery failure lost original archive");
+      auto preserved=parse(*host.archives.begin()->second);
+      check(decode_base64(str(field(preserved.get(),"enrollment_b64")),1000)==before.profile&&
+          decode_base64(str(field(preserved.get(),"captures_b64")),1000)==before.captures,"failed recovery lost original bytes");
+    }
+  }
+}
 }
 int main(int argc,char** argv){try{
   if(argc==3)process_step(argv[1],argv[2]);
   else{
-  check(argc==1,"unexpected arguments");complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();
+  check(argc==1,"unexpected arguments");complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();
   std::cout<<"guided enrollment publication: closed-mic confirmation, profile-first durable readback, explicit restart reconciliation, no duplicated identity, cleanup uncertainty and fail-closed reads PASS\n";
   }
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

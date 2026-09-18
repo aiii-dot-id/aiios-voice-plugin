@@ -2,6 +2,9 @@
   "type":"object",
   "description":"Successful operation_result after the host unwraps the SDK result envelope. Matching is identification evidence only, never permission. Refusals remain host-visible errors, not instances of this success schema.",
   "properties":{
+    "recovery":{"type":"object","description":"Discovery, not permission: incompatible/corrupt stores are NOT an empty speaker list. Copy only the two observed hash fields into speaker.reset.recovery after closing speech; the host asks for confirmation.","properties":{"enrollment_state":{"enum":["ready","absent","incompatible","corrupt"]},"captures_state":{"enum":["ready","absent","incompatible","corrupt"]},"required":{"type":"boolean"},"enrollment_sha256":{"type":"string"},"captures_sha256":{"type":"string"},"stored_embedding_binding":{"type":"string"}},"required":["enrollment_state","captures_state","required","enrollment_sha256","captures_sha256"],"additionalProperties":false},
+    "recovery_archive_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "recovery_durable":{"type":"boolean"},
     "session_id":{"type":"string"},
     "session_open":{"type":"boolean","description":"Whether an ordinary speech session is open. A durable capture_id never requires it; live-final selection does."},
     "pending_captures":{"type":"array","items":{"type":"object","properties":{"capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"created_ms":{"type":"integer","minimum":1},"samples":{"type":"integer","minimum":31920,"maximum":480000}},"required":["capture_id","created_ms","samples"],"additionalProperties":false}},

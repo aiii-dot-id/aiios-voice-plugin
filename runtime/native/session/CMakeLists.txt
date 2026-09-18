@@ -146,7 +146,7 @@ target_link_libraries(aii_snapshot_bridge PUBLIC aii_uid_snapshot Threads::Threa
 add_executable(aii_snapshot_bridge_test snapshot_bridge_test.cpp)
 target_link_libraries(aii_snapshot_bridge_test PRIVATE aii_snapshot_bridge)
 add_test(NAME native_uid_snapshot_bridge_contract COMMAND aii_snapshot_bridge_test)
-add_library(aii_capture_enrollment STATIC capture_enrollment.cpp)
+add_library(aii_capture_enrollment STATIC capture_enrollment.cpp uid_recovery.cpp)
 target_link_libraries(aii_capture_enrollment PUBLIC aii_snapshot_bridge aii_uid_enrollment aii_uid_pending_captures)
 if(MSVC)
   target_compile_options(aii_capture_enrollment PRIVATE /W4 /WX /fp:strict)

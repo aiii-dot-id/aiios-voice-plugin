@@ -12,7 +12,7 @@ namespace aii::voice {
 class SnapshotBridge {
  public:
   // Two fixed private resources; never a caller-provided filesystem path.
-  enum class Store { Enrollment, PendingCaptures };
+  enum class Store { Enrollment, PendingCaptures, Recovery };
   using Send=std::function<void(wire::Json)>;
   explicit SnapshotBridge(Send send={}):send_(std::move(send)){}
   void sender(Send send) {send_=std::move(send);} // before any session opens
@@ -21,14 +21,14 @@ class SnapshotBridge {
   void accept(const cJSON*);
   // Only an enrollment operation may request typed absence. Ordinary UID
   // reads still throw; they never substitute an invented empty profile.
-  std::string read(bool* absent=nullptr,Store store=Store::Enrollment);
+  std::string read(bool* absent=nullptr,Store store=Store::Enrollment,const std::string& archive={});
   wire::Json publish(const std::string& candidate,const std::string& expected,
-      bool absent,const std::string& upload,Store store=Store::Enrollment);
+      bool absent,const std::string& upload,Store store=Store::Enrollment,const std::string& archive={});
   static aii_voice_result callback(void*,char*,size_t,size_t*) noexcept;
  private:
-  wire::Json page(uint64_t offset,bool digest,std::chrono::steady_clock::time_point deadline,Store);
-  wire::Json exchange(wire::Json query,std::chrono::steady_clock::time_point deadline,Store);
-  std::string read_owned(bool*,std::chrono::steady_clock::time_point,Store);
+  wire::Json page(uint64_t offset,bool digest,std::chrono::steady_clock::time_point deadline,Store,const std::string&);
+  wire::Json exchange(wire::Json query,std::chrono::steady_clock::time_point deadline,Store,const std::string&);
+  std::string read_owned(bool*,std::chrono::steady_clock::time_point,Store,const std::string&);
   void acquire();
   void release() noexcept;
   Send send_;

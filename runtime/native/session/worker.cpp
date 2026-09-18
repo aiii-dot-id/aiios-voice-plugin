@@ -7,6 +7,7 @@
 #include "speaker_observation.h"
 #include "snapshot_bridge.h"
 #include "capture_enrollment.h"
+#include "uid_recovery.h"
 #include "capture_input.h"
 #include "../../native_uid/enrollment.h"
 #include "../../native_uid/bound_policies.h"
@@ -582,6 +583,14 @@ class Worker {
     if(op!="speaker.enroll"&&op!="speaker.list"&&op!="speaker.remove"&&op!="speaker.reset"&&op!="speaker.discard_capture"&&op!="speaker.upgrade_policy")return false;
     require(cJSON_IsObject(a)&&uid_policies_.has_value()&&readiness_.models_loaded==5,"native UID operation unavailable");
     require(op!="speaker.upgrade_policy"||lifecycle_=="closed","close speech before confirmed enrollment policy upgrade");
+    const bool recovery=field(a,"recovery")!=nullptr;
+    std::string recover_profile,recover_captures;
+    if(recovery){
+      require(op=="speaker.reset"&&lifecycle_=="closed"&&cJSON_IsObject(field(a,"recovery")),"confirmed recovery requires closed speech and speaker.reset");
+      const auto* r=field(a,"recovery");
+      require(cJSON_GetArraySize(r)==2,"recovery requires exactly the two observed digests");
+      recover_profile=str(field(r,"enrollment_sha256"),64);recover_captures=str(field(r,"captures_sha256"),64);
+    }
     const bool guided=field(a,"capture_id")!=nullptr;
     const bool captures=op=="speaker.enroll"&&!guided;
     const auto capture_id=guided?str(field(a,"capture_id"),64):"";
@@ -624,7 +633,21 @@ class Worker {
     const auto upload=picosha2::hash256_hex_string(sid_+std::string(1,'\0')+act+std::string(1,'\0')+std::to_string(request));
     const auto policies=*uid_policies_;const auto policy=policies.current();auto* session=session_;enrollment_request_=request;
     const auto session_id=sid_;const auto final_map=enrollment_finals_;
-    enrollment_=std::async(std::launch::async,[this,op,mutates,guided,capture_id,speaker,label,selected,upload,policies,policy,session,session_id,final_map] {
+    enrollment_=std::async(std::launch::async,[this,op,mutates,guided,capture_id,speaker,label,selected,upload,policies,policy,session,session_id,final_map,recovery,recover_profile,recover_captures] {
+      if(recovery){
+        auto data=aii::voice::recover_uid(uid_snapshot_,policies,recover_profile,recover_captures,upload);
+        put(data,"session_id",string(session_id));put(data,"session_open",boolean(false));put(data,"used_for_permissions",boolean(false));
+        auto result=object();put(result,"status",string("succeeded"));put(result,"operation_result",std::move(data));return result;
+      }
+      auto inspection=object();
+      if(op=="speaker.list"){
+        auto state=aii::voice::inspect_uid(uid_snapshot_,policies);inspection=state.report();
+        if(state.needs_recovery()){
+          auto data=object();put(data,"recovery",std::move(inspection));
+          put(data,"session_id",string(session_id));put(data,"session_open",boolean(session!=nullptr));put(data,"used_for_permissions",boolean(false));
+          auto result=object();put(result,"status",string("succeeded"));put(result,"operation_result",std::move(data));return result;
+        }
+      }
       if(guided) {
         if(op=="speaker.enroll") {
           bool absent=false;const auto current=uid_snapshot_.read(&absent);
@@ -703,6 +726,7 @@ class Worker {
       put(data,"policy_upgrade_required",boolean(effective.policy.fingerprint!=policy.policy.fingerprint));
       if(op=="speaker.upgrade_policy")put(data,"reconciled",boolean(!upgrade_required));
       if(!mutates) {
+        put(data,"recovery",std::move(inspection));
         auto pending=own(cJSON_CreateArray());
         if(policy.policy.minimum_enrollment_samples==1) {
           aii::voice::CaptureEnrollment store(uid_snapshot_,policy);
