@@ -17,6 +17,10 @@ Duplex open retains both handles and both formats. Output-only uses the same
 input handles are not substitutes for absence. Omitted input format is invalid.
 The accepted result explicitly returns `audio.input: null` and the actual
 24 kHz mono output format. Duplex confirms its actual 16 kHz mono input too.
+The host-owned `spec/audio/vectors/session_topology.json` is copied byte for
+byte to `tests/vectors/session_topology.json`. The worker executes its twelve
+requests and confirms both real audio admissions. Control-only is expressly a
+kit proof-engine mode; the native speech engine refuses it (no audio binding).
 
 Output-only status reports `input.state: absent`,
 `recognition.state: inactive`, and `input_completion: null`. It emits no input
@@ -76,6 +80,11 @@ Each row names `stage`, `stage_sha256` (the result.json digest), `carrier`,
 stage is a fallback. Startup allowances and memory reservations are explicit
 per-platform inputs; measured peaks are separate evidence. Host minimum is
 bound to the actual capability-bearing release, not a convenient version label.
+The host's 20260918-1843 exchange records James's release ruling: no 0.1.8
+release has gone out; this is 0.1.8. Its optional-input transport is on host
+`5b3363f0`; application routing follows the mode-owner landing. Qualify the
+final host by commit and executable digest. Older staged 0.1.8 builds do not
+become compatible merely because they print that version.
 
 ## Executable checks
 

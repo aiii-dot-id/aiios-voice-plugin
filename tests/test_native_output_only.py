@@ -1,4 +1,5 @@
 """Real dispatcher/ABI/core with deterministic models; no physical audio claim."""
+import json
 import os
 import struct
 import time
@@ -7,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from scripts.prove_native_worker_transport import Worker
+
+
+TOPOLOGY = json.loads((Path(__file__).parent / 'vectors/session_topology.json').read_text())
 
 
 @pytest.fixture
@@ -153,3 +157,24 @@ def test_output_only_rejects_unexpected_audio(worker):
     failure = w.event('failure', 'no-mic')
     assert 'no input direction' in str(failure)
     assert not any(e['type'].startswith('transcript_') for e in w.events)
+
+
+@pytest.mark.parametrize('case', TOPOLOGY['open_requests'], ids=lambda case: case['name'])
+def test_native_parser_consumes_host_topology_vectors(worker, case):
+    """Same bytes as host/SDK; this production engine needs an audio binding.
+
+    Control-only is the kit's proof-engine capability, not native speech. Its
+    explicit refusal here must not be misrepresented as topology conformance
+    for a capability this engine does not implement.
+    """
+    w = worker
+    if case['topology'] in ('invalid', 'control_only'):
+        refuse(w, 'open', **case['arguments'])
+        assert not w.events
+        return
+    result, _ = w.call('open', **case['arguments'])
+    expected = next(row['result']['audio'] for row in TOPOLOGY['open_admissions']
+                    if row['requested'] == case['topology'] and row['confirmed'])
+    assert result['audio'] == expected
+    w.configure(w.settings.get(timeout=2), 768)
+    w.event('session_ready', case['arguments']['session_id'])

@@ -50,16 +50,66 @@ requirements-test.txt plus scipy==1.15.3. No Python dependency was added to the
 native product. The first fixture attempt also retained a teardown error;
 the corrected harness waits for the expected faulted-worker exit.
 
+## Desktop execution and shared contract follow-up
+
+The same production change now builds and executes natively on Mac M3,
+Ubuntu 24.04/dev7 and the Windows 11 VM/GTX 1070. Native tests passed 31/31,
+33/33 and 34/34 respectively (platform/real-backend test sets differ).
+
+All three passed the three output-only interruption/recovery cycles and the
+subsequent recorded duplex journey, retaining the opening words. Mac additionally
+passed the Javert and Marius variants of the output-only proof. These are SDK
+and simulated-sink results, not acoustic judgments about the reported dropouts.
+
+Mac and Ubuntu passed durable guided capture/restart/enroll plus ten voices and
+thirteen settings cases. Ubuntu also passed live-final known/unknown UID and
+held-storage interruption. Windows' ordinary desktop-session UID/settings gates
+are tracked separately; its service-session output-only result is not promoted
+into desktop containment or installed qualification.
+
+Windows initial attempts retained failures for test-only SciPy and packaging
+dependencies. The successful complete rerun is `output-only-real-r4`; the test
+requirements now declare both dependencies. Native product dependencies did not
+change. Qualification evidence remains under the platform-specific task roots:
+
+- Mac: this checkout's `test-results/` and `.build/checkpoint-macos-r2`.
+- Ubuntu: dev7 `/work/aiii/voice-output-only-20260918/`.
+- Windows: `C:\work\aiii-voice\voice-output-only-20260918\`.
+
+Host `5b3363f0` and SDK `3f4f225` landed the optional-input binding/pump/driver
+and shared examples. Their twelve open requests now execute against our native
+worker too. The three vector files are byte-identical, SHA-256
+`98105f7418ab1d02a7fef0f02d7920e56c2fe93e40ddda1ef46293a779f51605`.
+The focused follow-up scope passes 35 tests, no skip; unchanged production code
+was not rebuilt for these test/declaration-comment additions. The carrier still
+pins SDK `8155af0`: the successor adds topology helpers/reference-engine work,
+not changes to the transport used by this carrier.
+
+Unsigned, uninstalled companion archives are inventory-verified:
+
+| Variant | Compressed bytes | Installed companion bytes | Archive SHA-256 |
+| --- | ---: | ---: | --- |
+| macOS arm64 | 12,281,714 | 41,070,463 | `106b95724d83c157d3621befbcb507db157b720ae38bcbe41c2ca77edc9e7399` |
+| Linux x86-64 | 22,360,780 | 68,425,140 | `dcf003d6d89b0c93721aad80d2c47161a1773d4737f2b09d9aac0799813d0337` |
+
+These counts exclude carrier and models. They are not total installation sizes.
+Staging receipts are `.build/stage-{macos,linux}-output-only-r1/result.json`.
+Windows immutable archive construction requires signatures over the replacement
+images first; the prior images' signatures are not inherited.
+
 ## Remaining acceptance
 
-The host's corresponding output-only driver/pump/routing and reviewed ownership
-fixes are being implemented by its owner. Its shared open vectors and exact
-capability-bearing release must be consumed before the installed browser gate.
-The current minimum of 0.1.8 covers the earlier completion capability; it is not
-by itself evidence that every 0.1.8 build has output-only routing.
+The host's 20260918-1843 handoff records the operator ruling that 0.1.8 has not
+been released. Thus 0.1.8 is the agreed minimum; qualify the exact host artifact
+at/after `5b3363f0`, not an older staged binary sharing that number. Typed/earbuds
+application routing remains the mode owner's work before the installed gate.
 
-Linux/Windows native execution of this new source, installed browser journeys,
-the actual eight-hour meeting run, platform signing, hosted-asset installation
-and catalog publication remain separate gates. Carrier cross-builds are not
-those gates. No deployment, release upload, broad UID accuracy, physical-audio
-quality, mobile or human-level qualification is claimed by this source delivery.
+The eight-hour wall-clock meeting run is active, not passed. It feeds periodic
+recorded speech plus real-time silence with capture limit zero, requires each
+scheduled recording to yield a final and UID observation, and forbids synthesis.
+The twenty-second harness smoke is explicitly not endurance evidence.
+
+Installed browser journeys, final-byte signing/qualification, hosted-asset
+installation and catalog publication remain separate gates. No deployment,
+release upload, broad UID accuracy, physical-audio quality, mobile or human-level
+qualification is claimed by this source delivery.

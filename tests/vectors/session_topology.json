@@ -1,0 +1,121 @@
+{
+  "description": "The audio topology of a resident speech session's open, as the host asks for it and as the engine confirms it. Frozen with the voice platform on 2026-09-18: the existing open and the existing audio object, with NO INPUT spelled as audio.input PRESENT and null and no input_handle at all. No input is not an empty input and not a finished one; omission is never read as absence. The runtime owns this file (spec/audio/vectors); the kit carries a byte-for-byte copy.",
+  "open_requests": [
+    {
+      "name": "duplex",
+      "arguments": {"session_id": "s", "input_handle": "in:s:mic", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": {"rate": 16000, "channels": 1}, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "duplex"
+    },
+    {
+      "name": "output-only: audio.input present and null, no input_handle",
+      "arguments": {"session_id": "s", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": null, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "output_only"
+    },
+    {
+      "name": "control-only: no audio object and no handles (proofs only; outside the audio contract, unchanged)",
+      "arguments": {"session_id": "s"},
+      "topology": "control_only"
+    },
+    {
+      "name": "an input_handle with a null input",
+      "arguments": {"session_id": "s", "input_handle": "in:s:mic", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": null, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "a null input_handle is not an absent one",
+      "arguments": {"session_id": "s", "input_handle": null, "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": null, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "an empty input_handle is not an absent one",
+      "arguments": {"session_id": "s", "input_handle": "", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": null, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "an input format with no input_handle",
+      "arguments": {"session_id": "s", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": {"rate": 16000, "channels": 1}, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "the input key left out: omission is not a topology",
+      "arguments": {"session_id": "s", "output_handle": "out:s:spk", "audio": {"format": "s16le", "output": {"rate": 24000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "no output format",
+      "arguments": {"session_id": "s", "input_handle": "in:s:mic", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": {"rate": 16000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "a null output format: there is no input-only session",
+      "arguments": {"session_id": "s", "input_handle": "in:s:mic", "output_handle": "out:s:spk", "audio": {"format": "s16le", "input": {"rate": 16000, "channels": 1}, "output": null}},
+      "topology": "invalid"
+    },
+    {
+      "name": "no output_handle",
+      "arguments": {"session_id": "s", "audio": {"format": "s16le", "input": null, "output": {"rate": 24000, "channels": 1}}},
+      "topology": "invalid"
+    },
+    {
+      "name": "handles with no audio object",
+      "arguments": {"session_id": "s", "input_handle": "in:s:mic", "output_handle": "out:s:spk"},
+      "topology": "invalid"
+    }
+  ],
+  "open_admissions": [
+    {
+      "name": "duplex confirmed",
+      "requested": "duplex",
+      "result": {"accepted": true, "audio": {"input": {"rate": 16000, "channels": 1}, "output": {"rate": 24000, "channels": 1}}},
+      "confirmed": true
+    },
+    {
+      "name": "output-only confirmed: audio.input present and null",
+      "requested": "output_only",
+      "result": {"accepted": true, "audio": {"input": null, "output": {"rate": 24000, "channels": 1}}},
+      "confirmed": true
+    },
+    {
+      "name": "output-only asked, the input key left out: omission is not confirmation",
+      "requested": "output_only",
+      "result": {"accepted": true, "audio": {"output": {"rate": 24000, "channels": 1}}},
+      "confirmed": false
+    },
+    {
+      "name": "output-only asked, answered as duplex: a direction the host did not bind",
+      "requested": "output_only",
+      "result": {"accepted": true, "audio": {"input": {"rate": 16000, "channels": 1}, "output": {"rate": 24000, "channels": 1}}},
+      "confirmed": false
+    },
+    {
+      "name": "duplex asked, answered as output-only",
+      "requested": "duplex",
+      "result": {"accepted": true, "audio": {"input": null, "output": {"rate": 24000, "channels": 1}}},
+      "confirmed": false
+    },
+    {
+      "name": "duplex asked, the input key left out",
+      "requested": "duplex",
+      "result": {"accepted": true, "audio": {"output": {"rate": 24000, "channels": 1}}},
+      "confirmed": false
+    },
+    {
+      "name": "no audio object in the admission",
+      "requested": "output_only",
+      "result": {"accepted": true},
+      "confirmed": false
+    },
+    {
+      "name": "no output format in the admission",
+      "requested": "output_only",
+      "result": {"accepted": true, "audio": {"input": null}},
+      "confirmed": false
+    },
+    {
+      "name": "an output format that is not audio",
+      "requested": "output_only",
+      "result": {"accepted": true, "audio": {"input": null, "output": {"rate": 100, "channels": 1}}},
+      "confirmed": false
+    }
+  ]
+}
