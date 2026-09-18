@@ -189,6 +189,42 @@ def uid_replacement(cfg,index,model_template,notice_root):
     return files
 
 
+def apply_distribution_disposition(index, cfg, profiles, notices, source, digest):
+    """Carry a named prior decision only over its unchanged components/notices.
+
+    This does not inherit a prior package signature, installation or release
+    status. Reproducibility limitations stay visible, not reopened as licensing
+    blockers merely because another runtime image was rebuilt.
+    """
+    if sha(source) != digest:
+        raise ValueError('distribution disposition changed')
+    prior=json.loads(source.read_text())
+    if (prior.get('passed') is not True or prior.get('engineering_distribution_review')!='named_items_resolved'
+            or set(prior.get('resolved_items',[]))!=set(index['open_items'])
+            or prior.get('reproducibility_limits_retained')!=prior['resolved_items']):
+        raise ValueError('distribution disposition scope differs')
+    components=prior.get('components',[])
+    expected={'vad/model.onnx','endpoint/model.onnx','windows/bin/asmjit.dll'}
+    if len(components)!=len(expected) or {row['component'] for row in components}!=expected:
+        raise ValueError('distribution component census differs')
+    models={row['path']:row for row in cfg['models']}
+    notice_hashes={row['sha256'] for row in notices}
+    for row in components:
+        if row['component'].startswith('windows/'):
+            actual=profiles['windows']['files'].get(row['component'].removeprefix('windows/'),{})
+        else:
+            actual=models.get(row['component'],{})
+        if actual.get('sha256')!=row['sha256'] or row['notice_sha256'] not in notice_hashes:
+            raise ValueError('reviewed component or notice changed: '+row['component'])
+    index['distribution_review_complete']=True
+    index['open_items']=[]
+    index['reproducibility_limits']=list(prior['reproducibility_limits_retained'])
+    index['distribution_disposition']=dict(source_sha256=digest,
+        source_package_sha256=prior['signed_package_sha256'],components=copy.deepcopy(components),
+        reasoning=list(prior['reasoning']),scope=prior['scope'],
+        previous_signature_or_installation_inherited=False)
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True)
     p.add_argument('--inputs',type=Path,required=True,help='Explicit stage/carrier SHA-256 bindings and per-platform accelerator declarations')
@@ -196,6 +232,8 @@ def main():
     p.add_argument('--uid-notices',type=Path)
     p.add_argument('--uid-model-template-sha256')
     p.add_argument('--uid-notices-sha256')
+    p.add_argument('--distribution-addendum',type=Path)
+    p.add_argument('--distribution-addendum-sha256')
     p.add_argument('--version',help='New immutable release version; never overwrite a published tag')
     p.add_argument('--artifact-root',type=Path,default=ROOT,help='Explicit retained artifact store, never a source checkout override')
     p.add_argument('--go-modcache',type=Path,required=True)
@@ -306,6 +344,10 @@ def main():
         declared_urls='pinned_upstream_and_new_release_destinations',
         public_release_url_availability='not_asserted_by_assembly',
         supersedes_original_collection_note=historical)
+    if a.distribution_addendum or a.distribution_addendum_sha256:
+        if not (a.distribution_addendum and a.distribution_addendum_sha256):
+            raise ValueError('complete distribution disposition binding required')
+        apply_distribution_disposition(index,cfg,profiles,notice_rows,a.distribution_addendum,a.distribution_addendum_sha256)
     emit(author/'notices/INDEX.json',index)
     notice_rows.append(dict(path='notices/INDEX.json',size=(author/'notices/INDEX.json').stat().st_size,sha256=sha(author/'notices/INDEX.json')))
     for name in schemas:put(author/name,(ROOT/'plugin/native'/name).read_bytes())
@@ -341,7 +383,7 @@ def main():
         required_before_release=([] if bound['windows'].get('authenticode_verified') else ['Authenticode and rebind Windows runtime/carrier'])+[
           'host guided capture, UID ingress filters and AI-visible policy',
           'final signed fresh-cache installed journeys','authorized T3 signature and host verification',
-          'third-party distribution review','signed catalog and hosted byte readback']))
+          'signed catalog and hosted byte readback']+([] if index['distribution_review_complete'] else ['third-party distribution review'])))
     print(json.dumps({'bundle':assembly,'variants':list(plans),'signed':False,'published':False}))
 
 
