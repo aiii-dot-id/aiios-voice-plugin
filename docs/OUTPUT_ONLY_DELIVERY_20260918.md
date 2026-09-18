@@ -64,8 +64,10 @@ and simulated-sink results, not acoustic judgments about the reported dropouts.
 Mac and Ubuntu passed durable guided capture/restart/enroll plus ten voices and
 thirteen settings cases. Ubuntu also passed live-final known/unknown UID and
 held-storage interruption. Windows' ordinary desktop-session UID/settings gates
-are tracked separately; its service-session output-only result is not promoted
-into desktop containment or installed qualification.
+have now passed too, under an ordinary non-admin desktop user with each proof
+in an owned Windows job tree. Kernel retirement counts were 10, 7 and 6 processes,
+all naturally exited, none active or force-terminated. These remain SDK tests,
+not installed browser qualification.
 
 Windows initial attempts retained failures for test-only SciPy and packaging
 dependencies. The successful complete rerun is `output-only-real-r4`; the test
@@ -94,8 +96,32 @@ Unsigned, uninstalled companion archives are inventory-verified:
 
 These counts exclude carrier and models. They are not total installation sizes.
 Staging receipts are `.build/stage-{macos,linux}-output-only-r1/result.json`.
-Windows immutable archive construction requires signatures over the replacement
-images first; the prior images' signatures are not inherited.
+Windows replacement runtime images and the rebound carrier have now been
+Authenticode signed and verified natively, with a valid AIII publisher and
+timestamp on all nine owned images. The final signed bytes passed guided UID,
+recorded speech/UID, settings and output-only/return-to-duplex qualification.
+The companion is 112,818,072 compressed bytes, 364,751,127 installed bytes,
+32 files, SHA-256
+`ad01049b37b85f94fb10c6367606edfb2a078055769f621ac372dc04e9d493e3`.
+Carrier: `5eda12063d735655a30a25494b96dc037f8be224aa0b13c95a2f4274e81bf488`.
+Runtime manifest: `8fe98ca44a1be8c0dac62e274dc92d0f7bc33cbea6ee4ae04ff54f5f17503858`.
+Evidence and copied original staging receipt are in
+`.build/windows-signed-output-only-r1/`. Authenticode is not a T3 package signature.
+
+The common runtime packager now verifies Windows signatures natively before
+packing. On every platform, qualification must bind the exact carrier, freeze,
+build receipt and runtime, not merely a matching runtime library manifest.
+The 82-test focused packaging/signing-rebind/settings scope passes (r7). Failed
+invocations remain: r2 named a nonexistent test file; r3 lacked historical
+artifact fixtures; r5 omitted the required native test fixture environment.
+None is counted as a full-suite pass. Windows' first pack attempt lacked the
+SDK's checksum-pinned offline dependencies; r2 refused reuse of that partial
+output; r3 used a fresh directory and passed with the pinned dependencies.
+
+Assembly then exposed a separate missing description on speaker.reset.recovery.
+That authoring correction is being isolated from this checkout because the
+eight-hour test binds its source for its full lifetime. No inference-code repair
+is implied by the schema-documentation omission.
 
 ## Remaining acceptance
 
