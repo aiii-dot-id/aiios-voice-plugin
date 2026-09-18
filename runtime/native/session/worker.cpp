@@ -29,6 +29,9 @@
 #include <optional>
 #include <thread>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <array>
 using namespace aii::voice::wire;
 using Clock = std::chrono::steady_clock;
 #ifndef AII_WORKER_BACKEND
@@ -69,7 +72,7 @@ struct Generation {
   std::string id;
   uint32_t stream = 0, seq = 0;
   uint64_t core_seen = 0, delivered = 0, rendered = 0, observed_generated = 0;
-  bool ended = false, receipt = false, terminal_event = false, observed_retired = false;
+  bool ended = false, receipt = false, terminal_event = false, observed_retired = false, core_terminal_seen = false;
   std::atomic<bool> fenced{false};
 };
 struct Output {
@@ -84,6 +87,23 @@ struct Ack {
   uint32_t frames = 0;
   bool end = false;
   std::string error;
+};
+using IdentityDigest=std::array<unsigned char,32>;
+IdentityDigest identity_digest(const std::string& id){
+  IdentityDigest digest{};picosha2::hash256(id.begin(),id.end(),digest.begin(),digest.end());return digest;
+}
+struct IdentityHash {
+  size_t operator()(const IdentityDigest& digest)const noexcept {
+    size_t value=0;std::memcpy(&value,digest.data(),sizeof value);return value;
+  }
+};
+// Opaque public identifiers cannot be forgotten while still refusing reuse.
+// Retain compact cryptographic fences, not job objects, text, audio or polling
+// work. A hash collision conservatively refuses admission, never aliases work.
+struct TerminalReceipt {
+  uint64_t epoch=0,rendered=0;
+  uint32_t stream=0;
+  bool settled=false;
 };
 class Worker {
   aii_voice_models *models_;
@@ -114,7 +134,10 @@ class Worker {
   std::optional<aii::uid::BoundPolicies> uid_policies_;
   aii::voice::ConfirmedActs enrollment_acts_;
   std::string sid_, input_handle_, lifecycle_ = "closed", failure_;
-  std::set<std::string> used_sessions_, used_synthesis_;
+  std::unordered_set<IdentityDigest,IdentityHash> used_sessions_;
+  std::unordered_map<IdentityDigest,TerminalReceipt,IdentityHash> synthesis_identities_;
+  uint64_t session_epoch_=0,settled_delivered_=0,settled_rendered_=0;
+  std::string current_name_;
   std::map<uint64_t, std::string> issued_settings_;
   std::map<uint64_t,uint64_t> transcript_sequences_;
   std::map<uint64_t,uint64_t> enrollment_finals_; // public final -> native final
@@ -418,13 +441,14 @@ class Worker {
     put(r, "input_completion", std::move(complete));
     auto synth = object();
     put(synth, "synthesis_id",
-        string(current_ ? generations_.at(current_)->id : ""));
+        string(current_name_));
     put(synth, "state",
         string(snapshot_.synthesizing ? "running"
                : current_             ? "finished"
                                       : "idle"));
     put(r, "synthesis", std::move(synth));
-    uint64_t delivered = 0, rendered = 0, queued = 0, discarded = 0;
+    uint64_t delivered = settled_delivered_, rendered = settled_rendered_, queued = 0,
+             discarded = settled_delivered_-settled_rendered_;
     bool unresolved = false;
     for (const auto &item : generations_) {
       const auto &g = *item.second;
@@ -439,7 +463,7 @@ class Worker {
     }
     auto playback = object();
     put(playback, "synthesis_id",
-        string(current_ ? generations_.at(current_)->id : ""));
+        string(current_name_));
     put(playback, "state", string(unresolved ? "unobserved" : "idle"));
     put(playback, "queued_samples", number(queued));
     put(playback, "delivered_samples", number(delivered));
@@ -449,6 +473,10 @@ class Worker {
     put(playback, "evidence",
         string("client_reports_not_acoustic_measurements"));
     put(r, "playback", std::move(playback));
+    auto book=object();put(book,"unresolved_generations",number(generations_.size()));
+    put(book,"identity_fences",number(synthesis_identities_.size()));
+    put(book,"session_fences",number(used_sessions_.size()));
+    put(r,"bookkeeping",std::move(book));
     return r;
   }
   void validate_processing(const cJSON *p) {
@@ -484,8 +512,8 @@ class Worker {
       capture.emplace(requested);
     }
     const auto id = str(field(a, "session_id"), 128);
-    require(!used_sessions_.count(id) && used_sessions_.size() < 1024,
-            "session ID reuse/limit");
+    require(!used_sessions_.count(identity_digest(id)) && session_epoch_<9007199254740991ULL,
+            "session ID reuse/epoch exhausted");
     const auto handle = str(field(a, "input_handle"));
     str(field(a, "output_handle"));
     const auto *audio = field(a, "audio");
@@ -504,7 +532,8 @@ class Worker {
     transcript_sequences_.clear();
     enrollment_finals_.clear();
     input_handle_ = handle;
-    used_sessions_.insert(id);
+    used_sessions_.insert(identity_digest(id));++session_epoch_;
+    settled_delivered_=settled_rendered_=0;current_name_.clear();
     sequence_ = 0;
     failure_.clear();
     abort_ = false;
@@ -814,9 +843,9 @@ class Worker {
       require(lifecycle_ == "open", "synthesis admission closed");
       const auto id = str(field(a, "synthesis_id"));
       const auto text = str(field(a, "text"), 32000);
-      require(!used_synthesis_.count(id) && used_synthesis_.size() < 4096 &&
+      require(!synthesis_identities_.count(identity_digest(id)) && generations_.size()<64 &&
                   stream_counter_ < UINT32_MAX,
-              "synthesis identity reuse/limit");
+              "synthesis identity reuse/unresolved capacity/stream exhausted");
       const uint64_t next = current_ + 1;
       core(aii_voice_synthesize(session_, next, text.data(), text.size(),
                                 &error_),
@@ -826,7 +855,8 @@ class Worker {
       g->stream = ++stream_counter_;
       generations_[next] = g;
       current_ = next;
-      used_synthesis_.insert(id);
+      current_name_=id;
+      synthesis_identities_.emplace(identity_digest(id),TerminalReceipt{session_epoch_,0,g->stream,false});
       auto r = accepted();
       put(r, "synthesis_id", string(id));
       put(r, "output_stream", number(g->stream));
@@ -844,18 +874,25 @@ class Worker {
         (!requested || cJSON_IsNull(requested) ||
          (cJSON_IsString(requested) && requested->valuestring &&
           requested->valuestring[0] == '\0'));
-    if (!current_target) {
-      const auto name = str(requested);
+    const auto name=current_target?current_name_:str(requested);
+    if (!name.empty()) {
       for (const auto &item : generations_)
         if (item.second->id == name) {
           g = item.second;
           id = item.first;
           break;
         }
-      require(bool(g), "unknown synthesis");
-    } else if (current_) {
-      g = generations_.at(current_);
-      id = current_;
+      if(!g){
+        const auto old=synthesis_identities_.find(identity_digest(name));
+        require(old!=synthesis_identities_.end()&&old->second.epoch==session_epoch_&&old->second.settled,"unknown or unresolved synthesis");
+        const auto& receipt=old->second;auto r=accepted();
+        put(r,"synthesis_id",string(name));put(r,"output_stream",number(receipt.stream));
+        if(interrupt){put(r,"output_fenced",boolean(true));put(r,"playback_verified",boolean(false));return r;}
+        require(op=="speech.session.playback_report"&&cJSON_GetArraySize(a)==5&&
+            integer(field(a,"output_stream"),UINT32_MAX)==receipt.stream&&flag(field(a,"terminal"))&&
+            integer(field(a,"rendered_samples"))==receipt.rendered,"settled terminal receipt changed");
+        put(r,"rendered_samples",number(receipt.rendered));put(r,"terminal",boolean(true));return r;
+      }
     }
     if (interrupt) {
       if (g) {
@@ -1033,8 +1070,10 @@ class Worker {
           put(data, "reason", string(e.start ? "vad_speech" : text));
         }
       }
-      if (kind == "synthesis_end" || kind == "synthesis_cancelled")
+      if (kind == "synthesis_end" || kind == "synthesis_cancelled") {
+        generations_.at(e.generation)->core_terminal_seen=true;
         continue; // publish only after transport END is written
+      }
       if (kind == "input_finished") {
         put(data, "stream_id", string(input_handle_));
         put(data, "end_sample", number(e.start));
@@ -1080,6 +1119,15 @@ class Worker {
         emit(state.cancelled ? "synthesis_cancelled" : "synthesis_end",
              std::move(data));
       }
+    }
+    for(auto it=generations_.begin();it!=generations_.end();){
+      const auto& g=*it->second;
+      if(g.ended&&g.receipt&&g.observed_retired&&g.terminal_event&&g.core_terminal_seen){
+        core(aii_voice_release_generation(session_,it->first,&error_),error_);
+        auto& receipt=synthesis_identities_.at(identity_digest(g.id));receipt.rendered=g.rendered;receipt.settled=true;
+        settled_delivered_+=g.delivered;settled_rendered_+=g.rendered;
+        it=generations_.erase(it);
+      }else ++it;
     }
     if (!pending_audio_ && !abort_ && failure_.empty()) {
       Output task;
@@ -1367,7 +1415,10 @@ public:
       // cannot starve Stop/Cancel. A pending frame blocked by the model is not
       // runnable: retain the bounded wait instead of spinning on backpressure.
       std::unique_lock<std::mutex> lock(mutex_);
-      changed_.wait_for(lock, std::chrono::milliseconds(1), [&] {
+      const bool idle=!opening_.valid()&&!enrollment_.valid()&&!capturing_.valid()&&!waiting_settings_&&
+          !pending_audio_&&generations_.empty()&&!input_pending_&&
+          input_received_==snapshot_.recognized&&!snapshot_.recognition_active&&!snapshot_.draining&&lifecycle_!="draining";
+      changed_.wait_for(lock, std::chrono::milliseconds(idle?100:1), [&] {
         return !controls_in_.empty() ||
                (!input_pending_ && !audio_in_.empty()) || ack_.has_value() ||
                (!quit_ && eof_);

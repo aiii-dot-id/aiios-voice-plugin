@@ -136,6 +136,7 @@ struct Session::Impl {
     {
       std::lock_guard<std::mutex> lock(mutex);
       const auto it=jobs.find(id);
+      if(it==jobs.end()&&position)return; // VAD selected a since-settled job
       require(it!=jobs.end(),"unknown synthesis generation");
       auto& j=*it->second;
       // A render receipt never prevents cancelling still-running compute.
@@ -505,7 +506,7 @@ void Session::synthesize(uint64_t generation,const std::string& text) {
   auto parts=split_text(text);
   std::lock_guard<std::mutex> lock(p_->mutex);
   require(!p_->stopping && !p_->closing,"synthesis admission closed");
-  require(generation>p_->last_generation && p_->jobs.size()<4096,"new bounded generation required");
+  require(generation>p_->last_generation && p_->jobs.size()<64,"new generation and unresolved-work capacity required");
   require(!p_->current || p_->current->retired,"prior synthesis has not retired");
   auto j=std::make_shared<Job>(); j->id=generation;j->segments=std::move(parts);
   for(const auto& part:j->segments)j->segment_count+=!strip_text(part).empty();
@@ -516,6 +517,14 @@ void Session::synthesize(uint64_t generation,const std::string& text) {
 void Session::interrupt(uint64_t generation) { p_->interrupt(generation); }
 void Session::stop_playback(uint64_t generation) { p_->interrupt(generation,0,false); }
 void Session::cancel_synthesis(uint64_t generation) { p_->interrupt(generation,0,true); }
+void Session::release_generation(uint64_t generation) {
+  std::lock_guard<std::mutex> lock(p_->mutex);
+  const auto it=p_->jobs.find(generation);require(it!=p_->jobs.end(),"unknown synthesis generation");
+  const auto& j=*it->second;
+  require(j.retired&&j.end_taken&&j.receipt&&j.audio.empty()&&j.queued==0,"generation still owns compute/audio/receipt custody");
+  require(std::none_of(p_->events.begin(),p_->events.end(),[&](const Event& e){return e.generation==generation;}),"generation events not consumed");
+  p_->jobs.erase(it);
+}
 bool Session::event(Event& event) {
   size_t required=0;return event_bounded(event,SIZE_MAX,required);
 }

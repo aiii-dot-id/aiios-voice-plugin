@@ -126,6 +126,7 @@ aii_voice_result aii_voice_finish_input(aii_voice_session*, uint64_t end, aii_vo
 aii_voice_result aii_voice_synthesize(aii_voice_session*, uint64_t generation, const char*, size_t bytes, aii_voice_error*);
 aii_voice_result aii_voice_stop_playback(aii_voice_session*, uint64_t generation, aii_voice_error*);
 aii_voice_result aii_voice_cancel_synthesis(aii_voice_session*, uint64_t generation, aii_voice_error*);
+aii_voice_result aii_voice_release_generation(aii_voice_session*, uint64_t generation, aii_voice_error*);
 aii_voice_result aii_voice_playback(aii_voice_session*, uint64_t generation, uint64_t rendered, uint8_t terminal, uint8_t stopped, aii_voice_error*);
 aii_voice_result aii_voice_close(aii_voice_session*, uint8_t abort, aii_voice_error*);
 aii_voice_result aii_voice_wait(aii_voice_session*, uint32_t milliseconds, aii_voice_error*);
