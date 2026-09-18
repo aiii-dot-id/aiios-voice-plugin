@@ -100,7 +100,7 @@ def main():
             from scripts.native_loaded_images import observe
             r['loaded_worker']=observe(host.process.pid,binary.parent,platform,frozen['library_hashes'])
         text='Hello. I will keep this voice throughout our conversation.'
-        base={'tts_voice':'alba','tts_language':'en','stt_language':'en','turn_pause_ms':768,'vad_threshold':.5,'tts_temperature':.3,'tts_seed':20260908}
+        base={'tts_voice':'alba','tts_language':'en','stt_language':'en','turn_pause_ms':768,'vad_threshold':.5,'tts_temperature':.3,'tts_seed':20260908,'capture_limit_minutes':30}
         cases=[(file.stem,{**base,'tts_voice':file.stem,'turn_pause_ms':1200,'vad_threshold':.65}) for file in voices]
         cases += [('alba-repeat',{**base,'turn_pause_ms':1200,'vad_threshold':.65}),('alba-new-seed',{**base,'tts_seed':7}),('alba-new-temperature',{**base,'tts_temperature':.7})]
         outputs={}

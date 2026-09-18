@@ -4,9 +4,10 @@ using namespace aii::voice::wire;
 int main(int argc,char** argv) {
   try {
     if(argc==2&&std::string(argv[1])=="describe") {std::cout<<encode(OperatorSettings::declarations())<<'\n';return 0;}
-    auto decls=OperatorSettings::declarations(),declared=object();require(cJSON_GetArraySize(decls.get())==7,"settings declaration incomplete");
+    auto decls=OperatorSettings::declarations(),declared=object();require(cJSON_GetArraySize(decls.get())==8,"settings declaration incomplete");
     size_t vad=0;for(auto* row=decls->child;row;row=row->next) {
-      const auto key=str(field(row,"key"));
+      const auto key=str(field(row,"key"),32);
+      str(field(row,"title"),64);str(field(row,"description"),256); // SDK byte bounds
       if(key=="turn_pause_ms"||key=="vad_threshold") {
         ++vad;require(str(field(row,"title")).find("VAD")!=std::string::npos&&
           str(field(row,"description"),1024).find("always enabled")!=std::string::npos,"VAD activation is hidden from the operator");
@@ -23,6 +24,18 @@ int main(int argc,char** argv) {
       bool refused=false;try{auto j=parse(bad);OperatorSettings::read(j.get());}catch(const Refused&){refused=true;}require(refused,"invalid setting accepted");
     }
     for(const char* name:native_voices) {auto j=object();put(j,"tts_voice",string(name));require(OperatorSettings::read(j.get()).voice==name,"supported voice absent");}
+    require(d.capture_limit_minutes==30,"capture duration default changed");
+    for(uint32_t minutes:{0u,1u,31u,UINT32_MAX}) {
+      auto j=object();put(j,"capture_limit_minutes",number(minutes));
+      const auto choice=OperatorSettings::read(j.get());
+      require(choice.capture_limit_minutes==minutes && integer(field(choice.effective().get(),"capture_limit_minutes"))==minutes,"capture duration selection/readback changed");
+    }
+    for(const char* bad:{"-1","0.5","true","null","\"0\"","4294967296"}) {
+      bool refused=false;
+      try {auto j=parse(std::string("{\"capture_limit_minutes\":")+bad+"}");OperatorSettings::read(j.get());}
+      catch(const Refused&){refused=true;}
+      require(refused,"invalid capture duration accepted");
+    }
     std::cout<<"typed voice/language/pause/VAD/sampling settings and truthful readback\n";
   } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

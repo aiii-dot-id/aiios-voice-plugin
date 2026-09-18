@@ -17,7 +17,6 @@
 namespace aii::voice {
 namespace {
 constexpr size_t block_size=512, input_bound=32768, output_bound=120000;
-constexpr uint64_t session_bound=16000ULL*30*60;
 struct Block { std::array<float,block_size> pcm{}; size_t valid=block_size; float probability=0; };
 struct Job {
   uint64_t id=0, generated=0, delivered=0, rendered=0;
@@ -40,6 +39,7 @@ struct Session::Impl {
   Recognizer& asr; Vad& vad; Endpoint& endpoint; Synthesizer& tts;
   SpeakerIdentifier* speaker;
   const Settings settings;
+  const uint64_t input_limit;
   mutable std::mutex mutex;
   std::condition_variable changed;
   std::vector<std::thread> owners;
@@ -63,7 +63,8 @@ struct Session::Impl {
   bool speaker_busy=false;
 
   Impl(Recognizer& a,Vad& v,Endpoint& e,Synthesizer& t,Settings s,SpeakerIdentifier* u)
-      :asr(a),vad(v),endpoint(e),tts(t),speaker(u),settings(s) {
+      :asr(a),vad(v),endpoint(e),tts(t),speaker(u),settings(s),
+       input_limit(s.capture_limit_minutes ? capture_samples(s.capture_limit_minutes) : input_clock_max) {
     require(s.pause_ms>=320 && s.pause_ms<=5000,"pause must be 320..5000 ms");
     require(s.input_tail_timeout_ms>=1 && s.input_tail_timeout_ms<=30000,"tail deadline must be 1..30000 ms");
     require(std::isfinite(s.speech_threshold) && s.speech_threshold>0 && s.speech_threshold<1,
@@ -329,9 +330,10 @@ struct Session::Impl {
           if(blocks.empty()) {
             lock.unlock();
             for(const auto& b:provisional) push(b);
-            provisional.clear(); complete("finish_input"); gate.close();
+            const char* reason=settings.capture_limit_minutes && cutoff==input_limit ? "capture_limit" : "finish_input";
+            provisional.clear(); complete(reason); gate.close();
             lock.lock(); input_done=true;
-            emit_locked(Event{0,0,0,received,recognized,"input_finished",""});
+            emit_locked(Event{0,0,0,received,recognized,"input_finished",reason});
             maybe_close_locked(); changed.notify_all(); break;
           }
           block=std::move(blocks.front()); blocks.pop_front();
@@ -478,17 +480,20 @@ bool Session::feed(uint64_t start,const float* data,size_t count) {
   for(size_t i=0;i<count;++i) require(std::isfinite(data[i]),"input is not finite");
   std::lock_guard<std::mutex> lock(p_->mutex);
   require(!p_->finished && !p_->stopping && (!p_->closing || p_->cutoff_set),"input admission closed");
-  require(start==p_->received && count<=session_bound-p_->received,"input clock/bound differs");
+  require(start==p_->received && p_->received<=p_->input_limit && count<=p_->input_limit-p_->received,"input clock/bound differs");
   require(!p_->cutoff_set || count<=p_->cutoff-p_->received,"audio exceeds admitted cutoff");
   require(!p_->cutoff_set || std::chrono::steady_clock::now()<p_->tail_deadline,"input tail arrived after deadline");
   if(p_->received-p_->recognized+count>input_bound || p_->input.size()>=64) return false;
   p_->input.emplace_back(data,data+count); p_->received+=count;
+  if(p_->settings.capture_limit_minutes && p_->received==p_->input_limit && !p_->cutoff_set) {
+    p_->cutoff_set=true; p_->cutoff=p_->input_limit;
+  }
   if(p_->cutoff_set && p_->received==p_->cutoff)p_->finished=true;
   p_->changed.notify_all(); return true;
 }
 void Session::finish_input(uint64_t end) {
   std::lock_guard<std::mutex> lock(p_->mutex);
-  require(!p_->stopping && end>=p_->received && end<=session_bound,"finish requires bounded future input cutoff");
+  require(!p_->stopping && end>=p_->received && end<=p_->input_limit,"finish requires bounded future input cutoff");
   require(!p_->cutoff_set || end==p_->cutoff,"admitted input cutoff cannot change");
   if(!p_->cutoff_set) {
     p_->cutoff_set=true;p_->cutoff=end;

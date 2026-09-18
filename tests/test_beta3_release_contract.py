@@ -10,7 +10,7 @@ def example():
               for p, n in [('macos', 8589934592), ('linux', 8486555648), ('windows', 7482712064)]],
             'settings': [{'key': k, 'default': 'unchanged', 'type': 'enum', 'values': ['unchanged']}
                          for k in ('stt_language', 'turn_pause_ms', 'vad_threshold', 'tts_voice',
-                                   'tts_language', 'tts_temperature', 'tts_seed')]}
+                                   'tts_language', 'tts_temperature', 'tts_seed', 'capture_limit_minutes')]}
 
 
 def test_declarations_preserve_runtime_choices_and_settings():
@@ -24,7 +24,7 @@ def test_declarations_preserve_runtime_choices_and_settings():
         assert operator_setup(variant['platform']) == {}
     for setting in cfg['settings']:
         assert setting.pop('scope') == ('hearing' if setting['key'] in
-                                        ('stt_language', 'turn_pause_ms', 'vad_threshold') else 'speaking')
+                                        ('stt_language', 'turn_pause_ms', 'vad_threshold', 'capture_limit_minutes') else 'speaking')
     assert cfg == prior
 
 

@@ -12,6 +12,7 @@ EXPORTS
     aii_voice_models_release
     aii_voice_open
     aii_voice_open_configured
+    aii_voice_open_with_capture_limit
     aii_voice_release
     aii_voice_feed
     aii_voice_finish_input

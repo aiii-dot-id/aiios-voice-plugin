@@ -98,9 +98,10 @@ void admission_and_receipts() {
   while(s.event(event)) finals+=event.kind=="transcript_final";
   check(finals==0,"silence invented transcript");
 }
-void independent_interruption() {
+void independent_interruption(uint32_t capture_minutes=default_capture_limit_minutes) {
   Asr a; a.released=false; Detector v; End e; Tts t;
-  Session s(a,v,e,t);
+  Settings settings;settings.capture_limit_minutes=capture_minutes;
+  Session s(a,v,e,t,settings);
   std::vector<float> speech(512,.5f);
   check(s.feed(0,speech.data(),512),"first audio refused");
   until([&]{return a.entered.load();});
@@ -290,6 +291,7 @@ int main() {
   try {
     admission_and_receipts(); std::cout<<"receipt-held drain and exact terminal evidence PASS\n";
     independent_interruption(); std::cout<<"interruption bypasses blocked recognition; prefix and recovery PASS\n";
+    independent_interruption(0);std::cout<<"unlimited duration retains bounded backpressure and independent interruption PASS\n";
     const auto a=pause(512),b=pause(241),c=pause(4096);
     check(a.size()==1 && a==b && a==c && a[0]==9216,"pause commitment depends on transport batch");
     std::cout<<"512ms pause at sample 9216 across 512/241/4096 input batches PASS\n";

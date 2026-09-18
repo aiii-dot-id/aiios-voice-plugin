@@ -69,6 +69,21 @@ def parent_bytes(parent, freeze_sha):
     return frozen, profile, bound
 
 
+def write_current_settings(worker, runtime, out):
+    """Declare the replacement worker, never inherit a parent's stale options."""
+    raw = subprocess.check_output([str(worker), '--describe-settings'], timeout=30)
+    settings = json.loads(raw)
+    if not isinstance(settings, list) or not settings:
+        raise ValueError('worker settings declaration must be a nonempty list')
+    keys = [s.get('key') for s in settings if isinstance(s, dict)]
+    if len(keys) != len(settings) or not all(isinstance(k, str) and k for k in keys) or len(set(keys)) != len(keys):
+        raise ValueError('worker settings declaration has invalid/duplicate keys')
+    data = (json.dumps(settings, indent=2) + '\n').encode()
+    (runtime / 'resources/settings.json').write_bytes(data)
+    (out / 'settings.json').write_bytes(data)
+    return settings
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('parent', 'worker', 'asr', 'session-library', 'out', 'go'):
@@ -111,16 +126,18 @@ def main():
             allowed = [expected] if name.startswith('bin/') else ['$ORIGIN', '$ORIGIN/../lib']
             if len(paths) != 1 or paths[0] not in allowed:
                 raise ValueError('explicit relocatable rpath required: ' + str(paths))
+    if 'resources/settings.json' not in profile['files']:
+        raise ValueError('parent lacks runtime settings declaration')
+    write_current_settings(runtime / worker_name, runtime, out)
     updated = copy.deepcopy(profile)
     updated['files'] = runtime_inventory(runtime, target_platform=platform)
     updated['qualified'] = False
     delta = {n for n in profile['files'] if profile['files'][n] != updated['files'][n]}
-    if not delta or not delta <= set(replacements):
+    if not delta or not delta <= set(replacements) | {'resources/settings.json'}:
         raise ValueError('unexpected runtime delta')
     (runtime / 'voice-runtime.json').write_text(json.dumps(updated, indent=2) + '\n')
     binding = sha(runtime / 'voice-runtime.json')
     bind_carrier(runtime, out / 'carrier-build.json', args.go.resolve())
-    shutil.copy2(parent / 'settings.json', out / 'settings.json')
     result = copy.deepcopy(frozen)
     # Prior signing attestations describe the prior PE bytes, not replacements.
     # Leave the parent intact; this candidate needs its own signing ceremony.
@@ -132,7 +149,9 @@ def main():
                   parent_checkpoint=str(parent), parent_freeze_sha256=args.parent_sha256,
                   runtime_manifest_sha256=binding, worker_sha256=sha(runtime / worker_name),
                   carrier_sha256=json.loads((out / 'carrier-build.json').read_text())['carrier_sha256'],
-                  changed_images=sorted(delta), models_copied=0, settings_changed=False,
+                  changed_images=sorted(delta - {'resources/settings.json'}), models_copied=0,
+                  settings_changed='resources/settings.json' in delta,
+                  settings_sha256=sha(out / 'settings.json'),
                   bindings=bindings)
     for name, source in replacements.items():
         if name != worker_name:

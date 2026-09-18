@@ -78,10 +78,14 @@ aii_voice_result aii_voice_open(aii_voice_models* m,const aii_voice_settings* c,
   return aii_voice_open_configured(m,c,nullptr,out,e);
 }
 aii_voice_result aii_voice_open_configured(aii_voice_models* m,const aii_voice_settings* c,const aii_voice_speech_settings* speech,aii_voice_session** out,aii_voice_error* e) {
+  return aii_voice_open_with_capture_limit(m,c,speech,aii::voice::default_capture_limit_minutes,out,e);
+}
+aii_voice_result aii_voice_open_with_capture_limit(aii_voice_models* m,const aii_voice_settings* c,const aii_voice_speech_settings* speech,uint32_t minutes,aii_voice_session** out,aii_voice_error* e) {
   return call(e,[&]{need(m && out && !*out,"models and empty output handle required");
     bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
     try {
       aii::voice::Settings settings;
+      settings.capture_limit_minutes=minutes;
       if(c) { settings.pause_ms=c->pause_ms;settings.speech_threshold=c->speech_threshold;settings.input_tail_timeout_ms=c->input_tail_timeout_ms; }
       if(speech) {
         auto bounded=[](const char* p,size_t max) { need(p!=nullptr,"speech setting string required");size_t n=0;while(n<=max && p[n])++n;need(n && n<=max,"speech setting string exceeds bound");return std::string(p,n); };

@@ -117,7 +117,7 @@ def main():
         new=w.open('new',False);w.configure(old,320);assert w.status('new')['lifecycle']=='opening';w.configure(new,1000)
         ready=w.event('session_ready','new')
         expected={'turn_pause_ms':1000,'vad_threshold':.5,'tts_voice':'alba','tts_language':'en',
-                  'stt_language':'en','tts_temperature':struct.unpack('f',struct.pack('f',.3))[0],'tts_seed':20260908}
+                  'stt_language':'en','tts_temperature':struct.unpack('f',struct.pack('f',.3))[0],'tts_seed':20260908,'capture_limit_minutes':30}
         observed=w.status('new')['operator_settings']
         # cJSON prints the float32 value as decimal; do not demand Python's
         # binary64 parse recreate its final ULP. Every other key is exact.

@@ -60,7 +60,7 @@ def operator_setup(platform):
 
 def release_contract(cfg):
     """Apply agreed metadata without changing models, budgets or setting values."""
-    scopes = {'stt_language': 'hearing', 'turn_pause_ms': 'hearing',
+    scopes = {'stt_language': 'hearing', 'turn_pause_ms': 'hearing', 'capture_limit_minutes': 'hearing',
               'vad_threshold': 'hearing', 'tts_voice': 'speaking',
               'tts_language': 'speaking', 'tts_temperature': 'speaking',
               'tts_seed': 'speaking'}
@@ -129,6 +129,22 @@ def runtime(stage):
     return result,profile
 
 
+def runtime_settings(result, profile):
+    """The declaration travels inside each hash-bound platform runtime."""
+    name = 'resources/settings.json'
+    row = profile['files'].get(name)
+    if not row:
+        raise ValueError('runtime settings declaration missing')
+    with tarfile.open(result['runtime_archive']['path']) as archive:
+        raw = archive.extractfile('runtime/' + name).read()
+    if len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
+        raise ValueError('runtime settings declaration changed')
+    settings = json.loads(raw)
+    if not isinstance(settings, list):
+        raise ValueError('runtime settings declaration must be a list')
+    return settings
+
+
 def uid_replacement(cfg,index,model_template,notice_root):
     """Change one measured numerical space; keep every other model/term intact."""
     model=json.loads(model_template.read_text());record=json.loads((notice_root/'UID-REPLACEMENT.json').read_text())
@@ -180,7 +196,6 @@ def main():
     stages, carriers = candidate_inputs(a.inputs)
     if sha(template/'plugin.json')!=TEMPLATE_SHA:raise ValueError('template changed')
     cfg=json.loads((template/'plugin.json').read_text())
-    release_contract(cfg)
     # Notice selection and model selection form one atomic packaging decision.
     index=json.loads((template/'notices/INDEX.json').read_text());uid_files={}
     if any((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):
@@ -200,9 +215,16 @@ def main():
     cfg['description']='On-device English speech for macOS, Windows and Ubuntu: ten selectable voices, recognition, active adjustable VAD, interruption/recovery and durable guided speaker enrollment. Speaker matching identifies a speaker; it grants no authority.'
     cfg['runtimes']=[]
     bound={};profiles={}
+    settings = None
     for platform,stage in stages.items():
         bound[platform],profiles[platform]=runtime(stage)
         if sha(carriers[platform])!=bound[platform]['carrier_sha256']:raise ValueError('carrier changed')
+        declared = runtime_settings(bound[platform], profiles[platform])
+        if settings is not None and declared != settings:
+            raise ValueError('desktop runtime settings declarations disagree')
+        settings = declared
+    cfg['settings'] = settings
+    release_contract(cfg)
     descriptors=json.loads(subprocess.check_output([str(carriers['macos'])],env={'PATH':'','AIISDK_DESCRIBE':'1'},timeout=10))
     cfg['interfaces']=enrollment_interfaces(descriptors)
     schemas={d[k] for d in descriptors for k in ('input','output') if d.get(k)}
