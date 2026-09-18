@@ -25,6 +25,9 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 		return errors.New("bounded enrollment arguments required")
 	}
 	allowed := map[string]bool{"session_id": true}
+	if op == "speaker.reset" {
+		allowed["recovery"] = true
+	}
 	if op == "speaker.enroll" || op == "speaker.remove" {
 		allowed["speaker_id"] = true
 	}
@@ -44,6 +47,18 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 		}
 		if !allowed[name] {
 			return errors.New("unknown enrollment argument")
+		}
+	}
+	if raw, ok := fields["recovery"]; ok {
+		var refs map[string]string
+		if json.Unmarshal(raw, &refs) != nil || len(refs) != 2 {
+			return errors.New("recovery requires the two observed digests from speaker.list")
+		}
+		for _, key := range []string{"enrollment_sha256", "captures_sha256"} {
+			value, present := refs[key]
+			if !present || (value != "absent" && !hexDigest(value)) {
+				return errors.New("recovery requires an observed digest or absent for each store")
+			}
 		}
 	}
 	_, guided := fields["capture_id"]
@@ -105,7 +120,7 @@ func declaredPlugin() *aiiosdk.Plugin {
 				"list":            {`{}`},
 				"enroll":          {`{"capture_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","speaker_id":"sam","label":"Sam"}`},
 				"remove":          {`{"speaker_id":"COPY_FROM_SPEAKER_LIST"}`},
-				"reset":           {`{}`},
+				"reset":           {`{}`, `{"recovery":{"enrollment_sha256":"COPY_FROM_SPEAKER_LIST_RECOVERY","captures_sha256":"COPY_FROM_SPEAKER_LIST_RECOVERY"}}`},
 				"discard_capture": {`{"capture_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`},
 				"upgrade_policy":  {`{}`},
 			}[name],
