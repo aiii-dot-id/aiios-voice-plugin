@@ -67,8 +67,8 @@ struct Frame {
 struct Generation {
   std::string id;
   uint32_t stream = 0, seq = 0;
-  uint64_t core_seen = 0, delivered = 0, rendered = 0;
-  bool ended = false, receipt = false, terminal_event = false;
+  uint64_t core_seen = 0, delivered = 0, rendered = 0, observed_generated = 0;
+  bool ended = false, receipt = false, terminal_event = false, observed_retired = false;
   std::atomic<bool> fenced{false};
 };
 struct Output {
@@ -127,12 +127,21 @@ class Worker {
   bool waiting_settings_ = false, pending_audio_ = false, abort_ = false,
        quit_ = false;
   Clock::time_point opening_deadline_, closing_deadline_, exit_deadline_;
+  uint64_t drain_recognized_ = 0;
   std::optional<Frame> input_pending_;
   std::optional<Output> active_output_;
   AudioScratch<> audio_scratch_;
   Json processing_ = null(), effective_ = object();
   aii_voice_snapshot snapshot_{};
   aii_voice_error error_{};
+
+  // A graceful drain waits for finite, already-admitted work. Only measured
+  // progress renews this inactivity bound; control traffic/status/duplicate
+  // receipts cannot. Abort and capture preparation retain their own deadlines.
+  void advance_drain() {
+    if (lifecycle_ == "draining" && !abort_ && session_)
+      closing_deadline_ = Clock::now() + std::chrono::seconds(15);
+  }
 
   void fault_transport(const std::string &s) {
     std::lock_guard<std::mutex> l(mutex_);
@@ -747,6 +756,7 @@ class Worker {
       lifecycle_ = "draining";
       closing_deadline_ =
           Clock::now() + std::chrono::seconds(mode == "abort" ? 5 : capture_ ? 45 : 15);
+      drain_recognized_ = snapshot_.recognized;
       if (session_)
         core(aii_voice_close(session_, abort_, &error_), error_);
       auto r = accepted();
@@ -857,6 +867,7 @@ class Worker {
                               &error_),
            error_);
       if (!g->receipt && (n != g->rendered || terminal)) {
+        advance_drain(); // after native validation, never for an unchanged report
         auto e = object();
         put(e, "synthesis_id", string(g->id));
         put(e, "output_stream", number(g->stream));
@@ -950,6 +961,8 @@ class Worker {
         ack.swap(ack_);
       }
       if (ack) {
+        if (ack->samples || ack->end)
+          advance_drain();
         auto &g = *active_output_->g;
         g.delivered += ack->samples;
         g.seq += ack->frames;
@@ -1025,6 +1038,10 @@ class Worker {
       aii_voice_generation state{};
       core(aii_voice_generation_status(session_, item.first, &state, &error_),
            error_);
+      if (state.generated > g.observed_generated || (state.retired && !g.observed_retired))
+        advance_drain();
+      g.observed_generated = state.generated;
+      g.observed_retired = state.retired;
       if (state.fenced)
         g.fenced = true;
       if (g.ended && state.retired && !g.terminal_event && !abort_ &&
@@ -1063,9 +1080,13 @@ class Worker {
       }
     }
     core(aii_voice_status(session_, &snapshot_, &error_), error_);
+    if (snapshot_.recognized > drain_recognized_) {
+      advance_drain();
+      drain_recognized_ = snapshot_.recognized;
+    }
     if (lifecycle_ == "draining" && Clock::now() > closing_deadline_) {
       if (!abort_)
-        fail("native drain exceeded 15 seconds");
+        fail("native drain made no progress for 15 seconds");
       else if (!snapshot_.retired || pending_audio_)
         std::_Exit(72);
     }

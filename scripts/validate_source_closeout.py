@@ -25,6 +25,7 @@ TESTS = (
     "test_plugin_playback_control", "test_plugin_abort_drain", "test_plugin_startup_timing",
     "test_plugin_readonly_loading", "test_native_current_interrupt", "test_signed_windows_rebind",
     "test_native_capture_duration", "test_native_settings_packaging", "test_beta3_release_contract",
+    "test_native_drain_progress",
 )
 
 
