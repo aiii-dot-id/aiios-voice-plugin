@@ -1,0 +1,3 @@
+# Source inventories and vendored-library pins bind committed bytes.
+# Do not let a developer's core.autocrlf setting rewrite them on checkout.
+* -text

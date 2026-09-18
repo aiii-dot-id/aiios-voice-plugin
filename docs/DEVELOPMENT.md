@@ -4,6 +4,10 @@ This is the full native plugin source, not a reduced demo. User installation
 does not require these development tools. Run commands from this repository's
 root. Generated files belong under ignored `.build/` or `test-results/`;
 models, recordings, credentials and release assets stay outside Git.
+`.gitattributes` preserves committed bytes on every OS: automatic CRLF/LF
+conversion would invalidate the source inventory and vendored-library hashes.
+Keep text edits in their existing line-ending form; do not weaken a hash check
+to accommodate an automatically rewritten checkout.
 
 ## Model-free native contracts
 
