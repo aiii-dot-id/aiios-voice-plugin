@@ -1417,8 +1417,12 @@ public:
       std::unique_lock<std::mutex> lock(mutex_);
       const bool idle=!opening_.valid()&&!enrollment_.valid()&&!capturing_.valid()&&!waiting_settings_&&
           !pending_audio_&&generations_.empty()&&!input_pending_&&
-          input_received_==snapshot_.recognized&&!snapshot_.recognition_active&&!snapshot_.draining&&lifecycle_!="draining";
-      changed_.wait_for(lock, std::chrono::milliseconds(idle?100:1), [&] {
+          input_received_==snapshot_.recognized&&!snapshot_.recognition_active&&!snapshot_.draining&&
+          (!snapshot_.cutoff_set||input_final_sequence_)&&lifecycle_!="draining";
+      // Native model threads do not signal changed_. Even an apparently idle
+      // open session can acquire an event after our snapshot, so bound that
+      // observation delay to 10 ms; reserve the longer wait for no session.
+      changed_.wait_for(lock, std::chrono::milliseconds(idle?(session_?10:100):1), [&] {
         return !controls_in_.empty() ||
                (!input_pending_ && !audio_in_.empty()) || ack_.has_value() ||
                (!quit_ && eof_);

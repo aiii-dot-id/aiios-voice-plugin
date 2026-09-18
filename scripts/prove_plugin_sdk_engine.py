@@ -97,26 +97,27 @@ def validate_description(description):
     ):
         raise ValueError("Invalid resident SDK declaration")
     ids = [row.get("id") for row in description]
-    # Retain frozen checkpoint coverage and explicitly admit the fifth guided
-    # capture operation, not arbitrary extra callable shapes.
-    enrollment = {"speaker." + name for name in ("list", "enroll", "remove", "reset")}
-    if "speaker.discard_capture" in ids:
-        enrollment.add("speaker.discard_capture")
-    if "speaker.upgrade_policy" in ids:
-        enrollment.add("speaker.upgrade_policy")
-    with_enrollment = set(ids) == expected | enrollment
-    if (
-        any(not isinstance(x, str) for x in ids)
-        or (set(ids) != expected and not with_enrollment)
-        or len(ids) != (8 + len(enrollment) if with_enrollment else 8)
-    ):
-        raise ValueError("The resident SDK must declare eight controls and only the known enrollment operations")
-    if with_enrollment:
-        for row in description:
-            if row["id"] in enrollment:
-                write = row["id"] != "speaker.list"
-                if bool(row.get("operator_confirms", False)) != write or row.get("capabilities") != ["fs.private"] or row.get("effects") != ("write.local" if write else "read.internal"):
-                    raise ValueError("Enrollment effects/confirmation contract differs")
+    if any(not isinstance(x, str) for x in ids):
+        raise ValueError("Resident operation IDs must be strings")
+    enrollment = {"speaker." + name for name in
+                  ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy")}
+    if set(ids) != expected | enrollment or len(ids) != 14:
+        raise ValueError("The current carrier must declare all eight controls and six speaker operations")
+    for row in description:
+        if row["id"] in enrollment:
+            # The SDK's eight controls are host lifecycle operations, not
+            # identity-callable tools. Speaker operations ARE tools and must
+            # describe their complete contract to the identity.
+            if not isinstance(row.get("summary"), str) or not row["summary"].strip():
+                raise ValueError("Speaker operation summary missing")
+            write = row["id"] != "speaker.list"
+            if (row.get("operator_confirms", False) is not write
+                    or row.get("capabilities") != ["fs.private"]
+                    or row.get("effects") != ("write.local" if write else "read.internal")):
+                raise ValueError("Enrollment effects/confirmation contract differs")
+            name = row["id"].split(".")[1]
+            if row.get("input") != f"schemas/speaker-{name}.input.json" or row.get("output") != "schemas/speaker.output.json":
+                raise ValueError("Enrollment schema reference differs")
 
 
 class SDKHost:
