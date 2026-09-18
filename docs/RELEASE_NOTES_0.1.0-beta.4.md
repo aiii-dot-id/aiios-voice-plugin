@@ -21,6 +21,9 @@ announcement that the catalog has changed.
   automatically discarded or reinterpreted.
 - Package/catalog host-floor checks, source-only CI, build instructions and
   operator/release documentation are included in the source handoff.
+- The exact sealed Plugin SDK source archive is a developer release asset,
+  because its authoring commit is not in the clean public SDK mirror. It is
+  not downloaded or installed by the plugin and does not change its binaries.
 
 ## Requirements and limits
 
