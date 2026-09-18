@@ -80,6 +80,25 @@ index. Host executable SHA-256:
 - All twelve frozen release-owned assets still match `SHA256SUMS`. They were
   not rebuilt or replaced by this cleanup.
 
+## Public SDK reproducibility correction
+
+An anonymous GitHub commit lookup refused the SDK pin `8155af0` with HTTP 422
+(`No commit found`). A fresh clone confirmed that public main `02544d4` is a
+clean derived history, not the authoring history. Therefore the earlier build
+instruction to obtain that commit from the public repository was insufficient.
+
+The publication supplement includes the **existing** sealed SDK source tar,
+`aii-plugin-sdk-8155af0.tar`, 1,341,440 bytes, hash
+`4fce5eb7c06f2452e9cc816ff8ffea77960a890c82c53318d32d643af0083b9d`.
+It preserves Apache-2.0, notices and the full archive used by the builder.
+Scoped path/token/private-key-header inspection found no secret payload;
+the one host-path-pattern match was a generic path-with-spaces code comment.
+The developer guide names the planned voice-release URL explicitly as not
+yet live. Total planned uploads become thirteen assets, 298,741,563 bytes.
+The twelve runtime/model/package assets and their original evidence are
+unchanged. No SDK API, source pin, carrier or model was modified. The host/SDK
+owner is notified rather than having its public mirror rewritten by this task.
+
 The current host mode changes have now landed in the staged `c5066fd6` build;
 that removes an earlier source dependency but does not run the joint installed
 browser proof. At this preparation checkpoint, the eight-hour meeting test
