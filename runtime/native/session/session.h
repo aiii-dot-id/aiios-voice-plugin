@@ -2,6 +2,7 @@
 #include "capture_limit.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -71,6 +72,14 @@ struct Settings {
   SpeechSettings speech{};
   uint32_t capture_limit_minutes = default_capture_limit_minutes; // 0: no duration stop
 };
+// Input is one optional direction, not an empty microphone or another mode.
+// These owners are accessed only when hearing was admitted at open.
+struct Hearing {
+  Recognizer& recognizer;
+  Vad& vad;
+  Endpoint& endpoint;
+  SpeakerIdentifier* speaker = nullptr;
+};
 struct Event {
   uint64_t sequence = 0, turn = 0, generation = 0, start = 0, end = 0;
   std::string kind, text;
@@ -82,6 +91,7 @@ struct Audio {
   std::vector<float> pcm; // mono/24k; host owns conversion and physical render
 };
 struct Snapshot {
+  bool input_enabled = true;
   uint64_t received = 0, controlled = 0, recognized = 0, generation = 0, sequence = 0, cutoff = 0;
   bool input_finished = false, synthesizing = false, draining = false;
   bool stopping = false, retired = false, aborted = false, closing = false, cutoff_set = false;
@@ -97,6 +107,7 @@ struct GenerationSnapshot {
 };
 class Session {
  public:
+  Session(Synthesizer&, Settings = {}, std::optional<Hearing> = std::nullopt);
   Session(Recognizer&, Vad&, Endpoint&, Synthesizer&, Settings = {}, SpeakerIdentifier* = nullptr);
   ~Session();
   Session(const Session&) = delete;

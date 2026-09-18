@@ -81,18 +81,28 @@ aii_voice_result aii_voice_open_configured(aii_voice_models* m,const aii_voice_s
   return aii_voice_open_with_capture_limit(m,c,speech,aii::voice::default_capture_limit_minutes,out,e);
 }
 aii_voice_result aii_voice_open_with_capture_limit(aii_voice_models* m,const aii_voice_settings* c,const aii_voice_speech_settings* speech,uint32_t minutes,aii_voice_session** out,aii_voice_error* e) {
+  const aii_voice_open_options options{c,speech,minutes,1};
+  return aii_voice_open_session(m,&options,out,e);
+}
+aii_voice_result aii_voice_open_session(aii_voice_models* m,const aii_voice_open_options* options,aii_voice_session** out,aii_voice_error* e) {
   return call(e,[&]{need(m && out && !*out,"models and empty output handle required");
+    need(options && options->input_enabled<=1,"open options with strict input_enabled boolean required");
     bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
     try {
       aii::voice::Settings settings;
-      settings.capture_limit_minutes=minutes;
+      settings.capture_limit_minutes=options->capture_limit_minutes;
+      const auto* c=options->control;
+      const auto* speech=options->speech;
       if(c) { settings.pause_ms=c->pause_ms;settings.speech_threshold=c->speech_threshold;settings.input_tail_timeout_ms=c->input_tail_timeout_ms; }
       if(speech) {
         auto bounded=[](const char* p,size_t max) { need(p!=nullptr,"speech setting string required");size_t n=0;while(n<=max && p[n])++n;need(n && n<=max,"speech setting string exceeds bound");return std::string(p,n); };
         settings.speech={bounded(speech->voice,64),bounded(speech->tts_language,16),bounded(speech->stt_language,16),speech->temperature,speech->seed};
       }
       auto h=std::make_unique<aii_voice_session>();h->models=m;
-      h->session=std::make_unique<aii::voice::Session>(m->owner->recognizer(),m->owner->vad(),m->owner->endpoint(),m->owner->synthesizer(),settings,m->owner->speaker());
+      std::optional<aii::voice::Hearing> hearing;
+      if(options->input_enabled)
+        hearing.emplace(aii::voice::Hearing{m->owner->recognizer(),m->owner->vad(),m->owner->endpoint(),m->owner->speaker()});
+      h->session=std::make_unique<aii::voice::Session>(m->owner->synthesizer(),settings,hearing);
       *out=h.release();return AII_VOICE_OK;
     } catch(...) { m->leased=false;throw; }
   });
@@ -141,6 +151,7 @@ aii_voice_result aii_voice_status(aii_voice_session* s,aii_voice_snapshot* out,a
 aii_voice_result aii_voice_enrollment_finals(aii_voice_session* s,uint64_t* output,size_t capacity,size_t* required,aii_voice_error* e) {
   return call(e,[&]{need(s&&required&&(output||!capacity),"final discovery arguments required");*required=0;
     const auto state=get(s).status();need(!state.closing&&!state.aborted&&!state.retired,"final discovery needs an open session");
+    if(!state.input_enabled)return AII_VOICE_OK; // never expose a predecessor's hearing evidence
     const auto finals=s->models->owner->enrollment_finals();need(finals.size()<=16,"native final evidence bound exceeded");
     *required=finals.size();if(capacity<*required)return AII_VOICE_CAPACITY;
     if(*required) {
@@ -160,6 +171,7 @@ aii_voice_result aii_voice_enroll_selected(aii_voice_session* s,const char* curr
       need(n&&n<=max,"bounded enrollment string required");return std::string(p,n);};
     const auto speaker=bounded(id,128),name=bounded(label,512);
     const auto status=get(s).status();
+    need(status.input_enabled,"session has no input direction");
     need(!status.closing&&!status.aborted&&!status.retired,"enrollment needs an open session");
     auto candidate=s->models->owner->enroll_selected(std::string(current,n),speaker,name,
       std::vector<uint64_t>(finals,finals+count));

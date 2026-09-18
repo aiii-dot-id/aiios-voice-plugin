@@ -145,7 +145,7 @@ class Worker {
   uint64_t sequence_ = 0, request_id_ = 0, settings_id_ = 0,
            input_received_ = 0, current_ = 0, input_final_sequence_ = 0;
   uint32_t stream_counter_ = 0, input_stream_ = 0, input_seq_ = 0;
-  bool input_started_ = false, end_seen_ = false;
+  bool input_enabled_ = true, input_started_ = false, end_seen_ = false;
   uint64_t input_limit_ = 0;
   bool capture_limit_reached_ = false;
   bool waiting_settings_ = false, pending_audio_ = false, abort_ = false,
@@ -416,7 +416,8 @@ class Worker {
       put(input, "processing", std::move(p));
     }
     put(input, "state",
-        string(input_final_sequence_  ? "finished"
+        string(!input_enabled_        ? "absent"
+               : input_final_sequence_ ? "finished"
                : snapshot_.cutoff_set ? "finishing"
                                       : "accepting"));
     put(input, "admitted_end_sample",
@@ -425,6 +426,7 @@ class Worker {
     put(input, "processed_end_sample", number(snapshot_.recognized));
     put(r, "input", std::move(input));
     auto rec = object();
+    if(!input_enabled_) put(rec,"state",string("inactive"));
     put(rec, "utterance_open", boolean(snapshot_.recognition_active));
     put(rec, "finalization_pending",
         boolean(snapshot_.cutoff_set && !input_final_sequence_));
@@ -514,12 +516,18 @@ class Worker {
     const auto id = str(field(a, "session_id"), 128);
     require(!used_sessions_.count(identity_digest(id)) && session_epoch_<9007199254740991ULL,
             "session ID reuse/epoch exhausted");
-    const auto handle = str(field(a, "input_handle"));
     str(field(a, "output_handle"));
     const auto *audio = field(a, "audio");
     require(cJSON_IsObject(audio), "audio object required");
     require(str(field(audio, "format")) == "s16le", "explicit s16le required");
+    const auto* source=field(audio,"input");
+    require(source!=nullptr,"explicit input format or null required");
+    const bool input_enabled=!cJSON_IsNull(source);
+    require(input_enabled || (!field(a,"input_handle") && !capture),
+            "absent input cannot carry an input handle or enrollment capture");
+    const auto handle=input_enabled ? str(field(a,"input_handle")) : std::string{};
     for (const char *name : {"input", "output"}) {
+      if(!input_enabled && std::string(name)=="input") continue;
       const auto *f = field(audio, name);
       require(cJSON_IsObject(f) && integer(field(f, "rate"), 192000) >= 8000,
               "audio rate invalid");
@@ -532,6 +540,7 @@ class Worker {
     transcript_sequences_.clear();
     enrollment_finals_.clear();
     input_handle_ = handle;
+    input_enabled_ = input_enabled;
     used_sessions_.insert(identity_digest(id));++session_epoch_;
     settled_delivered_=settled_rendered_=0;current_name_.clear();
     sequence_ = 0;
@@ -575,7 +584,7 @@ class Worker {
     put(in, "channels", number(1));
     put(out, "rate", number(24000));
     put(out, "channels", number(1));
-    put(formats, "input", std::move(in));
+    put(formats, "input", input_enabled_ ? std::move(in) : null());
     put(formats, "output", std::move(out));
     put(r, "session_id", string(sid_));
     put(r, "state", string(lifecycle_));
@@ -600,11 +609,12 @@ class Worker {
     input_limit_=aii::voice::capture_samples(config.capture_limit_minutes);
     effective_=config.effective();
     waiting_settings_ = false;
-    opening_ = std::async(std::launch::async, [&, config] {
+    opening_ = std::async(std::launch::async, [this, config, input_enabled=input_enabled_] {
       aii_voice_error e{};
       aii_voice_session *s = nullptr;
       const auto speech=config.speech();
-      core(aii_voice_open_with_capture_limit(models_, &config.control, &speech, config.capture_limit_minutes, &s, &e), e);
+      const aii_voice_open_options options{&config.control,&speech,config.capture_limit_minutes,uint8_t(input_enabled)};
+      core(aii_voice_open_session(models_, &options, &s, &e), e);
       return s;
     });
   }
@@ -796,7 +806,7 @@ class Worker {
       require(lifecycle_ != "closed" && lifecycle_ != "failed" &&
                   (lifecycle_ != "draining" || mode == "abort"),
               "session cannot close in current state");
-      require(mode == "abort" || ((session_||capture_) && snapshot_.cutoff_set),
+      require(mode == "abort" || ((session_||capture_) && (!input_enabled_ || snapshot_.cutoff_set)),
               "drain needs admitted Finish");
       if (mode == "abort") {
         capture_cancelled_=true;
@@ -829,6 +839,7 @@ class Worker {
     require(session_ && (lifecycle_ == "open" || lifecycle_ == "draining"),
             "session not ready");
     if (op == "speech.session.finish_input") {
+      require(input_enabled_,"session has no input direction");
       require(str(field(a, "stream_id")) == input_handle_,
               "foreign input handle");
       const auto end = integer(field(a, "end_sample"), input_limit_ ? input_limit_ : aii::voice::input_clock_max);
@@ -1214,6 +1225,7 @@ class Worker {
     }
     if (!input_pending_)
       return;
+    require(input_enabled_,"session has no input direction");
     // The host may already have queued more capture when the engine's finite
     // cutoff arrives. Retire those bytes without admitting them as speech or
     // faulting a completed input. Only the same input stream may be retired.

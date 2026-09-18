@@ -36,7 +36,8 @@ struct SpeakerJob { Event final; std::vector<float> pcm; };
 void require(bool test,const char* reason) { if (!test) throw std::invalid_argument(reason); }
 }
 struct Session::Impl {
-  Recognizer& asr; Vad& vad; Endpoint& endpoint; Synthesizer& tts;
+  const std::optional<Hearing> hearing;
+  Synthesizer& tts;
   SpeakerIdentifier* speaker;
   const Settings settings;
   const uint64_t input_limit;
@@ -62,8 +63,8 @@ struct Session::Impl {
   std::unique_ptr<SpeakerJob> speaker_job;
   bool speaker_busy=false;
 
-  Impl(Recognizer& a,Vad& v,Endpoint& e,Synthesizer& t,Settings s,SpeakerIdentifier* u)
-      :asr(a),vad(v),endpoint(e),tts(t),speaker(u),settings(s),
+  Impl(Synthesizer& t,Settings s,std::optional<Hearing> h)
+      :hearing(h),tts(t),speaker(h ? h->speaker : nullptr),settings(s),
        input_limit(s.capture_limit_minutes ? capture_samples(s.capture_limit_minutes) : input_clock_max) {
     require(s.pause_ms>=320 && s.pause_ms<=5000,"pause must be 320..5000 ms");
     require(s.input_tail_timeout_ms>=1 && s.input_tail_timeout_ms<=30000,"tail deadline must be 1..30000 ms");
@@ -73,10 +74,14 @@ struct Session::Impl {
     require(std::isfinite(s.speech.temperature) && s.speech.temperature>=0 && s.speech.temperature<=1,"temperature must be finite and inside [0,1]");
     require(!s.speech.voice.empty() && s.speech.voice.size()<=64,"bounded preset name required");
     tts.configure(s.speech);
-    asr.open(); endpoint.open(); tts.open(); if(speaker) speaker->open();
+    if(hearing) { hearing->recognizer.open(); hearing->endpoint.open(); }
+    tts.open(); if(speaker) speaker->open();
     try {
-      launch([this]{control_loop();}); launch([this]{recognition_loop();});
-      launch([this]{endpoint_loop();}); launch([this]{synthesis_loop();});
+      if(hearing) {
+        launch([this]{control_loop();}); launch([this]{recognition_loop();});
+        launch([this]{endpoint_loop();});
+      }
+      launch([this]{synthesis_loop();});
       if(speaker) launch([this]{speaker_loop();});
     } catch (...) {
       // Published under the lock, as fault() publishes it: a worker between
@@ -107,7 +112,7 @@ struct Session::Impl {
     if(!stopping) emit_locked(std::move(event));
   }
   void cancel_models() noexcept {
-    asr.cancel(); endpoint.cancel();
+    if(hearing) { hearing->recognizer.cancel(); hearing->endpoint.cancel(); }
     if(speaker) speaker->cancel();
     uint64_t id=0;
     { std::lock_guard<std::mutex> lock(mutex); if(current) id=current->id; }
@@ -124,7 +129,7 @@ struct Session::Impl {
     changed.notify_all(); cancel_models();
   }
   void maybe_close_locked() {
-    if(!closing || !input_done || speaker_busy) return;
+    if(!closing || (hearing && !input_done) || speaker_busy) return;
     for(const auto& item:jobs) {
       const auto& j=*item.second;
       if(!j.retired || !j.end_taken || !j.receipt) return;
@@ -152,6 +157,7 @@ struct Session::Impl {
     if(cancel) tts.cancel(id); // never under the state/queue mutex
   }
   void control_loop() {
+    auto& vad=hearing->vad;
     vad.reset();
     std::vector<float> tail;
     auto consume=[&](Block block) {
@@ -245,7 +251,7 @@ struct Session::Impl {
         const auto score_started_ns=aii::endpoint::timing::now();
 #ifdef AII_ANDROID_ENDPOINT_HINT
         const auto started=HintClock::now();
-        const auto score=endpoint.score(q->id,q->pcm);
+        const auto score=hearing->endpoint.score(q->id,q->pcm);
         const auto work=std::chrono::duration_cast<std::chrono::nanoseconds>(HintClock::now()-started).count();
         hint.report(work);
         aii::endpoint::timing::record(endpoint_trace_owner,q->id,"score_finished",score_started_ns,0,q->pcm.size());
@@ -253,7 +259,7 @@ struct Session::Impl {
           std::to_string(work)+",\"report_accepted\":true}"});
         q->verdict.set_value(score);
 #else
-        const auto score=endpoint.score(q->id,q->pcm);
+        const auto score=hearing->endpoint.score(q->id,q->pcm);
         aii::endpoint::timing::record(endpoint_trace_owner,q->id,"score_finished",score_started_ns,0,q->pcm.size());
         q->verdict.set_value(score);
 #endif
@@ -265,6 +271,7 @@ struct Session::Impl {
     }
   }
   void recognition_loop() {
+    auto& asr=hearing->recognizer;
     using Gate=aii::endpoint::PauseGate;
     Gate gate([this](uint64_t id,std::vector<float> p){return query(id,std::move(p));},
               [this](const Gate::Event& e){
@@ -468,8 +475,10 @@ struct Session::Impl {
     }
   }
 };
+Session::Session(Synthesizer& t,Settings s,std::optional<Hearing> h)
+    :p_(std::make_unique<Impl>(t,s,h)) {}
 Session::Session(Recognizer& a,Vad& v,Endpoint& e,Synthesizer& t,Settings s,SpeakerIdentifier* u)
-    :p_(std::make_unique<Impl>(a,v,e,t,s,u)) {}
+    :Session(t,s,Hearing{a,v,e,u}) {}
 Session::~Session() {
   close(true);
   // Never free a model under an executing kernel. The embedding process owns
@@ -477,6 +486,7 @@ Session::~Session() {
   for(auto& owner:p_->owners) if(owner.joinable()) owner.join();
 }
 bool Session::feed(uint64_t start,const float* data,size_t count) {
+  require(p_->hearing.has_value(),"session has no input direction");
   require(data && count && count<=input_bound,"bounded nonempty input required");
   for(size_t i=0;i<count;++i) require(std::isfinite(data[i]),"input is not finite");
   std::lock_guard<std::mutex> lock(p_->mutex);
@@ -493,6 +503,7 @@ bool Session::feed(uint64_t start,const float* data,size_t count) {
   p_->changed.notify_all(); return true;
 }
 void Session::finish_input(uint64_t end) {
+  require(p_->hearing.has_value(),"session has no input direction");
   std::lock_guard<std::mutex> lock(p_->mutex);
   require(!p_->stopping && end>=p_->received && end<=p_->input_limit,"finish requires bounded future input cutoff");
   require(!p_->cutoff_set || end==p_->cutoff,"admitted input cutoff cannot change");
@@ -572,7 +583,7 @@ void Session::close(bool abort) {
   {
     std::lock_guard<std::mutex> lock(p_->mutex);
     if(p_->stopping) return;
-    if(!abort) require(p_->cutoff_set,"drain close requires admitted input cutoff");
+    if(!abort) require(!p_->hearing || p_->cutoff_set,"drain close requires admitted input cutoff");
     p_->closing=true;
     if(abort) {
       p_->aborted=true; p_->stopping=true;
@@ -589,6 +600,7 @@ bool Session::wait_closed(uint32_t milliseconds) {
 Snapshot Session::status() const {
   std::lock_guard<std::mutex> lock(p_->mutex);
   Snapshot s;
+  s.input_enabled=p_->hearing.has_value();
   s.received=p_->received; s.controlled=p_->controlled; s.recognized=p_->recognized;
   s.input_finished=p_->input_done; s.stopping=p_->stopping; s.retired=p_->retired==p_->owners.size();
   s.aborted=p_->aborted; s.error=p_->error;

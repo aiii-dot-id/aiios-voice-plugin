@@ -24,6 +24,8 @@ def main():
     parser.add_argument('--checkpoint', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--recorded-conversation', action='store_true')
+    parser.add_argument('--output-only', action='store_true', help='No microphone binding or fabricated Finish')
+    parser.add_argument('--voice', default='alba', help='Exact preset accepted by the bound engine')
     parser.add_argument('--require-quiet-initializers', action='store_true')
     parser.add_argument('--recorded-input', type=Path, required=True)
     a = parser.parse_args()
@@ -33,7 +35,7 @@ def main():
     bindings[str(Path(__file__).resolve())] = sha(Path(__file__))
     report = dict(passed=False, scope=__doc__, bindings=bindings, cases=[],
                   sdk_revision=build['sdk_revision'], checkpoint=str(cp),
-                  runtime_manifest_sha256=frozen['runtime_manifest_sha256'])
+                  runtime_manifest_sha256=frozen['runtime_manifest_sha256'], output_only=a.output_only, voice=a.voice)
     host = None
     stopped = threading.Event()
     broker_thread = None
@@ -49,7 +51,7 @@ def main():
               backend='native-common-' + frozen['backend'], stage=None,
               sdk_source=SDK_SOURCE, packaged_runtime=True,
               runtime_manifest_sha=frozen['runtime_manifest_sha256'],
-              model_data_root=Path(frozen['models_root']), operator_settings={},
+              model_data_root=Path(frozen['models_root']), operator_settings={'tts_voice': a.voice},
               extra_host_operations=['fs.read'], recorded_input=a.recorded_input.resolve())
         host = SDKHost(cfg)
         # This isolated identity has no enrollment or retained captures. Answer
@@ -81,9 +83,19 @@ def main():
         assert report['ready']['models_loaded'] == 5
         for index, selector in enumerate(({'synthesis_id': ''}, {}, {'synthesis_id': None})):
             sid, generation = 'current-' + str(index), 'reply-' + str(index)
-            host.call('open', dict(session_id=sid, input_handle='mic', output_handle='speaker',
-                audio=dict(format='s16le', input=dict(rate=16000, channels=1), output=dict(rate=24000, channels=1))))
+            opening = dict(session_id=sid, output_handle='speaker',
+                audio=dict(format='s16le', input=None if a.output_only else dict(rate=16000, channels=1), output=dict(rate=24000, channels=1)))
+            if not a.output_only:
+                opening['input_handle'] = 'mic'
+            opened = host.call('open', opening)
+            assert 'input' in opened['audio']
+            assert (opened['audio']['input'] is None) == a.output_only
             host.event('session_ready', session_id=sid)
+            if a.output_only:
+                status = host.call('status', dict(session_id=sid))
+                assert status['input']['state'] == 'absent'
+                assert status['recognition']['state'] == 'inactive'
+                assert status['input_completion'] is None
             host.call('synthesize', dict(session_id=sid, synthesis_id=generation,
                 text='This is a long reply so the current generation remains active while we interrupt it. ' * 12))
             started = host.event('synthesis_start', generation, session_id=sid)
@@ -102,10 +114,13 @@ def main():
             host.call('synthesize', dict(session_id=sid, synthesis_id=recovery, text='Recovery is ready.'))
             recovered = host.event('synthesis_end', recovery, session_id=sid, timeout=40)
             recovered_receipt = receipt(host, sid, recovered)
-            host.call('finish_input', dict(session_id=sid, stream_id='mic', end_sample=0))
-            host.event('input_finished', session_id=sid)
+            if not a.output_only:
+                host.call('finish_input', dict(session_id=sid, stream_id='mic', end_sample=0))
+                host.event('input_finished', session_id=sid)
             host.call('close', dict(session_id=sid, mode='drain'))
             host.event('session_end', session_id=sid)
+            if a.output_only:
+                assert not any(e['session_id'] == sid and (e['type'] == 'input_finished' or e['type'].startswith('transcript_')) for e in host.events)
             report['cases'].append(dict(selector=selector, stop_seconds=stopped_seconds,
                 cancel_seconds=cancelled_seconds, interrupted=observation, recovery=recovered_receipt))
             save()
@@ -116,6 +131,21 @@ def main():
             assert run(conversation, host=host, session_id='recorded-recovery',
                        synthesis_prefix='recorded-', close_host=False)
             report['recorded_conversation'] = str(conversation.output / 'report.json')
+        introductions = {}
+        for event in host.events:
+            if event['type'] == 'synthesis_start':
+                assert event['session_id'] and event['synthesis_id']
+                assert event['output_stream'] not in introductions, 'process output stream reused'
+                introductions[event['output_stream']] = event
+        terminal_streams = set()
+        for _, frame in host.frames:
+            assert frame.stream in introductions, 'unnamed engine audio'
+            assert frame.stream not in terminal_streams, 'engine audio after END'
+            if frame.kind == 3:
+                terminal_streams.add(frame.stream)
+        assert terminal_streams == set(introductions), 'introduced stream never ended'
+        report['producer_contract'] = dict(session_tagged=True, unique_streams=len(introductions),
+                                          every_stream_named=True, no_audio_after_end=True)
         report['events'], report['calls'] = host.events, host.calls
         stopped.set()
         broker_thread.join(timeout=2)

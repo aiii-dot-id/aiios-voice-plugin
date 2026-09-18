@@ -1,5 +1,10 @@
 # Native session composition
 
+Current lifecycle, output-only, settings and release-input contract:
+[NATIVE_SESSION_CONTRACT.md](../../../docs/NATIVE_SESSION_CONTRACT.md).
+The dated checkpoint measurements below are historical, not qualification of
+an executable subsequently rebuilt from this source.
+
 The same C++17 session state machine builds on desktop and mobile. It now
 joins real native recognition, VAD, semantic endpoint and synthesis on all three desktops,
 without an interpreter in the engine process. Its internal C interface is now
@@ -51,9 +56,9 @@ existing entrypoints and struct layouts retain the 30-minute default. C callers
 must split packets at a finite cutoff themselves. The core auto-finalizes at
 that exact boundary. Tests use deterministic model doubles with more than
 30 minutes of audio-clock input; this is not physical-audio or multi-day soak
-qualification. In particular, duration-unlimited does not remove the existing
-4096-generation history/admission bound: completed-generation retirement is a
-separate known limitation, not certified away by these duration tests.
+qualification. Settled generations are now reclaimed, with at most 64 unresolved
+jobs. Compact replay fences still grow with activation ID count; see the current
+contract and `docs/REVIEW_REMEDIATION_20260918.md` for the distinct memory bounds.
 
 The worker's `--describe-settings` emits its compiled declaration without
 loading models. Candidate rebuilds replace `resources/settings.json` from
@@ -114,7 +119,7 @@ Caller-owned asset verification remains mandatory. The proof harness binds
 the existing graphs/checkpoint, VAD, Pocket assets and retained native libraries.
 The engine does not accept a model selected by untrusted audio or transcript.
 
-## Required before this replaces a checkpoint
+## Historical September 12 checkpoint boundary
 
 The internal C ABI and the eight existing speech controls now have a tested
 native carrier adapter. Independent stop-playback/cancel-synthesis, future
@@ -127,12 +132,10 @@ EOF is ordered after already-admitted requests, and final response writes keep
 their deadline watcher through retirement. Source/binary/evidence:
 `deliverables/common-native-sdk-20260912-r4/README.md`.
 
-The development worker requires seven verified model paths and deliberately
-refuses a no-argument installed launch. An optional final `cpu`/`vulkan` argument
-selects TTS; omission retains CPU. Only fixed English Alba and `turn_pause_ms`
-are wired. Unsupported operator settings fail explicitly;
-they are not silently ignored or shown as effective. The complete signed
-profile/catalog/package builder is still required.
+That checkpoint used explicit model paths and a smaller settings surface.
+Current installed activation is zero-argument and runtime/model-bound; ten
+presets and the eight compiled settings are wired. Unsupported values still
+refuse explicitly. A new signed package needs its own installed qualification.
 
 Load/open initialize on their own owner; they are not inference-free controls.
 Release is externally exclusive with calls on the handle and refuses live
@@ -166,13 +169,12 @@ gate observes 66.24 seconds as one turn, 134.24 seconds of complete output,
 and the frozen 4-second recovery after interruption. All render receipts are
 simulated; this is not a new installed or physical-audio qualification.
 
-UID snapshot decisions/publication, reference-audio echo handling, complete
-voice/language catalog and operator settings mapping are not yet composed here.
-The proof's fixed English Alba voice does not replace the working multilingual
-Mac checkpoint. The sealed C++ recognizer now verifies/maps its own weights and
-passes frozen recognition and whole SDK cycles on all three desktops. That does
-not yet establish the new complete native plugin's protected installed startup;
-the prior passing Windows wall proof belongs to the older checkpoint.
+The historical proof above predates native UID publication, guided enrollment,
+the current settings map and ten-preset catalogue. Those are now composed in
+source, but their qualification remains bound to each tested artifact. Current
+native language support is English; an older multilingual experiment does not
+expand the shipping declaration. Prior Windows containment evidence cannot
+automatically qualify a replacement runtime.
 
 Per-platform accelerator placement, complete native-model numerical panels,
 installed SDK/browser conversation, physical playback, mobile app linkage and

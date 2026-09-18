@@ -29,6 +29,16 @@ typedef struct aii_voice_speech_settings {
   float temperature;
   uint32_t seed;
 } aii_voice_speech_settings;
+/* Canonical open options. Existing structs and entrypoint layouts are unchanged.
+ * input_enabled is a strict boolean. Null setting pointers select defaults;
+ * capture_limit_minutes=0 removes the duration stop, not resource bounds.
+ * Options and strings need live only for the duration of open. */
+typedef struct aii_voice_open_options {
+  const aii_voice_settings* control;
+  const aii_voice_speech_settings* speech;
+  uint32_t capture_limit_minutes;
+  uint8_t input_enabled;
+} aii_voice_open_options;
 typedef struct aii_voice_snapshot {
   uint64_t received, controlled, recognized, generation, sequence, cutoff;
   uint64_t queued_audio_samples, synthesis_segments, completed_segments;
@@ -110,6 +120,7 @@ aii_voice_result aii_voice_prepare_capture(aii_voice_models*, const float*, size
   aii_voice_capture*, aii_voice_error*);
 aii_voice_result aii_voice_models_release(aii_voice_models**, aii_voice_error*);
 aii_voice_result aii_voice_open(aii_voice_models*, const aii_voice_settings*, aii_voice_session**, aii_voice_error*);
+aii_voice_result aii_voice_open_session(aii_voice_models*, const aii_voice_open_options*, aii_voice_session**, aii_voice_error*);
 /* Settings are pinned for the session. Unknown languages/voices are refused;
  * open is initialization work and never runs on the interruption lane. */
 aii_voice_result aii_voice_open_configured(aii_voice_models*, const aii_voice_settings*, const aii_voice_speech_settings*, aii_voice_session**, aii_voice_error*);

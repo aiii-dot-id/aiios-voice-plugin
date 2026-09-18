@@ -23,6 +23,10 @@ are not source and do not live in this repository.
 The integrated source checkpoint, reproducible focused gates and remaining
 release boundaries are recorded in
 [`docs/SOURCE_CLOSEOUT_20260917.md`](docs/SOURCE_CLOSEOUT_20260917.md).
+The current native session contract (including output-only speech) is in
+[`docs/NATIVE_SESSION_CONTRACT.md`](docs/NATIVE_SESSION_CONTRACT.md); its
+implementation evidence is in
+[`docs/OUTPUT_ONLY_DELIVERY_20260918.md`](docs/OUTPUT_ONLY_DELIVERY_20260918.md).
 A clean source landing is not a replacement signature or installed-product
 qualification. Historical evidence audits require the bound external artifacts;
 missing evidence is not silently converted into a passing gate.

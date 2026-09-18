@@ -29,6 +29,7 @@ TESTS = (
     "test_native_drain_progress",
     "test_native_lifetime",
     "test_plugin_sdk_declaration",
+    "test_native_output_only",
 )
 
 
