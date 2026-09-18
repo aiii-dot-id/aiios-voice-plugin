@@ -113,11 +113,20 @@ def current_windows_notices(profile, artifact_root=ROOT):
     return files,libraries
 
 
+def staged_archive(stage, name):
+    archive=Path(name)
+    if archive.is_absolute():
+        return archive  # Explicit absolute receipts from earlier local stages.
+    if not name or archive.name!=name or name in ('.','..') or '\\' in name or ':' in name:
+        raise ValueError('runtime archive must be an absolute path or a colocated filename')
+    return stage/archive
+
+
 def runtime(stage):
     result=json.loads((stage/'result.json').read_text())
     if result.get('passed') is not True or result.get('installed') is not False or result.get('published') is not False:
         raise ValueError('expected successful local staging with no installation/publication claim')
-    archive=Path(result['runtime_archive']['path'])
+    archive=staged_archive(stage,result['runtime_archive']['path'])
     with tarfile.open(archive) as t:
         raw=t.extractfile('runtime/voice-runtime.json').read()
         if hashlib.sha256(raw).hexdigest()!=result['runtime_manifest_sha256']:
@@ -125,6 +134,7 @@ def runtime(stage):
         profile=json.loads(raw)
     rows={**profile['files'],'voice-runtime.json':dict(bytes=len(raw),sha256=result['runtime_manifest_sha256'],executable=False)}
     check_archive(archive,result['runtime_archive'],rows,windows=profile['platform']=='windows')
+    result['runtime_archive']['path']=str(archive.resolve())
     return result,profile
 
 
@@ -323,7 +333,7 @@ def main():
         explicit_inputs_sha256=sha(a.inputs) if a.inputs else None,
         speaker_methods=[d['id'] for d in descriptors if d['id'].startswith('speaker.')],
         input_output_schema_files=sorted(schemas),models=len(cfg['models']),notices=len(notice_rows),
-        signed=False,installed=False,published=False,
+        signed=False,installed=False,published=False,beta_release_ready=False,
         release_status=dict(package_integrity='verified',package_signature='not_performed_by_assembly',
             installed_journey='not_performed_by_assembly',technical_acceptance='platform_audits_only',
             distribution_review='complete' if index['distribution_review_complete'] else 'open',publication='not_performed_by_assembly'),

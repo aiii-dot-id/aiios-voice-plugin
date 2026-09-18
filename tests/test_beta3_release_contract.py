@@ -3,7 +3,7 @@ import copy
 import hashlib
 import json
 import pytest
-from scripts.assemble_guided_beta_candidate import release_contract, operator_setup, candidate_inputs
+from scripts.assemble_guided_beta_candidate import release_contract, operator_setup, candidate_inputs, staged_archive
 
 
 def example():
@@ -88,3 +88,13 @@ def test_release_requires_bound_inputs_and_resource_declarations(tmp_path):
     manifest.write_text(json.dumps(rows))
     with pytest.raises(ValueError, match='accelerator'):
         candidate_inputs(manifest)
+
+
+def test_portable_stage_receipt_names_its_colocated_archive(tmp_path):
+    assert staged_archive(tmp_path,'windows-runtime.tar.gz')==tmp_path/'windows-runtime.tar.gz'
+    assert staged_archive(tmp_path,str(tmp_path/'old-absolute.tar.gz'))==tmp_path/'old-absolute.tar.gz'
+
+
+@pytest.mark.parametrize('name',['','.', '..','../escape.tar.gz','nested/archive.tar.gz','bad:archive'])
+def test_relative_stage_path_cannot_escape_or_guess_foreign_os_path(tmp_path,name):
+    with pytest.raises(ValueError):staged_archive(tmp_path,name)

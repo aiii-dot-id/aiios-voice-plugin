@@ -14,6 +14,7 @@ import tarfile
 
 from scripts.build_plugin_carrier import verify_sdk, SDK_SOURCE
 from scripts.package_native_runtime import verify
+from scripts.rebind_signed_windows_runtime import OWNED, verify_authenticode
 
 
 def sha(path):
@@ -29,6 +30,33 @@ def audit_binding(path, digest, runtime_digest):
     if not proof['passed'] or proof['runtime_manifest_sha256'] != runtime_digest:
         raise ValueError('qualification does not bind this runtime')
     return proof
+
+
+def audit_checkpoint(proof, checkpoint, carrier_name):
+    """A successful run must bind this carrier too, not merely its libraries.
+
+    Evidence may be copied from another machine. Match its declared checkpoint
+    prefix, not the local staging path or arbitrary matching basenames.
+    """
+    prefix = str(proof.get('checkpoint', '')).replace('\\', '/').rstrip('/')
+    if not prefix:
+        raise ValueError('qualification checkpoint missing')
+    bound = {name.replace('\\', '/'): digest for name, digest in proof.get('bindings', {}).items()}
+    for name in ('freeze.json', 'carrier-build.json', 'runtime/voice-runtime.json', 'runtime/'+carrier_name):
+        if bound.get(prefix+'/'+name) != sha(checkpoint/name):
+            raise ValueError('qualification checkpoint binding differs: '+name)
+
+
+def windows_signatures(runtime, profile, signtool):
+    if profile['platform'] != 'windows':
+        if signtool is not None:
+            raise ValueError('Authenticode verifier supplied for non-Windows runtime')
+        return []
+    if os.name != 'nt' or signtool is None:
+        raise ValueError('Windows staging requires native Authenticode verification')
+    if not OWNED <= set(profile['files']):
+        raise ValueError('Windows owned-image inventory incomplete')
+    return verify_authenticode(runtime, OWNED | {'aii-voice-t3.exe'}, signtool)
 
 
 def check_archive(archive, declaration, rows, windows=False):
@@ -65,22 +93,26 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for n in ('checkpoint','audit','out','go-modcache'): p.add_argument('--'+n,type=Path,required=True)
     p.add_argument('--audit-sha256',required=True); p.add_argument('--runtime-sha256',required=True)
+    p.add_argument('--go',type=Path,default=Path('/usr/local/go1.27/bin/go'))
+    p.add_argument('--signtool',type=Path,help='Required on Windows; validates publisher, trust and timestamp')
     a=p.parse_args(); cp=a.checkpoint.resolve(); out=a.out.resolve()
     proof=audit_binding(a.audit,a.audit_sha256,a.runtime_sha256)
     frozen=json.loads((cp/'freeze.json').read_text())
     assert frozen['runtime_manifest_sha256']==a.runtime_sha256
     runtime=cp/'runtime'; profile=verify(runtime,a.runtime_sha256)
-    # Windows PE signatures must be settled before immutable companion hashes.
-    if profile['platform']=='windows': raise ValueError('Windows requires the Authenticode release-signing stage first')
-    platform,arch={('darwin','arm64'):('macos','arm64'),('linux','amd64'):('linux','x86_64')}[(profile['platform'],profile['arch'])]
+    windows=profile['platform']=='windows'
+    platform,arch={('darwin','arm64'):('macos','arm64'),('linux','amd64'):('linux','x86_64'),
+                   ('windows','amd64'):('windows','x86_64')}[(profile['platform'],profile['arch'])]
     variant=platform+'-'+arch+'-native'; pin,_=verify_sdk()
-    carrier=runtime/'aii-voice-t3';assert sha(carrier)==frozen['carrier_sha256']
+    carrier=runtime/('aii-voice-t3.exe' if windows else 'aii-voice-t3');assert sha(carrier)==frozen['carrier_sha256']
+    audit_checkpoint(proof,cp,carrier.name)
     assert json.loads((cp/'carrier-build.json').read_text())['sdk_revision']==pin['revision']
+    signatures=windows_signatures(runtime,profile,a.signtool)
     out.mkdir(parents=True,exist_ok=False);tree=out/'companion-tree';tree.mkdir()
     rows={**profile['files'],'voice-runtime.json':dict(sha256=a.runtime_sha256,bytes=(runtime/'voice-runtime.json').stat().st_size,executable=False)}
     for name,row in rows.items():
         dest=tree/name;dest.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(runtime/name,dest);dest.chmod(0o755 if row['executable'] else 0o644)
+        shutil.copyfile(runtime/name,dest);dest.chmod(0o755 if row['executable'] and not windows else 0o644)
         assert sha(dest)==row['sha256']
     env={**os.environ,'GOTOOLCHAIN':'local','GOWORK':'off','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'0','GOMODCACHE':str(a.go_modcache.resolve())}
     def run(name,cmd):
@@ -88,21 +120,23 @@ def main():
         (out/(name+'.stdout')).write_bytes(r.stdout);(out/(name+'.stderr')).write_bytes(r.stderr)
         if r.returncode: raise RuntimeError(name+' failed; output retained')
         return r.stdout
-    sdk=out/'aiisdk'
-    run('sdk-build',['/usr/local/go1.27/bin/go','build','-trimpath','-buildvcs=false','-o',sdk,'./cmd/aiisdk'])
+    sdk=out/('aiisdk.exe' if os.name=='nt' else 'aiisdk')
+    run('sdk-build',[a.go,'build','-trimpath','-buildvcs=false','-o',sdk,'./cmd/aiisdk'])
     archive=out/(variant+'-runtime.tar.gz')
     declaration=json.loads(run('runtime-pack',[sdk,'runtime-pack','-dir',tree,'-o',archive,'-root','runtime',
         '-max-installed-bytes',sum(r['bytes'] for r in rows.values()),'-max-files',len(rows),
         '-max-file-bytes',max(r['bytes'] for r in rows.values()),'-max-compressed-bytes','128M','-max-depth','8']))
-    check_archive(archive,declaration,rows)
+    check_archive(archive,declaration,rows,windows=windows)
     assert verify(runtime,a.runtime_sha256)==profile
     assert sha(carrier)==frozen['carrier_sha256']
-    audit_binding(a.audit,a.audit_sha256,a.runtime_sha256);verify_sdk()
+    audit_checkpoint(audit_binding(a.audit,a.audit_sha256,a.runtime_sha256),cp,carrier.name);verify_sdk()
     result=dict(passed=True,scope=__doc__,variant_id=variant,sdk_revision=pin['revision'],
         runtime_manifest_sha256=a.runtime_sha256,carrier_sha256=frozen['carrier_sha256'],
         checkpoint_freeze_sha256=sha(cp/'freeze.json'),qualification_sha256=a.audit_sha256,
-        qualification_scope=proof['scope'],runtime_archive=dict(path=str(archive),**declaration),
+        # The archive travels with its unmodified receipt across machines.
+        qualification_scope=proof['scope'],runtime_archive=dict(path=archive.name,**declaration),
         source_sha256=sha(__file__),models_in_archive=False,carrier_in_archive=False,
+        authenticode_verified=windows,authenticode_observations=signatures,
         signed=False,installed=False,published=False,
         release_status=dict(runtime_archive='inventory_and_bytes_verified',
             qualification='provided_audit_passed_at_its_declared_scope',
