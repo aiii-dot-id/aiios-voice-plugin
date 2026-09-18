@@ -19,14 +19,11 @@ host signature/tamper verification and upstream download evidence. Seventeen
 upstream downloads are hash-bound dependencies, not files to duplicate into
 Git. The [handoff report](DESKTOP_BETA4_HANDOFF_20260918.md) names the retained
 locations. No public upload is implied by preparation, signing or this file.
-The source-publication supplement adds one developer-only asset:
-`aii-plugin-sdk-8155af0.tar` (1,341,440 bytes; SHA-256
-`4fce5eb7c06f2452e9cc816ff8ffea77960a890c82c53318d32d643af0083b9d`).
-The exact authoring SDK commit is absent from its clean public mirror; this
-unchanged sealed archive makes the existing build pin reproducible without
-changing the qualified carrier. Upload **all thirteen** assets (298,741,563
-bytes) and the supplement's combined checksums. This source asset is not an
-extra runtime/model download and does not change the signed package.
+Operator direction on September 18: publish the Voice Plugin and catalog;
+leave SDK and AII OS repository publication to their owner. The earlier proposed
+SDK-source supplement is not part of this upload. Publish the original twelve
+assets plus their checksums. Developer SDK-source availability is tracked
+separately and is not a plugin installation/runtime dependency.
 The copy-ready draft is [RELEASE_NOTES_0.1.0-beta.4.md](RELEASE_NOTES_0.1.0-beta.4.md);
 its preparation label must not be replaced by a qualification claim until the
 listed gates actually finish.
@@ -91,6 +88,13 @@ lands first, regenerate from the new signed catalog, preserve that update and
 re-sign. This is an update in place, not a replacement of catalog history.
 
 ## Publication order (requires operator authorization)
+
+For beta.4 the operator explicitly requested Voice Plugin and catalog
+publication on September 18. Publish it as a **prerelease**, preserving the
+still-open installed/browser and endurance qualifications in its notes.
+This publication direction does not turn those checks into passes. Anonymous
+asset size/hash verification remains mandatory before catalog promotion.
+The full acceptance sequence below remains the target for a qualified release.
 
 1. Bind the clean public source commit and new tag. Upload the exact frozen
    assets plus checksums and release notes to a **draft prerelease**. Do not

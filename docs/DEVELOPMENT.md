@@ -59,24 +59,14 @@ extra extracted files or a changed module replacement. It does not download
 dependencies; populate an isolated module cache from `plugin/native/go.sum`
 before an offline build.
 
-The authoring SDK and its clean public mirror do not share commit IDs. The
-current pin `8155af048f312faec9000defe294b0086b28b62c` is not present in the
-public mirror. Do not substitute that mirror's main. The beta.4 publication
-set therefore includes the **unchanged sealed SDK source archive** as an
-additional developer asset, not an installed plugin dependency:
-
-`aii-plugin-sdk-8155af0.tar` — 1,341,440 bytes, SHA-256
-`4fce5eb7c06f2452e9cc816ff8ffea77960a890c82c53318d32d643af0083b9d`.
-
-Once the prepared release is published, download it from
-`https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v0.1.0-beta.4/aii-plugin-sdk-8155af0.tar`
-to `.build/aii-plugin-sdk-8155af0.tar`, verify that exact size/hash, then extract
-it into the empty `.build/aii-plugin-sdk-8155af0/` directory. It retains the
-SDK's Apache-2.0 license, notices and complete source. It is the existing
-archive, not a rewritten mirror or a new SDK fork. The normal builder verifies
-every extracted member against the pin. Before publication, maintainers use
-the already sealed archive from the signed-release preparation; that URL is
-not advertised as live yet.
+The authoring SDK and its clean public mirror do not share commit IDs. At
+beta.4 preparation, pin `8155af048f312faec9000defe294b0086b28b62c` was not
+present in that mirror. The SDK owner is handling its public source delivery;
+this voice release does not publish or modify the SDK. Maintainers can use
+the already sealed 1,341,440-byte archive with the hash in `sdk-source.json`.
+Do not substitute a floating public main. This developer-source dependency
+does not affect installing or running the signed plugin: no SDK checkout is
+downloaded by the product.
 
 ```sh
 python -m scripts.build_plugin_carrier --go /path/to/go

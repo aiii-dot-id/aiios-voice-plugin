@@ -12,10 +12,10 @@ a standalone application. The host selects the native companion and downloads
 its hash-bound models automatically. No system Python or development checkout
 is required on a user's machine.
 
-The prepared next release is **0.1.0-beta.4**, for **AII OS 0.1.8+** on
-macOS Apple Silicon, Ubuntu x86-64 and Windows x86-64. Preparation is not
-publication: use the catalog's published version until the new assets and
-signed catalog have been released together.
+The current desktop beta release line is **0.1.0-beta.4**, for **AII OS 0.1.8+**
+on macOS Apple Silicon, Ubuntu x86-64 and Windows x86-64. Use the version offered
+by the signed catalog and the assets on the matching GitHub release. A source
+checkout alone does not establish that a release has been published.
 
 - [Desktop beta guide](docs/DESKTOP_BETA.md): features, settings, UID,
   prerequisites, updates and limits.

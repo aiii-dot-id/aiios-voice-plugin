@@ -1,5 +1,12 @@
 # Public source and catalog preparation — 2026-09-18
 
+**Subsequent operator direction:** push Voice Plugin and catalog to GitHub;
+SDK and AII OS repositories stay with their owner. The SDK-source supplement
+proposed below is therefore superseded and will not be uploaded by the voice
+release. Runtime/package assets remain the original twelve. Publication uses
+an explicit prerelease label and does not close the remaining qualifications.
+The following records the preparation checkpoint, not a live catalog status.
+
 Prepared for publication; no GitHub push, asset upload, catalog-main promotion
 or live-identity installation was performed. The working package remains
 `id.aiii.voice` **0.1.0-beta.4**, minimum host **0.1.8**, one signed archive for
