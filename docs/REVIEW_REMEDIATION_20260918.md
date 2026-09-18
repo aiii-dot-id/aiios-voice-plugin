@@ -78,3 +78,14 @@ resolution after 4,100. RSS grew from 2,800 to 3,808 KiB, including identity
 fences and allocator effects. This is not a real-model or platform benchmark.
 Old receipts, changed receipts, ID reuse across sessions, held inference,
 pending-capacity recovery and drain all pass. All 29 native tests pass.
+
+## V5 — One Unicode label contract
+
+The shipped schema now declares the native limit of 128 Unicode scalars (not
+512 characters). Seventeen shared vectors cover ASCII, accented characters,
+four-byte emoji, combining characters, control bytes, malformed UTF-8 and
+empty values. They pass native enrollment preparation and the carrier's schema
+assertions. The same vectors also passed an isolated copy of the actual host
+schema compiler/validator from `b7f8a6a`; the host checkout was not edited.
+The native suite now has 30 passing cases; the carrier package passes plain
+and race modes. No enrollment storage limit was widened.
