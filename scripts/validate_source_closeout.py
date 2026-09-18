@@ -30,6 +30,7 @@ TESTS = (
     "test_native_lifetime",
     "test_plugin_sdk_declaration",
     "test_native_output_only",
+    "test_native_meeting_endurance",
 )
 
 
