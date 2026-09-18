@@ -5,6 +5,27 @@ The source of the `id.aiii.voice` plugin for AII OS: a native voice engine
 detection, speaker identification, full-duplex interruption and recovery)
 carried into the host through the AII OS Plugin SDK.
 
+## Install and use
+
+Install through the AII OS plugin catalog; do not run a carrier executable as
+a standalone application. The host selects the native companion and downloads
+its hash-bound models automatically. No system Python or development checkout
+is required on a user's machine.
+
+The prepared next release is **0.1.0-beta.4**, for **AII OS 0.1.8+** on
+macOS Apple Silicon, Ubuntu x86-64 and Windows x86-64. Preparation is not
+publication: use the catalog's published version until the new assets and
+signed catalog have been released together.
+
+- [Desktop beta guide](docs/DESKTOP_BETA.md): features, settings, UID,
+  prerequisites, updates and limits.
+- [Build and validate](docs/DEVELOPMENT.md): source-only tests and the pinned
+  native carrier build.
+- [Release procedure](docs/PUBLISHING.md): exact artifacts, signing,
+  publication order and installed acceptance.
+
+## Source layout
+
 - `plugin/native` — the Go carrier the host launches: the session lane,
   enrollment operations, settings, runtime inventory and readiness.
 - `plugin/integration` — the host-side integration proofs.
@@ -27,6 +48,8 @@ The current native session contract (including output-only speech) is in
 [`docs/NATIVE_SESSION_CONTRACT.md`](docs/NATIVE_SESSION_CONTRACT.md); its
 implementation evidence is in
 [`docs/OUTPUT_ONLY_DELIVERY_20260918.md`](docs/OUTPUT_ONLY_DELIVERY_20260918.md).
+The signed beta.4 artifact and its remaining gates are recorded in
+[`docs/DESKTOP_BETA4_HANDOFF_20260918.md`](docs/DESKTOP_BETA4_HANDOFF_20260918.md).
 A clean source landing is not a replacement signature or installed-product
 qualification. Historical evidence audits require the bound external artifacts;
 missing evidence is not silently converted into a passing gate.

@@ -38,7 +38,7 @@ before promotion. Model selection and SDK authority are not changed by this seam
 
 ## Reproduce without modifying the shared repositories
 
-From the voice-frontier root, obtain `git archive` of the exact SDK revision from
+From this repository's root, obtain `git archive` of the exact SDK revision from
 the repository named in `sdk-source.json`. Save the unmodified tar at its
 `archive` path and extract to its `source` path. The builder checks the tar's
 SHA-256, every extracted file, absence of extra files, and the native Go module's
@@ -87,10 +87,11 @@ backend implementations, not these desktop subprocess binaries.
 The new binding passes complete SDK suites plain and race on Mac, repeated
 native-carrier race tests, held-ack interruption, and two actual-model Mac
 speech cycles with opening words, receipt-driven drain, Abort and reuse.
-Current-binding Windows/Ubuntu native execution and the current-host browser
-gate are still required; historical results on the old binding do not certify
-the new executable. Neither set of checks replaces installed physical browser
-conversation, UID feature completion or human-quality qualification.
+Windows/Ubuntu execution evidence for the current beta.4 carriers is recorded
+in `docs/DESKTOP_BETA4_HANDOFF_20260918.md`. The current-host browser gate is
+separate; historical results on another binding cannot certify a replacement
+executable. Neither set of checks replaces installed physical browser
+conversation or human-quality qualification.
 
 Current assembly excludes AII OS before 0.1.8 for engine-initiated input
 completion. Output-only publication must additionally bind the release carrying

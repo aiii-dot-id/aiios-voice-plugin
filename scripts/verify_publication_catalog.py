@@ -22,6 +22,9 @@ def check_catalog(value, manifest, package_hash, package_size, url):
         raise ValueError('catalog identity/version/tier differs from archive')
     if value.get('summary') != (manifest.get('title') or manifest.get('description', '')):
         raise ValueError('catalog summary differs from archive')
+    for key in ('aiios_min_version', 'aiios_max_exclusive_version'):
+        if (key in value) != (key in manifest) or value.get(key) != manifest.get(key):
+            raise ValueError('catalog host compatibility differs from archive: ' + key)
     wanted = {(v['platform'], v['arch']) for v in manifest['variants']}
     rows = value.get('packages', [])
     if len(rows) != len(wanted) or {(r['platform'], r['arch']) for r in rows} != wanted:
