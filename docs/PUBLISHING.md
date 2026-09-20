@@ -5,9 +5,13 @@ Do not create separate plugin IDs per desktop, a second installer or a parallel
 catalog. The package's version, host window and platform declarations are
 authoritative; catalog metadata must match them exactly.
 
-## Current preparation
+Before any push, run the [publication privacy checks](PUBLICATION_PRIVACY.md)
+against source, history and the final release assets. Historical commit IDs
+changed in the September 20 privacy rewrite; existing signed payloads did not.
 
-The next prepared tag is `v0.1.0-beta.4`, package
+## Frozen beta.4 preparation record
+
+The prepared and subsequently published tag is `v0.1.0-beta.4`, package
 `id.aiii.voice-0.1.0-beta.4.aiiospkg`, minimum host `0.1.8`. The signed archive is
 9,477,409 bytes, SHA-256:
 
