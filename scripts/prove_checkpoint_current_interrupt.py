@@ -27,8 +27,12 @@ def main():
     parser.add_argument('--output-only', action='store_true', help='No microphone binding or fabricated Finish')
     parser.add_argument('--voice', default='alba', help='Exact preset accepted by the bound engine')
     parser.add_argument('--require-quiet-initializers', action='store_true')
+    parser.add_argument('--require-attribution-containment', action='store_true',
+                        help='Require explicit final attribution and no pooled person identity; not working diarized UID')
     parser.add_argument('--recorded-input', type=Path, required=True)
     a = parser.parse_args()
+    if a.require_attribution_containment and (not a.recorded_conversation or a.output_only):
+        parser.error('attribution containment requires a recorded input conversation')
     cp, out = a.checkpoint.resolve(), a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     frozen, build, _, bindings = verify_checkpoint(cp)
@@ -131,6 +135,35 @@ def main():
             assert run(conversation, host=host, session_id='recorded-recovery',
                        synthesis_prefix='recorded-', close_host=False)
             report['recorded_conversation'] = str(conversation.output / 'report.json')
+        if a.require_attribution_containment:
+            from jsonschema import Draft202012Validator
+            schema_path = Path(__file__).resolve().parents[1] / 'spec/speaker_attribution.schema.json'
+            bindings[str(schema_path)] = sha(schema_path)
+            validator = Draft202012Validator(json.loads(schema_path.read_text()))
+            finals = [e for e in host.events if e['type'] == 'transcript_final']
+            amendments = [e for e in host.events if e['type'] == 'speaker_observation']
+            assert finals and len(finals) == len(amendments), 'missing or duplicate attribution'
+            keyed = {(e['session_id'], e['sequence']): e for e in finals}
+            assert len(keyed) == len(finals), 'duplicate final'
+            seen = set()
+            for final in finals:
+                validator.validate(final)
+                assert final['attribution']['decision'] == 'pending'
+                assert final['track_id'] == '', 'unseparated recognizer invented a track'
+            for amendment in amendments:
+                validator.validate(amendment)
+                key = (amendment['session_id'], amendment['refers_to'])
+                assert key in keyed and key not in seen, 'foreign or duplicate amendment'
+                seen.add(key)
+                final = keyed[key]
+                assert amendment['sequence'] > final['sequence']
+                assert all(amendment[k] == final[k] for k in ('track_id', 'start_sample', 'end_sample'))
+                assert amendment['decision'] == 'uncertain', 'pooled identity escaped'
+                assert not amendment['speaker'] and not amendment['speaker_id']
+                assert 'native_evidence' not in amendment and 'evidence_scope' not in amendment
+            report['attribution_containment'] = dict(passed=True, finals=len(finals),
+                amendments=len(amendments), all_initial_pending=True, no_pooled_person_identity=True,
+                scope='Real native models through SDK, no enrollment and simulated host; not diarized UID or installed consumer')
         introductions = {}
         for event in host.events:
             if event['type'] == 'synthesis_start':

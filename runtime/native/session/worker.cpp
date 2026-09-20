@@ -5,6 +5,7 @@
 #include "worker_audio_scratch.h"
 #include "worker_json.h"
 #include "speaker_observation.h"
+#include "attribution.h"
 #include "snapshot_bridge.h"
 #include "capture_enrollment.h"
 #include "uid_recovery.h"
@@ -139,7 +140,7 @@ class Worker {
   uint64_t session_epoch_=0,settled_delivered_=0,settled_rendered_=0;
   std::string current_name_;
   std::map<uint64_t, std::string> issued_settings_;
-  std::map<uint64_t,uint64_t> transcript_sequences_;
+  Attributions attributions_;
   std::map<uint64_t,uint64_t> enrollment_finals_; // public final -> native final
   std::map<uint64_t, std::shared_ptr<Generation>> generations_;
   uint64_t sequence_ = 0, request_id_ = 0, settings_id_ = 0,
@@ -399,6 +400,7 @@ class Worker {
     put(r,"model_execution",parse(execution));
     put(r, "session_id", string(sid_));
     put(r, "state_sequence", number(sequence_));
+    put(r, "attributions", attributions_.snapshot());
     put(r, "lifecycle", string(lifecycle_));
     put(r, "reason", failure_.empty() ? null() : string(failure_));
     put(r, "operator_settings", clone(effective_.get()));
@@ -537,7 +539,7 @@ class Worker {
     validate_processing(field(field(audio, "input"), "processing"));
     sid_ = id;
     uid_snapshot_.begin(sid_);
-    transcript_sequences_.clear();
+    attributions_.begin(sid_);
     enrollment_finals_.clear();
     input_handle_ = handle;
     input_enabled_ = input_enabled;
@@ -967,6 +969,10 @@ class Worker {
     throw Refused("unknown control operation");
   }
   void pump() {
+    if(!abort_ && failure_.empty())
+      for(auto& observation:attributions_.expire(uint64_t(
+          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count())))
+        emit("speaker_observation",std::move(observation));
     if(capturing_.valid()&&capturing_.wait_for(std::chrono::milliseconds(0))==std::future_status::ready) {
       try {
         capture_result_=capturing_.get();
@@ -1066,10 +1072,12 @@ class Worker {
       auto data = object();
       std::string kind = e.kind;
       if(kind=="speaker_observation") {
-        require(reference&&transcript_sequences_.count(reference),"UID observation lacks its public final");
-        data=speaker_observation(parse(text),transcript_sequences_.at(reference));
-        emit("speaker_observation",std::move(data));
-        transcript_sequences_.erase(reference);
+        const auto key=attributions_.key(reference,sid_,e.start,e.end);
+        // This recognizer supplies a mixed capture, not a separated acoustic
+        // track. No whole-capture match qualifies CleanEvidence. The native
+        // multitalker composition must supply it before a name can escape.
+        data=attributions_.resolve(reference,key,parse(text));
+        if(!cJSON_IsNull(data.get()))emit("speaker_observation",std::move(data));
         continue;
       }
       if (e.generation) {
@@ -1099,10 +1107,15 @@ class Worker {
       }
       if (kind == "pause_query" || kind == "pause_resolved")
         continue;
+      if(kind=="transcript_final") {
+        put(data,"track_id",string("")); // explicitly unresolved, not a made-up speaker
+        put(data,"attribution",attributions_.add(e.sequence,
+            FinalKey{sid_,"",sequence_+1,e.start,e.end},
+            uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count()),
+            readiness_.models_loaded==5));
+      }
       const auto public_sequence=emit(kind.c_str(), std::move(data));
       if(kind=="transcript_final"&&readiness_.models_loaded==5) {
-        require(transcript_sequences_.size()<8,"unresolved UID observations exceeded bound");
-        transcript_sequences_[e.sequence]=public_sequence;
         if(enrollment_finals_.size()==16)enrollment_finals_.erase(enrollment_finals_.begin());
         enrollment_finals_[public_sequence]=e.sequence;
       }
@@ -1181,6 +1194,9 @@ class Worker {
       return;
     if(enrollment_.valid()||capturing_.valid())return; // never release borrowed preparation/publication custody
     if(capture_)capture_->abandon(); // no complete/incomplete PCM retained after capture retirement
+    for(auto& observation:attributions_.end(!failure_.empty()?"session_failed":
+          abort_?"session_aborted":"speaker_result_missing"))
+      emit("speaker_observation",std::move(observation));
     if (session_)
       core(aii_voice_release(&session_, &error_), error_);
     uid_snapshot_.cancel();
@@ -1191,6 +1207,7 @@ class Worker {
       put(e, "scope", string("engine_resources"));
       put(e, "resources_released", boolean(true));
       put(e, "playback_verified", boolean(false));
+      put(e, "attributions", attributions_.snapshot());
       emit("failure", std::move(e));
     } else {
       lifecycle_ = "closed";

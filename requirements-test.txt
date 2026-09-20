@@ -6,3 +6,5 @@ numpy==2.2.6
 scipy==1.15.3
 # Integrity/package helpers import these even for native runtime validation.
 packaging==25.0
+# Declarative consumer contract validation only; never a shipped dependency.
+jsonschema==4.23.0

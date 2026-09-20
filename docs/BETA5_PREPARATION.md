@@ -57,6 +57,11 @@ below remain open and the installed mixed-speaker UID defect is not closed.
 
 ## Promotion requirements still open
 
+The operator also requires [persistent anonymous speaker buckets](PERSISTENT_SPEAKER_BUCKETS.md):
+speaker separation and UUID attribution before naming, followed by a name/ID
+association at any time. A live enrollment ceremony cannot be the only route.
+The containment adapter described below does not yet implement that registry.
+
 1. Integrate the measured speaker-aware reference into native hearing. Preserve
    actual foreground/background conditioning and independent track caches;
    compare native output with the pinned reference on the same frozen panel.
@@ -85,3 +90,30 @@ below remain open and the installed mixed-speaker UID defect is not closed.
    version bump or a changed label cannot satisfy this gate.
 
 There is no new public release or catalog promotion implied by this file.
+
+## Attribution containment checkpoint, September 20
+
+The production worker now emits explicit pending attribution with each final,
+then an exact-key amendment or terminal uncertain result. Its current pooled
+recognizer may not claim a named person or a qualified unknown speaker from
+mixed-capture evidence. Rejected names are also removed from diagnostics.
+See [the exact candidate contract](SPEAKER_ATTRIBUTION_CONTRACT.md).
+
+Model-free native suites passed on macOS (32 cases), Linux (32) and Windows
+(34). The production-worker transport proof passed on all three with controlled
+model doubles. Removing pooled-match containment, final binding or clean-
+evidence binding makes the corresponding native falsifier fail.
+The expanded integrated source scope passed 350 tests with no skips, failures
+or errors; the current carrier artifacts were rebuilt against the sealed SDK.
+
+A new integrity-bound Mac runtime passed a real five-model SDK conversation:
+recognition retained the complete expected utterance, recorded speech triggered
+VAD interruption, TTS recovered, and the carrier and broker retired cleanly.
+Its final was pending at arrival and amended to uncertain with matching session,
+reference and span. The output-only path also passed three cancellation/recovery
+cases without a microphone. Playback receipts were simulated, not browser audio.
+
+These results establish a containment checkpoint, not usable diarized UID,
+anonymous UUID registry, host adoption, installed consumer behavior or release
+qualification on three operating systems. The host must consume the contract;
+the native multitalker components must become the active hearing path.

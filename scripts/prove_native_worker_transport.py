@@ -3,7 +3,7 @@ import argparse,json,os,queue,struct,subprocess,threading,time,hashlib
 from pathlib import Path
 
 class Worker:
-    def __init__(self,binary,out,drain=True):
+    def __init__(self,binary,out,drain=True,uid=False):
         self.events=[];self.frames=[];self.replies=queue.Queue();self.settings=queue.Queue();self.counter=0
         self.all=[];self.errors=[];self.control_done=threading.Event();self.out=out;out.mkdir(parents=True,exist_ok=False)
         r,w=os.pipe();rr,ww=os.pipe();self.input=os.fdopen(w,'wb',buffering=0);self.output=os.fdopen(rr,'rb',buffering=0)
@@ -16,7 +16,9 @@ class Worker:
         else:handles=[r,ww];creation={'pass_fds':tuple(handles)}
         env.update(dict(zip(('AII_AUDIO_IN_FD','AII_AUDIO_OUT_FD'),map(str,handles))))
         self.log=(out/'stderr.log').open('wb')
-        self.p=subprocess.Popen([str(binary),*['fixture']*7],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.log,bufsize=0,**creation)
+        models=['fixture']*7
+        if uid:models[0]='fixture-uid'
+        self.p=subprocess.Popen([str(binary),*models],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.log,bufsize=0,**creation)
         (out/'owner.json').write_text(json.dumps({'pid':self.p.pid,'binary':str(binary),'sha256':hashlib.sha256(Path(binary).read_bytes()).hexdigest()})+'\n')
         os.close(r);os.close(ww)
         def controls():
@@ -102,6 +104,37 @@ def main():
         missing=subprocess.run([str(args.binary)],env=env,capture_output=True,timeout=8)
         assert missing.returncode!=0 and b'host-provided model root required' in missing.stderr
         report['missing_model_root_refused']=True
+        # Real worker/C API/session ownership with a deliberately held fake UID
+        # model. Neither the initial state nor this pooled match may name a
+        # speaker. This is transport containment, not acoustic qualification.
+        w=Worker(args.binary,args.out/'attribution',uid=True);w.open('attribution-a')
+        samples=32137
+        for seq,start in enumerate(range(0,samples,1024),1):
+            payload=b'\x00\x20'*min(1024,samples-start)
+            w.input.write(struct.pack('>4sB3xIIQI',b'AUD1',1,1,seq,start,len(payload))+payload)
+        w.call('finish_input',session_id='attribution-a',stream_id='capture',end_sample=samples)
+        w.input.write(struct.pack('>4sB3xIIQI',b'AUD1',3,1,seq+1,samples,0))
+        final=w.event('transcript_final','attribution-a')
+        assert final['start_sample']==0 and final['end_sample']==samples and final['track_id']==''
+        assert final['attribution']['decision']=='pending' and final['attribution']['revision']==0
+        assert not final['attribution']['used_for_permissions']
+        assert not any(e['type']=='speaker_observation' for e in w.events)
+        held=w.status('attribution-a')['attributions']
+        assert len(held)==1 and held[0]['refers_to']==final['sequence'] and held[0]['decision']=='pending'
+        w.call('synthesize',session_id='attribution-a',synthesis_id='release',text='Release UID.')
+        observation=w.event('speaker_observation','attribution-a')
+        assert observation['decision']=='uncertain' and observation['reason']=='speaker_track_unverified'
+        assert observation['refers_to']==final['sequence'] and observation['revision']==1
+        assert observation['start_sample']==0 and observation['end_sample']==samples and observation['track_id']==''
+        assert 'person-a' not in json.dumps(observation) and 'Fixture speaker' not in json.dumps(observation)
+        settled=w.status('attribution-a')['attributions']
+        assert len(settled)==1 and settled[0]['decision']=='uncertain'
+        assert len([e for e in w.events if e['type']=='transcript_final'])==1
+        w.call('close',session_id='attribution-a',mode='abort');w.event('session_end','attribution-a')
+        w.open('attribution-b');assert w.status('attribution-b')['attributions']==[]
+        w.call('close',session_id='attribution-b',mode='abort');w.event('session_end','attribution-b')
+        assert w.close()==0;w=None
+        report['cases'].append({'name':'explicit-pending-pooled-match-refused-exact-final-and-span-restart'})
         # Model owner blocked in next(): both control admissions remain prompt,
         # and Stop does not secretly cancel computation.
         w=Worker(args.binary,args.out/'held-inference');w.open('hold')

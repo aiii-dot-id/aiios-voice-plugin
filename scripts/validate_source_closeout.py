@@ -31,6 +31,7 @@ TESTS = (
     "test_plugin_sdk_declaration",
     "test_native_output_only",
     "test_native_meeting_endurance",
+    "test_speaker_attribution_contract",
 )
 
 
@@ -38,7 +39,7 @@ def validate_environment(version=None, find_spec=importlib.util.find_spec):
     version = sys.version_info if version is None else version
     if version < (3, 11):
         raise ValueError("source gate requires Python 3.11+; see requirements-test.txt")
-    missing = [name for name in ("pytest", "pytest_asyncio", "numpy") if find_spec(name) is None]
+    missing = [name for name in ("pytest", "pytest_asyncio", "numpy", "jsonschema") if find_spec(name) is None]
     if missing:
         raise ValueError("source gate dependencies missing: " + ", ".join(missing)
                          + "; install requirements-test.txt in an isolated environment")
