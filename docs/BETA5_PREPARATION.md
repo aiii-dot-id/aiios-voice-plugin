@@ -47,6 +47,14 @@ against the final integrated hearing engine.
 These are isolated recorded-input tests, not live operator audio, installed
 containment, trusted distribution signatures or broad speaker accuracy.
 
+The native speaker-conditioned encoder/decoder now reproduces all 405 reference
+tokens across 110 streaming updates in seven recorded conversations. Both an
+unconditioned-model mutation and a shared-speaker-cache mutation fail that
+comparison. Six neural graph exports pass their declared numerical checks.
+See [the native checkpoint and exact remaining boundary](NATIVE_MULTITALKER_RESULT_20260920.md).
+These components are not yet selected by the resident worker; the release gates
+below remain open and the installed mixed-speaker UID defect is not closed.
+
 ## Promotion requirements still open
 
 1. Integrate the measured speaker-aware reference into native hearing. Preserve

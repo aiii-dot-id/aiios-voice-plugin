@@ -100,6 +100,15 @@ padding, live latency or installed behavior. Each continuation consumes its own
 runtime's prior state; reference and ORT caches are not cross-fed. Model outputs
 and external tensor files stay outside source control. Preserve failed exports.
 
+## Native conditioned recognition
+
+The development C++ component now owns per-track encoder and RNNT state and
+matches the recorded reference at every decoder update. Removing conditioning
+or sharing encoder caches fails that comparison. The six neural graph exports,
+failed numerical attempts, exact proof boundary and native composition still
+owed are documented in [the checkpoint](NATIVE_MULTITALKER_RESULT_20260920.md).
+This does not select the new engine in the resident plugin.
+
 ## Reproduce the reference, not a production installation
 
 Use an isolated Python 3.12 environment with the pinned NeMo checkout installed

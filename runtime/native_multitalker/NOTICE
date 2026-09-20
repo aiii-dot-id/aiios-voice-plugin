@@ -1,0 +1,17 @@
+This component implements the streaming recognition and cache-state semantics
+of NVIDIA NeMo at commit f613eed86ed4696db0891aac4e9104337a39142c.
+
+The relevant upstream implementations carry:
+SPDX-FileCopyrightText: Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Upstream: https://github.com/NVIDIA/NeMo
+Sources: nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py,
+nemo/collections/asr/modules/conformer_encoder.py, and
+nemo/collections/asr/parts/mixins/multitalker_asr_mixins.py.
+
+The C++ implementation, explicit epoch/track custody, cancellation behavior,
+input validation, and recorded-trace qualification were implemented for this
+project. Neural weights and recordings are not included in this source tree;
+their licenses and distribution requirements remain separate from this notice.
+See the repository LICENSE for the Apache License, Version 2.0 text.

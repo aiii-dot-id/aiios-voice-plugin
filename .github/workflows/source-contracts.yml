@@ -32,6 +32,12 @@ jobs:
         run: ctest --test-dir .build/native-contracts -C Release --output-on-failure --no-tests=error
       - name: Prove nested C and C++ build paths are private
         run: python tests/test_native_source_privacy.py
+      - name: Configure speaker-track state contracts (not model qualification)
+        run: cmake -S runtime/native_multitalker -B .build/multitalker-contracts -DCMAKE_BUILD_TYPE=Release
+      - name: Build speaker-track state contracts
+        run: cmake --build .build/multitalker-contracts --config Release --parallel 2
+      - name: Run speaker-track state contracts
+        run: ctest --test-dir .build/multitalker-contracts -C Release --output-on-failure --no-tests=error
 
   publication-contracts:
     runs-on: ubuntu-24.04
@@ -59,6 +65,7 @@ jobs:
           tests/test_speaker_aware_score.py
           tests/test_speaker_aware_reference.py
           tests/test_speaker_conditioned_export.py
+          tests/test_speaker_aware_graphs.py
           tests/test_native_meeting_endurance.py
           tests/test_sdk_host_construction.py
           tests/test_public_privacy.py
