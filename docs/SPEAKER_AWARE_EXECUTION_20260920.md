@@ -69,6 +69,37 @@ The pinned reference executed on 2026-09-20 and passed all seven frozen cases.
 See [measured results and remaining gates](SPEAKER_AWARE_REFERENCE_RESULT_20260920.md).
 Native integration and reliable enrolled-person attribution are not yet closed.
 
+The operator subsequently made those repairs mandatory for the next plugin
+release. They are no longer an optional challenger alongside a privacy-only
+package. See [the release requirements](BETA5_PREPARATION.md).
+
+## Cached encoder export
+
+`scripts/export_speaker_conditioned_encoder.py` exports the pinned Multitalker
+encoder with explicit foreground/background speaker inputs and external cache
+tensors. It retains the upstream kernel hooks, including foreground-before-
+background residual order. Exporting an ordinary unconditioned encoder is not
+an alternative. The checker refuses a missing input, shape/dtype mismatch,
+nonfinite output, changed integer cache length, or identical output for opposing
+speaker targets on identical input.
+
+Run in the pinned reference environment with ONNX Runtime 1.24.3 installed:
+
+```sh
+PYTHONPATH=/absolute/pinned-NeMo-checkout CUDA_VISIBLE_DEVICES= \
+  python scripts/export_speaker_conditioned_encoder.py \
+  --nemo /absolute/pinned-NeMo-checkout \
+  --model /absolute/pinned-multitalker-checkpoint.nemo \
+  --out test-results/new-cached-encoder-export
+```
+
+This is a development export and numerical parity gate, not a shipping model
+declaration or native speech session. Its fixed-shape input is synthetic mel
+features. It does not test diarization, words, enrollment, actual final audio
+padding, live latency or installed behavior. Each continuation consumes its own
+runtime's prior state; reference and ORT caches are not cross-fed. Model outputs
+and external tensor files stay outside source control. Preserve failed exports.
+
 ## Reproduce the reference, not a production installation
 
 Use an isolated Python 3.12 environment with the pinned NeMo checkout installed

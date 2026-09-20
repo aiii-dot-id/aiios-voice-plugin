@@ -9,6 +9,13 @@ Before any push, run the [publication privacy checks](PUBLICATION_PRIVACY.md)
 against source, history and the final release assets. Historical commit IDs
 changed in the September 20 privacy rewrite; existing signed payloads did not.
 
+**Next-release requirement:** the operator requires all accepted latest changes,
+especially the actual native overlapping-speaker repair, in the next plugin
+release. A privacy-only rebuild, source reference or single-speaker UID pass is
+insufficient. Complete the [beta.5 acceptance gates](BETA5_PREPARATION.md) before
+publishing that release or advancing its catalog entry. Preserve existing
+beta.4 assets; do not rename them to imply a repaired engine.
+
 ## Current release and source preparation
 
 Public prerelease `v0.1.0-beta.4` was published on September 18, 2026. GitHub
@@ -127,7 +134,7 @@ The full acceptance sequence below remains the target for a qualified release.
 5. Publish the prepared, verified signed catalog only when the release URLs
    are live and the install gate passes. Check its prior commit/hash again
    immediately before the fast-forward. Read back and verify the public index
-   and signature, then confirm that a compatible host offers beta.4 and an
+   and signature, then confirm that a compatible host offers the new version and an
    older incompatible host does not.
 
 The release note must distinguish known English/desktop/accuracy limits from

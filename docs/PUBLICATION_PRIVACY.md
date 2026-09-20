@@ -25,8 +25,11 @@ removes embedded binary strings.
 The next candidate is `0.1.0-beta.5`. Its privacy-clean rebuild is in preparation;
 it is not yet a signed or install-qualified release. The native build module and
 binary scanner described in [development](DEVELOPMENT.md) cover release-owned
-images. Existing beta.4 assets remain immutable. This rebuild does not integrate
-the speaker-aware reference or resolve mixed-speaker attribution.
+images. Existing beta.4 assets remain immutable. Privacy normalization alone
+does not integrate the speaker-aware reference or resolve mixed-speaker
+attribution. The next release must include that native repair and its installed
+acceptance evidence: a privacy-only beta.5 is not permitted. See the mandatory
+[release gates](BETA5_PREPARATION.md).
 
 Already fetched copies, forks and cached old commit views may survive a history
 rewrite. Repository owners must handle any required hosting-provider cache
