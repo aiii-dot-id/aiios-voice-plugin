@@ -90,6 +90,14 @@ Verify that policy's effective readback on the installed host; merely exposing
 a speaker score or ID is not proof of filtering. Unknown or uncertain speakers
 remain unknown/uncertain. A speaker match never grants command authority.
 
+**Overlap limitation in beta.4:** identification matches a pooled utterance,
+not each speaker's individual words. Simultaneous voices can be transcribed as
+one mixed utterance and attributed to an enrolled speaker. Do not use this
+version's UID filter as a security boundary for overlapping speech. A failed
+match means no enrolled speaker matched; it does not prove a different person
+is present. The isolated [speaker-aware hearing upgrade](SPEAKER_AWARE_EXECUTION_20260920.md)
+is work in progress, not a capability of the published package.
+
 ## Update, rollback and report
 
 Use the host's plugin update and rollback facilities; do not replace a running
