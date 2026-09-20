@@ -1,5 +1,12 @@
 # Provenance
 
+September 20, 2026: public commit and release-tag history was sanitized for
+privacy. Commit IDs changed; the signed release assets did not. Historical
+source references below identify the original evidence, not a new execution.
+See [publication privacy](docs/PUBLICATION_PRIVACY.md) for scope and remaining
+binary-artifact/cache boundaries. Private recovery copies and the mapping stay
+outside this repository.
+
 Derived 2026-09-16T23:19:30Z from the voice working tree at
 repository head `057751d3f78f6a189e5ce56b7abc1d5d78c248a3` PLUS its uncommitted working files: the plugin
 directory and most of the engine were untracked in that repository at

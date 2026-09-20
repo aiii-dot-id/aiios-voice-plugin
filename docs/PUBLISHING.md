@@ -5,6 +5,10 @@ Do not create separate plugin IDs per desktop, a second installer or a parallel
 catalog. The package's version, host window and platform declarations are
 authoritative; catalog metadata must match them exactly.
 
+Before any push, run the [publication privacy checks](PUBLICATION_PRIVACY.md)
+against source, history and the final release assets. Historical commit IDs
+changed in the September 20 privacy rewrite; existing signed payloads did not.
+
 ## Current release and source preparation
 
 Public prerelease `v0.1.0-beta.4` was published on September 18, 2026. GitHub

@@ -39,7 +39,7 @@ python3 -m venv .build/test-venv
   tests/test_catalog_preparation.py tests/test_release_status_scope.py \
   tests/test_speaker_input_documentation.py tests/test_speaker_aware_score.py \
   tests/test_speaker_aware_reference.py tests/test_native_meeting_endurance.py \
-  tests/test_sdk_host_construction.py
+  tests/test_sdk_host_construction.py tests/test_public_privacy.py
 ```
 
 On Windows use the environment's `Scripts/python.exe`. Historical audit tests
@@ -92,3 +92,6 @@ failed run or overwrite an output directory to make a result appear clean.
 Regenerate `MANIFEST.sha256` from tracked files after staging source edits;
 verify it and `git diff --check` before landing. Publication must use a clean
 source commit and the exact tested artifacts; see [PUBLISHING.md](PUBLISHING.md).
+Run `python -m scripts.check_public_privacy --history` before a public push.
+See [publication privacy](PUBLICATION_PRIVACY.md); an integrity inventory does
+not prove that its contents are appropriate for publication.
