@@ -51,7 +51,7 @@ counts and exclusions from its claim. Model, hardware and installed tests are
 additional evidence, not implicit consequences of source tests.
 
 The public `source-contracts` workflow runs the model-free CMake contracts on
-Linux, Windows and macOS, and the package/catalog and hearing-scorer files above on
+Linux, Windows and macOS, and the package/catalog, hearing and privacy files above on
 Linux. It has read-only repository permissions and does not acquire models,
 sign, publish, install a plugin or certify hardware acceleration. A locally
 passing command is not a claim that its first GitHub-hosted run has completed.
