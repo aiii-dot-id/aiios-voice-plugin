@@ -157,6 +157,7 @@ class SDKHost:
         native = native_candidate_options(args)
         self.description = describe_carrier(args.carrier)
         self.events, self.frames, self.calls = [], [], []
+        self.event_sink = getattr(args, "event_sink", None)
         self.responses = queue.Queue()
         self.host_requests = queue.Queue(maxsize=16)
         self.errors = queue.Queue()
@@ -273,12 +274,10 @@ class SDKHost:
                 if body.get("method") == "session.event":
                     if "id" in body:
                         raise ValueError("notification carried an RPC ID")
-                    self.events.append(
-                        {
-                            "elapsed": time.perf_counter() - self.started,
-                            **body["params"],
-                        }
-                    )
+                    event = {"elapsed": time.perf_counter() - self.started, **body["params"]}
+                    self.events.append(event)
+                    if self.event_sink is not None:
+                        self.event_sink(event)
                 elif body.get("method") == "invoke.call" and "id" in body:
                     # Tests answer upstream calls separately from downstream
                     # control replies; their numeric IDs may legitimately match.

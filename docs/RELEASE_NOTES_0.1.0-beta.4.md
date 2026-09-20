@@ -5,6 +5,13 @@ human-quality qualification. Current-host installed/browser acceptance and
 the actual eight-hour endurance result remain open at publication preparation.
 Successful public download/hash readback is a separate publication check.
 
+September 20 source addendum: beta.4 is public. The scheduled eight-hour run
+failed and remains unqualified; see [its postmortem](MEETING_EIGHT_HOUR_RESULT_20260919.md).
+Overlapping voices can still be merged into one transcript and misattributed by
+the pooled-utterance UID path. A speaker-aware reference now passes its first
+small recorded panel, but is not part of this signed release. The source update
+does not alter the historical release notes already uploaded to GitHub.
+
 ## Changes
 
 - Output-only native speech sessions: speak typed replies without opening a

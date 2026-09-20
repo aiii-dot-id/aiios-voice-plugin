@@ -38,7 +38,8 @@ python3 -m venv .build/test-venv
 .build/test-venv/bin/python -m pytest -q --fail-on-skips \
   tests/test_catalog_preparation.py tests/test_release_status_scope.py \
   tests/test_speaker_input_documentation.py tests/test_speaker_aware_score.py \
-  tests/test_speaker_aware_reference.py
+  tests/test_speaker_aware_reference.py tests/test_native_meeting_endurance.py \
+  tests/test_sdk_host_construction.py
 ```
 
 On Windows use the environment's `Scripts/python.exe`. Historical audit tests

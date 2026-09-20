@@ -5,9 +5,19 @@ Do not create separate plugin IDs per desktop, a second installer or a parallel
 catalog. The package's version, host window and platform declarations are
 authoritative; catalog metadata must match them exactly.
 
-## Current preparation
+## Current release and source preparation
 
-The next prepared tag is `v0.1.0-beta.4`, package
+Public prerelease `v0.1.0-beta.4` was published on September 18, 2026. GitHub
+source at `079cff3` has passing source-contract jobs on all three desktops.
+The September 20 update is a **source update**, not a beta.5 package: it adds
+the measured speaker-aware reference, tests, corrected endurance evidence and
+current documentation. See [the preparation record](SOURCE_UPDATE_20260920.md).
+Native multitalker integration is not yet shipped. No tag or signed binary
+should be replaced to make source work look like a released capability.
+
+## Frozen beta.4 preparation record
+
+The prepared and subsequently published tag is `v0.1.0-beta.4`, package
 `id.aiii.voice-0.1.0-beta.4.aiiospkg`, minimum host `0.1.8`. The signed archive is
 9,477,409 bytes, SHA-256:
 
@@ -100,8 +110,8 @@ The full acceptance sequence below remains the target for a qualified release.
    assets plus checksums and release notes to a **draft prerelease**. Do not
    overwrite an existing tag or published asset with changed bytes.
 2. Close the recorded installed/browser acceptance gates on the exact host
-   and package. The actual eight-hour run is pending until its terminal
-   result exists. A source pass is not a substitute for either gate.
+   and package. The original eight-hour run failed; preserve that result and
+   require a new completed run. A source pass is not a substitute for either gate.
 3. Publish the prerelease only after that release decision. Independently
    download every release-owned asset anonymously and compare full body size
    and SHA-256 to the handoff. A successful HTTP HEAD or URL listing is not

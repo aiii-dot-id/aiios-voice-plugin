@@ -50,6 +50,9 @@ implementation evidence is in
 [`docs/OUTPUT_ONLY_DELIVERY_20260918.md`](docs/OUTPUT_ONLY_DELIVERY_20260918.md).
 The signed beta.4 artifact and its remaining gates are recorded in
 [`docs/DESKTOP_BETA4_HANDOFF_20260918.md`](docs/DESKTOP_BETA4_HANDOFF_20260918.md).
+The [September 20 source update](docs/SOURCE_UPDATE_20260920.md) includes the
+speaker-aware reference and repaired endurance harness. They do not replace the
+published native beta.4 package or resolve its overlapping-speaker limitation.
 A clean source landing is not a replacement signature or installed-product
 qualification. Historical evidence audits require the bound external artifacts;
 missing evidence is not silently converted into a passing gate.

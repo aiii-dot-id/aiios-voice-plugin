@@ -2,7 +2,9 @@
 
 One signed native T3 integration candidate, three desktop variants. This is
 source, engine, packaging and signature delivery, not an installed release
-acceptance verdict. No public upload or live-identity replacement occurred.
+acceptance verdict. At original preparation, no public upload or live-identity
+replacement had occurred. Beta.4 was subsequently published on September 18;
+see the [current source/release status](SOURCE_UPDATE_20260920.md).
 
 ## Exact deliverable
 
@@ -94,15 +96,16 @@ selects 24 model/data files from the package's 25-file union.
 
 Evidence roots: this metadata worktree's `test-results`, and
 `/path/to/work/voice-delivery-20260918/test-results` plus its
-`.build/windows-signed-output-only-r1`. The active meeting test remains in the
-latter source checkout, deliberately unchanged by the schema correction.
+`.build/windows-signed-output-only-r1`. The meeting test ran in the latter
+source checkout, deliberately unchanged by the schema correction. Its terminal
+failure is recorded in [the September 19 postmortem](MEETING_EIGHT_HOUR_RESULT_20260919.md).
 
 ## Remaining gates, explicitly separated
 
-1. The actual eight-hour wall-clock meeting run is still active, not passed.
-   Its recorded speech and silence are paced in real time; it requires finals
-   and UID observations, no synthesis, and capture limit zero. A short smoke
-   is not substituted for endurance.
+1. The scheduled eight-hour run failed its terminal coverage check. A
+   pre-roll-sensitive validator defect was reproduced, but the original harness
+   did not persist final events, so that run's actual coverage/cause cannot be
+   certified. The failure is preserved; endurance remains unqualified.
 2. Joint installed output-only routing waits on the host mode owner. Test the
    exact host artifact that includes routing, not merely any binary printing
    0.1.8. Host 5b3363f0 supplies the optional-input driver/pump; it is not evidence
@@ -112,10 +115,10 @@ latter source checkout, deliberately unchanged by the schema correction.
    close, known/unknown and allow/ignore handling, interruption/opening words,
    recovery, Finish, Abort, reopen, render receipts and retirement. SDK receipts
    were simulated and do not prove a browser rendered audio.
-4. Public upload, signed catalog integration and anonymous hosted-byte readback
-   have not occurred. The seventeen unchanged upstream downloads retain their
-   complete anonymous body-hash evidence from September 17; this is not a claim
-   of a fresh network download today.
+4. Publication is no longer pending: beta.4 is a public prerelease. The source
+   update does not replace its signed bytes, re-sign the catalog, or claim a new
+   network/acoustic/installed qualification. Historical body-hash evidence and
+   the still-open installed gates remain distinct.
 
 No mobile, multilingual, broad speaker false-accept accuracy, physical-audio
 quality or human-level qualification is implied by this candidate.
