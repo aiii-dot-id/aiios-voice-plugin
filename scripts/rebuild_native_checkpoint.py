@@ -1,7 +1,7 @@
 """Rebind an explicitly selected native parent to the current carrier source.
 
 Parent execution evidence is not inherited. Only verified unchanged runtime and
-model bytes are reused; changed worker/ASR images and the SDK require new proof.
+model bytes are reused; every changed native image requires new proof.
 """
 import argparse
 import copy
@@ -84,11 +84,34 @@ def write_current_settings(worker, runtime, out):
     return settings
 
 
+def optional_libraries(profile, *, uid_frontend=None, uid=None, tts=None):
+    """Replace only explicitly selected, already declared native components."""
+    suffix = {'darwin': '.dylib', 'linux': '.so', 'windows': '.dll'}[profile['platform']]
+    selected = {}
+    for stem, source in (('aiii_uid_frontend', uid_frontend),
+                         ('aii_native_uid', uid), ('native_pocket_resident', tts)):
+        if source is None:
+            continue
+        source = Path(source)
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('replacement must be an explicit regular library file')
+        matches = [name for name in profile['files']
+                   if Path(name).name in (stem+suffix, 'lib'+stem+suffix)]
+        if len(matches) != 1:
+            raise ValueError('parent native library layout differs: '+stem)
+        safe_relative(matches[0])
+        selected[matches[0]] = source.resolve()
+    return selected
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('parent', 'worker', 'asr', 'session-library', 'out', 'go'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--parent-sha256', required=True)
+    for name in ('uid-frontend', 'uid', 'tts'):
+        parser.add_argument('--'+name, type=Path,
+                            help='Explicit replacement for an existing declared native library; fresh qualification required')
     args = parser.parse_args()
     parent, out = args.parent.resolve(), args.out.resolve()
     frozen, profile, bindings = parent_bytes(parent, args.parent_sha256)
@@ -104,6 +127,8 @@ def main():
     if len(sessions) != 1:
         raise ValueError('parent session library layout differs')
     replacements[sessions[0]] = args.session_library.resolve()
+    replacements.update(optional_libraries(profile, uid_frontend=args.uid_frontend,
+                                          uid=args.uid, tts=args.tts))
     for path in replacements.values():
         bindings[str(path)] = sha(path)
     bindings[str(Path(__file__).resolve())] = sha(Path(__file__))

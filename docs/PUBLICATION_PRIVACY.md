@@ -22,6 +22,12 @@ appropriate signatures and focused qualification. Do not edit signed downloads
 in place, reuse their digest for changed bytes or claim that rewriting Git
 removes embedded binary strings.
 
+The next candidate is `0.1.0-beta.5`. Its privacy-clean rebuild is in preparation;
+it is not yet a signed or install-qualified release. The native build module and
+binary scanner described in [development](DEVELOPMENT.md) cover release-owned
+images. Existing beta.4 assets remain immutable. This rebuild does not integrate
+the speaker-aware reference or resolve mixed-speaker attribution.
+
 Already fetched copies, forks and cached old commit views may survive a history
 rewrite. Repository owners must handle any required hosting-provider cache
 removal separately. An ordinary cleanup commit cannot remove its ancestors.

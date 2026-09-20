@@ -30,6 +30,8 @@ jobs:
         run: cmake --build .build/native-contracts --config Release --parallel 4
       - name: Run contracts
         run: ctest --test-dir .build/native-contracts -C Release --output-on-failure --no-tests=error
+      - name: Prove nested C and C++ build paths are private
+        run: python tests/test_native_source_privacy.py
 
   publication-contracts:
     runs-on: ubuntu-24.04
@@ -59,3 +61,5 @@ jobs:
           tests/test_native_meeting_endurance.py
           tests/test_sdk_host_construction.py
           tests/test_public_privacy.py
+          tests/test_native_binary_privacy.py
+          tests/test_native_rebuild_libraries.py

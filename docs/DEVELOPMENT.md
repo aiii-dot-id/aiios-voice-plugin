@@ -39,7 +39,8 @@ python3 -m venv .build/test-venv
   tests/test_catalog_preparation.py tests/test_release_status_scope.py \
   tests/test_speaker_input_documentation.py tests/test_speaker_aware_score.py \
   tests/test_speaker_aware_reference.py tests/test_native_meeting_endurance.py \
-  tests/test_sdk_host_construction.py tests/test_public_privacy.py
+  tests/test_sdk_host_construction.py tests/test_public_privacy.py \
+  tests/test_native_binary_privacy.py tests/test_native_rebuild_libraries.py
 ```
 
 On Windows use the environment's `Scripts/python.exe`. Historical audit tests
@@ -55,6 +56,30 @@ Linux, Windows and macOS, and the package/catalog, hearing and privacy files abo
 Linux. It has read-only repository permissions and does not acquire models,
 sign, publish, install a plugin or certify hardware acceleration. A locally
 passing command is not a claim that its first GitHub-hosted run has completed.
+
+## Privacy-clean native builds
+
+Configure each release-owned CMake component, including its nested dependencies,
+with `-DCMAKE_PROJECT_INCLUDE=/path/to/repository/runtime/cmake/SourcePrivacy.cmake`.
+Use a fresh build directory and explicit dependency source roots. The module
+normalizes file macros and debug paths without changing numerical compiler
+options. Darwin debug-map object locations become build-relative; MSVC enables
+deterministic path mapping and uses embedded object debug information so a
+mapped compiler-PDB path cannot become an output location.
+
+Run `python tests/test_native_source_privacy.py` on each target. It compiles and
+executes C and C++ targets in both Release and RelWithDebInfo, including an
+external dependency and paths containing spaces. The test checks the actual
+file macros and executable bytes, not merely successful compiler exit codes.
+Before packing and again after signing, run
+`python -m scripts.check_native_binary_privacy /path/to/owned/image ...`.
+Its category-only report binds each inspected image by hash; it does not replace
+manual review of arbitrary personal data, vendor notices or archive metadata.
+
+`rebuild_native_checkpoint` accepts optional `--uid-frontend`, `--uid` and `--tts`
+images. They must replace uniquely named existing components. The parent stays
+unchanged, every new image is bound, and execution/signing/installation claims
+are reset. A changed binary never inherits its parent's qualification.
 
 ## Go carrier
 
