@@ -1,7 +1,9 @@
 # Desktop beta.5 preparation
 
-Candidate version: **0.1.0-beta.5**. This is preparation, not a published,
-signed or installed-qualified release. The existing beta.4 remains unchanged.
+Candidate version: **0.1.0-beta.5**. The unified desktop package is now
+T3-signed and verified by the capability-bearing host. Publication and installed
+qualification are separate remaining gates; beta.4 is still the public entry.
+See [the signed package checkpoint](BETA5_SIGNED_PACKAGE.md).
 
 Latest execution status: [three-desktop native engine checkpoint](DESKTOP_ENGINE_CHECKPOINT_20260921.md).
 The dated privacy-only and containment results below are earlier milestones,

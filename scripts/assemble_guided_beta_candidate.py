@@ -25,6 +25,7 @@ from scripts.intel_openmp_redist import verified_notices as openmp_notices
 TEMPLATE=ROOT/'deliverables/desktop-beta-release-20260915-r1/portable-windows-family-r1/author'
 TEMPLATE_SHA='d6c0cee9feab43bf6c07a79ad870966a10cff342d9b0406b2e8b4297e50a9a7b'
 PLATFORMS = frozenset(('macos', 'linux', 'windows'))
+HEARING_REVIEW_ITEM = 'Review the bound native-multitalker model terms and redistribution notices for this release.'
 
 
 def candidate_inputs(path):
@@ -237,10 +238,35 @@ def hearing_replacement(cfg, index, model_template, notice_root):
     updated['hearing_replacement'] = record
     # A prior model's legal disposition cannot qualify these different weights.
     updated['distribution_review_complete'] = False
-    updated['open_items'].append('Review the bound native-multitalker model terms and redistribution notices for this release.')
+    updated['open_items'].append(HEARING_REVIEW_ITEM)
     cfg['models'] = copy.deepcopy(model['models'])
     index.clear(); index.update(updated)
     return files
+
+
+def apply_hearing_disposition(index, cfg, notices, source, digest):
+    """Resolve only this export's review; never inherit unrelated clearance."""
+    if sha(source) != digest:
+        raise ValueError('hearing disposition changed')
+    review = json.loads(source.read_text())
+    record = index.get('hearing_replacement', {})
+    models = {m['path']: dict(sha256=m['sha256'], bytes=m['size'])
+              for m in cfg['models'] if m['path'].startswith('stt/')}
+    packed = {n['path']: dict(sha256=n['sha256'], bytes=n['size']) for n in notices}
+    expected = {'notices/native-multitalker/' + name: row for name, row in record.get('files', {}).items()}
+    record_notice = packed.get('notices/native-multitalker/HEARING-REPLACEMENT.json', {})
+    if (review.get('engineering_distribution_review') != 'bound_hearing_terms_reviewed'
+            or review.get('resolved_item') != HEARING_REVIEW_ITEM
+            or index['open_items'].count(HEARING_REVIEW_ITEM) != 1
+            or not models or models != record.get('models') or models != review.get('models')
+            or review.get('record_sha256') != record_notice.get('sha256')
+            or not expected or review.get('notices') != expected
+            or any(packed.get(name) != row for name, row in expected.items())
+            or not review.get('reasoning') or not review.get('limitations')):
+        raise ValueError('hearing disposition scope or bytes differ')
+    index['open_items'] = [s for s in index['open_items'] if s != HEARING_REVIEW_ITEM]
+    index['hearing_distribution_disposition'] = dict(source_sha256=digest, **review)
+    # The remaining components still require their independently bound review.
 
 
 def apply_distribution_disposition(index, cfg, profiles, notices, source, digest):
@@ -290,6 +316,8 @@ def main():
     p.add_argument('--hearing-model-template-sha256')
     p.add_argument('--hearing-notices',type=Path)
     p.add_argument('--hearing-notices-sha256')
+    p.add_argument('--hearing-disposition',type=Path)
+    p.add_argument('--hearing-disposition-sha256')
     p.add_argument('--distribution-addendum',type=Path)
     p.add_argument('--distribution-addendum-sha256')
     p.add_argument('--version',help='New immutable release version; never overwrite a published tag')
@@ -412,6 +440,10 @@ def main():
         declared_urls='pinned_upstream_and_new_release_destinations',
         public_release_url_availability='not_asserted_by_assembly',
         supersedes_original_collection_note=historical)
+    if a.hearing_disposition or a.hearing_disposition_sha256:
+        if not (a.hearing_disposition and a.hearing_disposition_sha256):
+            raise ValueError('complete hearing disposition binding required')
+        apply_hearing_disposition(index,cfg,notice_rows,a.hearing_disposition,a.hearing_disposition_sha256)
     if a.distribution_addendum or a.distribution_addendum_sha256:
         if not (a.distribution_addendum and a.distribution_addendum_sha256):
             raise ValueError('complete distribution disposition binding required')

@@ -79,3 +79,4 @@ jobs:
           tests/test_separated_signing_input.py
           tests/test_hearing_release_inventory.py
           tests/test_distribution_disposition.py
+          tests/test_hearing_distribution_disposition.py
