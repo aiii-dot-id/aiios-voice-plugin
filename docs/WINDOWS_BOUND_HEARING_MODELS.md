@@ -41,3 +41,12 @@ On Windows, placing the exact runtime DLL beside a standalone diagnostic is
 necessary: adding its directory to `PATH` alone can still select an older
 system-installed ONNX Runtime earlier in DLL search order. The shipped worker
 already uses the side-by-side runtime layout.
+
+## Verified candidate
+
+The invalid-file and six-real-graph probes passed on the repaired Windows
+build, including the non-ASCII-directory case. Both unsigned and final signed
+SDK speech/UUID panels passed. The re-signed unified archive named in
+[the package checkpoint](BETA5_SIGNED_PACKAGE.md) then passed the real installed
+host journey under unchanged AppContainer containment. This closes the
+filename-loader startup defect without changing SDK behavior or host grants.
