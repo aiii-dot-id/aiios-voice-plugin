@@ -70,10 +70,13 @@ The host must consume exact-segment UUID/revision/continuity metadata in live
 identity input, stored readback and the UI. UUID include/exclude policy must use
 that attribution, hold/refuse unresolved allow-list input, and fence stale
 updates. Neither an acoustic UUID nor an operator-chosen label is authority.
-An old host discarding these new fields does not qualify this feature. A bounded
-host consumer is committed separately, with focused race, live-steering and
-browser tests passing; complete host qualification and landing remain pending.
-This changes the existing speech interface's consumer, not the Plugin SDK.
+An old host discarding these new fields does not qualify this feature. The bounded
+host consumer landed at `79320fa92b3255e990536ec10105d7481cd9603c`, with the complete
+host gate passing: build/vet, uncached exact-once race scopes, cross-build matrix,
+static checks, cross-platform vet and packaging. Focused live-steering and
+Chrome/Firefox page proofs also pass. This changes the existing speech
+interface's consumer, not the Plugin SDK. Installed real-engine/browser and
+unsharded release/reference qualification are separate remaining gates.
 
 ## General-purpose SDK boundary
 
@@ -84,6 +87,9 @@ operations, events and private-file broker calls; it needs no knowledge of the
 models, native library layout, speaker registry or its worker scheduling.
 Other plugin types gain no voice-specific requirements. Voice engines that do
 not produce these optional fields retain the existing observation contract.
+In particular, sample timestamps or a cutoff alone do not claim a speaker track;
+only an explicit track declaration opts into the segmented join. The unchanged
+SDK voice example remains in the complete host regression gate.
 
 Required next gates remain the consumer's capability-bearing minimum version,
 installed/browser acceptance, final publisher/T3 signatures, final-byte meeting
