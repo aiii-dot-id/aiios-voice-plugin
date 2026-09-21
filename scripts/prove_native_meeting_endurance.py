@@ -19,6 +19,7 @@ from scripts.audio_contract import normalize_pcm_wav
 from scripts.build_plugin_carrier import SDK_SOURCE
 from scripts.native_checkpoint_binding import sha, verify_checkpoint
 from scripts.prove_guided_capture_sdk import Broker
+from scripts.speaker_registry_test_host import RegistryBroker
 from scripts.prove_plugin_sdk_engine import SDKHost
 from scripts.score_speaker_aware import distance, words
 from runtime.plugin_engine.audio import Frame, PCM
@@ -54,7 +55,8 @@ def process_memory(root):
 
 
 def validate_observations(finals, observations, total, recording_samples, period,
-                          expected_text, *, pre_roll=32*512, tail=3*16000):
+                          expected_text, *, pre_roll=32*512, tail=3*16000,
+                          continuous_context=False):
     """Associate each final once, tolerating bounded context but not lost speech."""
     reference = words(expected_text)
     if not reference or not 0 < recording_samples < period or total < recording_samples:
@@ -64,15 +66,28 @@ def validate_observations(finals, observations, total, recording_samples, period
     if not seqs or len(set(seqs)) != len(seqs) or len(set(refs)) != len(refs) or set(seqs) != set(refs):
         raise AssertionError('missing or duplicate finals/speaker observations')
     groups = {start: [] for start in range(0, total-recording_samples+1, period)}
-    for e in finals:
+    previous_end = 0
+    for e in sorted(finals, key=lambda event: event['end_sample']):
         lo, hi = e['start_sample'], e['end_sample']
         if type(lo) is not int or type(hi) is not int or not 0 <= lo < hi <= total:
             raise AssertionError('final outside source clock')
-        matches = [s for s in groups if lo < s+recording_samples and hi > s]
+        if continuous_context:
+            # The integrated recognizer retains silence since its prior final.
+            # Its extent names consumed context, explicitly not word alignment.
+            # Require non-overlapping context and an end inside exactly one
+            # recording/tail window; content scoring still catches dropped or
+            # duplicated words. Never accept one final covering two periods.
+            if lo != previous_end:
+                raise AssertionError('continuous context has a gap or overlap')
+            matches = [s for s in groups if s < hi <= s+recording_samples+tail]
+            previous_end = hi
+        else:
+            matches = [s for s in groups if lo < s+recording_samples and hi > s]
         if len(matches) != 1:
             raise AssertionError('final spans multiple periods or misses every recording')
         start = matches[0]
-        if lo < max(0, start-pre_roll) or hi > min(total, start+recording_samples+tail):
+        if ((not continuous_context and lo < max(0, start-pre_roll))
+                or hi > min(total, start+recording_samples+tail)):
             raise AssertionError('final exceeds bounded pre-roll/tail')
         groups[start].append(e)
     coverage = []
@@ -130,6 +145,22 @@ def retire_owners(report, host, broker):
         report['passed'] = False
 
 
+def validate_registry_observations(finals, observations):
+    """A solo endurance recording must retain one acoustic UUID, not just count events."""
+    by_sequence = {event['sequence']: event for event in finals}
+    identities = set()
+    for event in observations:
+        final = by_sequence[event['refers_to']]
+        assert all(event.get(key) == final.get(key) for key in
+                   ('session_id', 'track_id', 'start_sample', 'end_sample'))
+        assert final.get('track_id') and event.get('speaker_uuid')
+        assert event.get('continuity') in ('new_profile', 'matched')
+        assert event.get('used_for_permissions') is False
+        identities.add(event['speaker_uuid'])
+    assert len(identities) == 1, 'solo speaker UUID did not remain stable'
+    return dict(stable_uuid_count=len(identities), exact_segment_joins=len(observations))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--checkpoint', type=Path, required=True)
@@ -138,6 +169,7 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--seconds', type=int, default=8*3600)
     p.add_argument('--period', type=int, default=60)
+    p.add_argument('--registry', action='store_true', help='Require the integrated anonymous UUID registry')
     a = p.parse_args()
     if os.name != 'posix':
         raise ValueError('this harness requires POSIX nonblocking pipe readiness')
@@ -147,7 +179,7 @@ def main():
                   period_seconds=a.period, bindings={}, snapshots=[],
                   requested_eight_hours=a.seconds >= 8*3600, full_eight_hour_run=False,
                   expected_text=a.expected_text, status='preflight', process_started=False,
-                  process_retired=False)
+                  process_retired=False, resident_registry=a.registry)
     host = broker = None
     started, position = None, 0
     journal = EventJournal(out/'events.jsonl')
@@ -164,7 +196,8 @@ def main():
         frozen, _, _, bindings = verify_checkpoint(cp)
         bindings[str(Path(__file__).resolve())] = sha(Path(__file__))
         for name in ('prove_plugin_sdk_engine.py', 'prove_guided_capture_sdk.py',
-                     'score_speaker_aware.py', 'native_checkpoint_binding.py'):
+                     'score_speaker_aware.py', 'native_checkpoint_binding.py',
+                     'speaker_registry_test_host.py'):
             path = Path(__file__).with_name(name)
             bindings[str(path.resolve())] = sha(path)
         bindings[str(a.recorded_input.resolve())] = sha(a.recorded_input)
@@ -177,11 +210,12 @@ def main():
             runtime_manifest_sha=frozen['runtime_manifest_sha256'],
             model_data_root=Path(frozen['models_root']),
             operator_settings={'capture_limit_minutes': 0, 'turn_pause_ms': 768},
-            extra_host_operations=['fs.read'], event_sink=journal.append)
+            extra_host_operations=['fs.read', 'fs.write', 'fs.publish'] if a.registry else ['fs.read'],
+            event_sink=journal.append)
         cfg.output.mkdir()
         host = SDKHost(cfg)
         report['process_started'] = True
-        broker = Broker(host, out/'private-fixture')
+        broker = RegistryBroker(host) if a.registry else Broker(host, out/'private-fixture')
         report['ready'] = host.readiness()
         sid = 'meeting-endurance'
         host.call('open', dict(session_id=sid, mode='meeting', input_handle='mic',
@@ -212,6 +246,11 @@ def main():
                 assert state['input']['state'] == 'accepting' and state['input_completion'] is None
                 assert state['operator_settings']['capture_limit_minutes'] == 0
                 assert state['bookkeeping']['unresolved_generations'] == 0
+                assert state['bookkeeping']['identity_fences'] == 0
+                assert state['bookkeeping']['session_fences'] <= 1
+                assert len(state.get('attributions', [])) <= 128
+                if a.registry:
+                    assert len(broker.storage) <= 3 and sum(map(len, broker.storage.values())) <= 16<<20
                 assert not host.frames and not any(e['type'] == 'failure' for e in host.events)
                 report['snapshots'].append(dict(wall_seconds=time.monotonic()-started,
                     fed_samples=position, state=state, processes=process_memory(host.process.pid)))
@@ -231,9 +270,14 @@ def main():
         finals = [e for e in host.events if e['type'] == 'transcript_final']
         observations = [e for e in host.events if e['type'] == 'speaker_observation']
         report['coverage'] = validate_observations(finals, observations, total, len(pcm)//2,
-                                                   period, a.expected_text)
+                                                   period, a.expected_text,
+                                                   continuous_context=a.registry)
         assert not host.frames and not any(e['type'] == 'failure' for e in host.events)
-        assert all(c['operation'] == 'fs.read' for c in broker.calls)
+        if a.registry:
+            report['registry'] = validate_registry_observations(finals, observations)
+            report['registry']['stored_bytes'] = sum(map(len, broker.storage.values()))
+        else:
+            assert all(c['operation'] == 'fs.read' for c in broker.calls)
         report.update(finals=finals, speaker_observations=observations,
                       completion=completion, wall_seconds=time.monotonic()-started,
                       fed_samples=position, max_source_lag_seconds=max_lag)

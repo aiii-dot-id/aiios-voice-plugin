@@ -10,10 +10,27 @@ import pytest
 
 from scripts.prove_native_meeting_endurance import (
     EventJournal, retain_observations, retire_owners, validate_observations,
+    validate_registry_observations,
 )
 from scripts.prove_plugin_sdk_engine import SDKHost
 
 TEXT = 'please keep the opening words cobalt lantern seventeen recovery is complete'
+
+
+@pytest.mark.parametrize('damage', [None, 'track', 'uuid', 'provisional', 'authority'])
+def test_registry_endurance_requires_exact_stable_solo_attribution(damage):
+    finals = [dict(sequence=i, session_id='meeting', track_id=f'track-{i}',
+                   start_sample=i*100, end_sample=i*100+20) for i in (1, 2)]
+    observations = [dict(**e, refers_to=e['sequence'], speaker_uuid='a',
+                         continuity='matched', used_for_permissions=False) for e in finals]
+    if damage == 'track': observations[1]['track_id'] = 'stale'
+    elif damage == 'uuid': observations[1]['speaker_uuid'] = 'b'
+    elif damage == 'provisional': observations[1]['continuity'] = 'provisional'
+    elif damage == 'authority': observations[1]['used_for_permissions'] = True
+    if damage:
+        with pytest.raises(AssertionError): validate_registry_observations(finals, observations)
+    else:
+        assert validate_registry_observations(finals, observations)['exact_segment_joins'] == 2
 
 
 def final(sequence, start):
@@ -39,6 +56,23 @@ def test_actual_preroll_regression_geometry():
               dict(sequence=2, start_sample=943616, end_sample=1120000, text=TEXT)]
     assert len(validate_observations(events, [dict(refers_to=1), dict(refers_to=2)],
                                     1920000, 160000, 960000, TEXT)) == 2
+
+
+@pytest.mark.parametrize('damage', [None, 'context_gap', 'context_overlap', 'lost_period', 'words'])
+def test_continuous_context_is_not_claimed_as_word_alignment(damage):
+    events = [dict(sequence=1, start_sample=0, end_sample=97792, text=TEXT),
+              dict(sequence=2, start_sample=97792, end_sample=1056768, text=TEXT)]
+    if damage == 'context_gap': events[1]['start_sample'] += 1
+    elif damage == 'context_overlap': events[1]['start_sample'] -= 1
+    elif damage == 'lost_period': events = [dict(sequence=1,start_sample=0,end_sample=1056768,text=TEXT)]
+    elif damage == 'words': events[1]['text'] = 'stale wrong words'
+    def check():
+        return validate_observations(events, [dict(refers_to=e['sequence']) for e in events],
+            1920000,112400,960000,TEXT,continuous_context=True)
+    if damage:
+        with pytest.raises(AssertionError): check()
+    else:
+        assert len(check()) == 2
 
 
 @pytest.mark.parametrize('damage', ['missing_uid', 'duplicate_uid', 'duplicate_final',
