@@ -3,6 +3,10 @@
 Candidate version: **0.1.0-beta.5**. This is preparation, not a published,
 signed or installed-qualified release. The existing beta.4 remains unchanged.
 
+Latest execution status: [three-desktop native engine checkpoint](DESKTOP_ENGINE_CHECKPOINT_20260921.md).
+The dated privacy-only and containment results below are earlier milestones,
+not descriptions of the current integrated recognizer or release completion.
+
 **Release requirement, September 20:** the next release must contain the latest
 accepted changes, especially the installed speaker-attribution repair. A
 privacy-only rebuild is not an acceptable next release. Publication and catalog
