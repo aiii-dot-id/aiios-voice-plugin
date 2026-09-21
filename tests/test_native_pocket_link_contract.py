@@ -1,5 +1,6 @@
 """Real link check: an old Linux adapter cannot silently lose device readback."""
 from pathlib import Path
+import ctypes
 import shutil
 import subprocess
 
@@ -13,6 +14,24 @@ if BROKEN_CMAKE:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_profile_export_builds_and_resolves_on_portable_runtime(tmp_path):
+    compiler = shutil.which('c++')
+    assert compiler, 'a C++ compiler is required for the real export proof'
+    library = tmp_path/'profile.so'
+    built = subprocess.run([compiler, '-std=c++17', '-shared', '-fPIC',
+        str(ROOT/'runtime/native_pocket/profiling.cpp'), '-o', str(library)],
+        capture_output=True, text=True, timeout=30)
+    assert built.returncode == 0, built.stdout+built.stderr
+    snapshot = ctypes.CDLL(str(library)).nv_profile_snapshot
+    snapshot.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t, ctypes.c_int]
+    snapshot.restype = ctypes.c_int
+    counters = (ctypes.c_uint64 * 4)()
+    assert snapshot(counters, 4, 0) == 0
+    assert list(counters) == [0]*4
+    assert snapshot(counters, 3, 0) != 0
+    assert snapshot(counters, 4, 2) != 0
 
 
 def test_readback_is_required_even_after_cached_success(tmp_path):

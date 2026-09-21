@@ -292,6 +292,41 @@ void missing_tail_is_failure() {
   check(s.status().error=="input tail missing at admitted cutoff" && !s.status().input_finished,"missing tail was silently completed");
   Event event;while(s.event(event))check(event.kind!="input_finished","missing tail minted successful input completion");
 }
+void backpressured_tail_is_not_missing(bool deliver) {
+  Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,200});
+  std::vector<float> pcm(32768,.5f);
+  check(s.feed(0,pcm.data(),pcm.size()),"initial bounded queue refused");
+  until([&]{return a.entered.load();});
+  s.finish_input(32769);
+  check(!s.feed(32768,pcm.data(),1),"blocked recognizer did not apply backpressure");
+  std::this_thread::sleep_for(600ms);
+  check(s.status().error.empty() && !s.status().input_finished,
+        "engine backpressure was called missing input");
+  // Polling and duplicate Finish do not renew a missing-tail budget.
+  s.finish_input(32769);
+  a.released=true;
+  // Retry when capacity first returns, not after draining the entire queue.
+  // Waiting for all recognition spends the transport budget on test work.
+  until([&]{return s.status().recognized>=512;});
+  if(deliver) {
+    check(s.feed(32768,pcm.data(),1),"already-present tail was refused after capacity returned");
+    s.close(false);check(s.wait_closed(1000),"backpressured tail did not drain");
+    check(a.samples==32769 && s.status().input_finished,"backpressure lost a tail sample");
+  } else {
+    s.close(false);check(s.wait_closed(1000),"missing tail deadline never resumed");
+    check(s.status().error=="input tail missing at admitted cutoff" && !s.status().input_finished,
+          "capacity return waived a truly missing tail");
+  }
+}
+void abort_bypasses_backpressured_tail() {
+  Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,200});
+  std::vector<float> pcm(32768,.5f);
+  check(s.feed(0,pcm.data(),pcm.size()),"initial queue refused");
+  until([&]{return a.entered.load();});s.finish_input(32769);
+  check(!s.feed(32768,pcm.data(),1),"tail was not backpressured");
+  s.close(true);check(s.wait_closed(1000) && a.cancelled,"Abort waited behind the held tail");
+  check(!s.status().input_finished,"Abort fabricated a completed tail");
+}
 void bounded_read_keeps_custody() {
   Asr a;Detector v;End e;Tts t;Session s(a,v,e,t);s.synthesize(1,"Preserve queued output on capacity refusal.");
   until([&]{return !s.status().synthesizing;});
@@ -321,6 +356,9 @@ int main() {
     cancel_after_stop_and_receipt();std::cout<<"stop/receipt cannot disable later compute cancellation PASS\n";
     future_finish_and_drain();std::cout<<"future Finish and early drain preserve exact tail and opening words PASS\n";
     missing_tail_is_failure();std::cout<<"missing input tail faults rather than completing PASS\n";
+    backpressured_tail_is_not_missing(true);backpressured_tail_is_not_missing(false);
+    abort_bypasses_backpressured_tail();
+    std::cout<<"backpressure suspends only the missing-tail wait; deadline resumes on capacity PASS\n";
     bounded_read_keeps_custody();std::cout<<"capacity refusal keeps event/audio custody under control fences PASS\n";
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
 }

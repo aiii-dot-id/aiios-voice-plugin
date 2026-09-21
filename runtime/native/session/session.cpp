@@ -51,6 +51,8 @@ struct Session::Impl {
   bool cutoff_set=false, recognition_active=false;
   uint64_t cutoff=0;
   std::chrono::steady_clock::time_point tail_deadline;
+  size_t backpressured_tail_count=0;
+  std::chrono::steady_clock::time_point tail_backpressure_started;
   uint64_t received=0, controlled=0, recognized=0, sequence=0, last_generation=0;
   size_t queued_output=0;
   std::string error;
@@ -63,6 +65,16 @@ struct Session::Impl {
   std::shared_ptr<Job> current;
   std::deque<SpeakerJob> speaker_jobs;
   bool speaker_busy=false;
+
+  bool input_capacity_locked(size_t count) const {
+    return received-recognized+count<=input_bound && input.size()<64;
+  }
+  void resume_tail_clock_locked() {
+    if(backpressured_tail_count && input_capacity_locked(backpressured_tail_count)) {
+      tail_deadline+=std::chrono::steady_clock::now()-tail_backpressure_started;
+      backpressured_tail_count=0;
+    }
+  }
 
   Impl(Synthesizer& t,Settings s,std::optional<Hearing> h)
       :hearing(h),tts(t),speaker(h ? h->speaker : nullptr),settings(s),
@@ -190,12 +202,14 @@ struct Session::Impl {
       {
         std::unique_lock<std::mutex> lock(mutex);
         while(!stopping && input.empty() && !finished) {
-          if(cutoff_set) {
-            if(changed.wait_until(lock,tail_deadline)==std::cv_status::timeout && !finished && input.empty())
+          resume_tail_clock_locked();
+          if(cutoff_set && !backpressured_tail_count) {
+            if(changed.wait_until(lock,tail_deadline)==std::cv_status::timeout && !finished && input.empty() && !backpressured_tail_count)
               throw std::runtime_error("input tail missing at admitted cutoff");
           } else changed.wait(lock);
         }
-        if(cutoff_set && !finished && std::chrono::steady_clock::now()>=tail_deadline)
+        resume_tail_clock_locked();
+        if(cutoff_set && !finished && !backpressured_tail_count && std::chrono::steady_clock::now()>=tail_deadline)
           throw std::runtime_error("input tail missing at admitted cutoff");
         if(stopping) return;
         if(input.empty()) break;
@@ -551,8 +565,26 @@ bool Session::feed(uint64_t start,const float* data,size_t count) {
   require(!p_->finished && !p_->stopping && (!p_->closing || p_->cutoff_set),"input admission closed");
   require(start==p_->received && p_->received<=p_->input_limit && count<=p_->input_limit-p_->received,"input clock/bound differs");
   require(!p_->cutoff_set || count<=p_->cutoff-p_->received,"audio exceeds admitted cutoff");
-  require(!p_->cutoff_set || std::chrono::steady_clock::now()<p_->tail_deadline,"input tail arrived after deadline");
-  if(p_->received-p_->recognized+count>input_bound || p_->input.size()>=64) return false;
+  p_->resume_tail_clock_locked();
+  require(!p_->cutoff_set || p_->backpressured_tail_count || std::chrono::steady_clock::now()<p_->tail_deadline,"input tail arrived after deadline");
+  if(!p_->input_capacity_locked(count)) {
+    // The caller has supplied the next valid PCM, but our bounded recognizer
+    // queue cannot take it. This is computation backpressure, not missing
+    // transport data. Suspend only that wait; status and repeated offers do
+    // not renew it. Recognition progress resumes the remaining budget even
+    // if the caller never retries. Abort still bypasses recognition.
+    if(p_->cutoff_set && !p_->backpressured_tail_count) {
+      p_->backpressured_tail_count=count;
+      p_->tail_backpressure_started=std::chrono::steady_clock::now();
+      p_->changed.notify_all();
+    }
+    return false;
+  }
+  if(p_->backpressured_tail_count) {
+    // A caller may retry its packet in smaller pieces once capacity returns.
+    p_->tail_deadline+=std::chrono::steady_clock::now()-p_->tail_backpressure_started;
+    p_->backpressured_tail_count=0;
+  }
   p_->input.emplace_back(data,data+count); p_->received+=count;
   if(p_->settings.capture_limit_minutes && p_->received==p_->input_limit && !p_->cutoff_set) {
     p_->cutoff_set=true; p_->cutoff=p_->input_limit;

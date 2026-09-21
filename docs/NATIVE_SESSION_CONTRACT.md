@@ -60,6 +60,18 @@ At most 64 unresolved generations are admitted; settled jobs are reclaimed.
 Compact replay/identity fences grow with activation ID count. There is no
 constant-total-memory or infinite-lifetime claim.
 
+## Input completion under backpressure
+
+Finish admits an immutable exclusive sample cutoff; it is not completion.
+The missing-tail budget counts time in which the engine can accept the next
+packet. A valid offered packet that the bounded recognition queue refuses
+pauses that budget, without increasing queue capacity or declaring samples
+received. Recognition progress restores capacity and resumes the remaining
+budget even if the caller never retries. Repeated offers, duplicate Finish,
+and status calls do not renew the budget. Truly missing audio still faults;
+Abort remains independent of the recognition worker. This is not a model
+execution deadline or a claim that a slow recognizer is real-time capable.
+
 ## Settings and release inputs
 
 The compiled `OperatorSettings` declaration owns defaults, labels and scopes.

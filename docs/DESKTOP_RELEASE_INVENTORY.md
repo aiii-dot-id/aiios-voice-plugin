@@ -43,6 +43,13 @@ The resident TTS build selects upstream's `custom` model composite with
 `pocket_tts` only, avoiding unrelated model implementations. Release-owned
 binaries are scanned after linking for private build paths.
 
+The adapter must export the device-placement readback interface used by the
+current session library. On Linux, checkpoint construction runs the settings
+preflight with eager symbol resolution (`LD_BIND_NOW=1`): a library that loads
+but is missing an otherwise lazily resolved entry point is rejected before
+the checkpoint is emitted. Portable profiling exports are compile-and-load
+tested too; a Windows-only export annotation cannot enter a Linux build.
+
 ## Qualification remains separate
 
 Model-free contracts, recorded-speech SDK execution, installed host/browser

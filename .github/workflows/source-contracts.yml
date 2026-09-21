@@ -72,6 +72,7 @@ jobs:
           tests/test_public_privacy.py
           tests/test_native_binary_privacy.py
           tests/test_native_rebuild_libraries.py
+          tests/test_native_pocket_link_contract.py
           tests/test_compact_multitalker_graphs.py
           tests/test_beta3_release_contract.py
           tests/test_qualified_runtime_stage.py

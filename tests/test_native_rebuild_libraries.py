@@ -10,6 +10,19 @@ from scripts.rebuild_native_checkpoint import verified_parent_models
 from scripts.rebuild_native_checkpoint import select_hearing_execution
 
 
+def test_linux_packaging_resolves_even_unused_component_imports(tmp_path,monkeypatch):
+    from scripts import rebuild_native_checkpoint as rebuild
+    monkeypatch.setattr(rebuild.sys,'platform','linux')
+    (tmp_path/'runtime/resources').mkdir(parents=True)
+    seen=[]
+    def describe(command,**kwargs):
+        seen.append(kwargs)
+        return b'[{"key":"fixture"}]'
+    monkeypatch.setattr(rebuild.subprocess,'check_output',describe)
+    rebuild.write_current_settings(tmp_path/'worker',tmp_path/'runtime',tmp_path)
+    assert seen[0]['env']['LD_BIND_NOW']=='1' and seen[0]['timeout']==30
+
+
 def test_old_recognizer_acceleration_requires_explicit_replacement(tmp_path):
     path=tmp_path/'native-profile.json'
     prior=dict(backend='vulkan',models={'tts':'tts','asr':'stt'},

@@ -35,7 +35,7 @@ def main():
     bindings[str(args.panel.resolve())] = sha(args.panel)
     bindings[str(Path(__file__).resolve())] = sha(__file__)
     panel = json.loads(args.panel.read_text())
-    report = dict(passed=False, scope=__doc__, bindings=bindings, cases=[],
+    report = dict(passed=False, scope=__doc__, bindings=bindings, cases=[], input_delivery=[],
                   persistent_uid_qualified=False, installed=False, process_retired=False,
                   sdk_revision=build['sdk_revision'], checkpoint=str(checkpoint),
                   runtime_manifest_sha256=frozen['runtime_manifest_sha256'])
@@ -107,10 +107,16 @@ def main():
             for sequence, offset in enumerate(range(0, case['samples'], 512), 1):
                 # Exercise a Finish admitted before its audio tail arrives.
                 if offset+512 >= case['samples']:
+                    delivery = dict(case=case['id'], written_samples=offset,
+                        expected_samples=case['samples'],
+                        before_finish=host.call('status', dict(session_id=sid))['input'])
+                    report['input_delivery'].append(delivery)
                     host.call('finish_input', dict(session_id=sid, stream_id='mic', end_sample=case['samples']))
+                    delivery['finish_ack_seconds'] = time.monotonic()-feed_start
                 host.to_engine.write(Frame(PCM, 7, sequence, offset, pcm[offset*2:(offset+512)*2]).encode())
                 time.sleep(max(0, min(offset+512, case['samples'])/16000-(time.monotonic()-feed_start)))
             host.to_engine.write(Frame(END, 7, sequence+1, case['samples']).encode())
+            delivery['end_written_seconds'] = time.monotonic()-feed_start
             host.event('interruption_requested', generation, session_id=sid)
             cancelled = host.event('synthesis_cancelled', generation, timeout=30, session_id=sid)
             assert cancelled['delivered_samples'] > 0

@@ -6,10 +6,12 @@ model bytes are reused; every changed native image requires new proof.
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 from scripts.native_checkpoint_binding import sha, verify_checkpoint
 from scripts.package_native_runtime import bind_carrier, runtime_inventory, safe_relative, verify
@@ -80,7 +82,12 @@ def parent_bytes(parent, freeze_sha, model_root=None):
 
 def write_current_settings(worker, runtime, out):
     """Declare the replacement worker, never inherit a parent's stale options."""
-    raw = subprocess.check_output([str(worker), '--describe-settings'], timeout=30)
+    env = dict(os.environ)
+    # ELF normally delays resolving function imports until first use. An old
+    # component can therefore pass --describe-settings and crash on recovery.
+    if sys.platform.startswith('linux'):
+        env['LD_BIND_NOW'] = '1'
+    raw = subprocess.check_output([str(worker), '--describe-settings'], timeout=30, env=env)
     settings = json.loads(raw)
     if not isinstance(settings, list) or not settings:
         raise ValueError('worker settings declaration must be a nonempty list')
