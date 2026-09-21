@@ -4,7 +4,8 @@
 [bound-model repair](WINDOWS_BOUND_HEARING_MODELS.md) has now passed the
 installed AppContainer journey, and the unified package and catalog preparation
 are re-signed against its exact bytes. Publication, anonymous acquisition and
-installed browser acceptance remain separate gates.
+cross-platform browser acceptance remain separate gates. The macOS live
+browser/identity checkpoint below has now passed.
 
 The unified `id.aiii.voice` version `0.1.0-beta.5` archive selects one of three
 native variants: macOS arm64, Windows x86-64 or Ubuntu x86-64. Each selects
@@ -49,6 +50,28 @@ readback, and deactivation with zero retained runtime references. The inputs
 were recordings and verified preseeded dependencies. This does not prove a
 fresh network installation, physical microphone/speaker quality or browser
 interaction. The eight-hour meeting run is still pending, not passed.
+
+## Installed identity and microphone controls
+
+The final signed package also passed registered identity-tool checks on all
+three desktop targets: closed-session discovery, refusal of unconfirmed naming,
+confirmed post-session naming, and confirmed forgetting in isolated test state.
+These exercised signed schemas, the host broker and registered operations, not
+only a direct SDK control call.
+
+An authenticated macOS browser/identity checkpoint verified anonymous speaker
+UUID delivery in the identity's immediate voice input and successful discovery
+after the microphone session closed. The host's three-state microphone repair
+then passed an actual Listen -> Earbud -> Off cycle: Earbud released capture,
+and Off closed the real output session. The host repair passed its complete
+canonical gate and repeated browser regression tests.
+
+Use AII OS 0.1.8 including host commit
+`f79e37ade3ff435f228d59298e7162f1330c4618` or its successor. The signed voice engine,
+models and Plugin SDK did not change for that UI repair. Existing browser pages
+must reload to receive the corrected controls. This focused live checkpoint
+does not establish broad speaker accuracy, overlap separation in arbitrary
+rooms, mobile-native qualification or physical-audio quality on every desktop.
 
 All upstream model bodies were downloaded anonymously and hash-checked again.
 Nineteen release assets and the signed-package catalog input are staged. The
