@@ -17,13 +17,14 @@ class Hearing {
                                size_t valid,size_t drop,bool final_chunk);
   void cancel() noexcept;
   size_t retained_diarization_frames() const { return diar_.frames(); }
+  const std::vector<float>& activity() const { return activity_; }
  private:
   OnnxCapture capture_;
   OnnxEncoder encoder_;
   OnnxBackend backend_;
   Decoder decoder_;
   DiarCache diar_;
-  std::vector<float> recent_;
+  std::vector<float> recent_,activity_;
   std::array<uint64_t,4> clocks_{};
   uint64_t epoch_=0;
   bool faulted_=false,ended_=false;

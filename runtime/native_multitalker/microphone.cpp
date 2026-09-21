@@ -6,7 +6,7 @@ Microphone::Microphone(const std::string& root,const float* mel,size_t count)
     :hearing_(root),frontend_(mel,count),mel_(mel,mel+count){}
 void Microphone::reset(uint64_t epoch) {
   hearing_.reset(epoch);frontend_=aii::asr::Frontend(mel_.data(),mel_.size());
-  epoch_=epoch;position_=0;ended_=faulted_=false;
+  epoch_=epoch;position_=0;activity_frames_=0;ended_=faulted_=false;
 }
 std::vector<MicrophoneUpdate> Microphone::accept(const float* pcm,size_t count) {
   if(!epoch_ || ended_ || faulted_)throw std::runtime_error("microphone is not open");
@@ -34,7 +34,9 @@ std::vector<MicrophoneUpdate> Microphone::consume(bool final) {
     auto features=frontend_.frames(position_-cache,take+cache);
     const bool last=final && remaining<=shift;
     auto tracks=hearing_.push(epoch_,features.data(),take+cache,take+cache,position_?2:0,last);
-    updates.push_back({position_*160,std::min((position_+take)*160,frontend_.samples()),std::move(tracks)});
+    const auto& activity=hearing_.activity();
+    updates.push_back({position_*160,std::min((position_+take)*160,frontend_.samples()),std::move(tracks),activity_frames_,activity});
+    activity_frames_+=activity.size()/4;
     position_+=shift;
     const size_t next=position_>9?(position_-9)*160:0;
     const size_t retain=next>257?next-257:0;

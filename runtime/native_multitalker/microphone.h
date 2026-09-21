@@ -6,6 +6,10 @@ namespace aii::multitalker {
 struct MicrophoneUpdate {
   uint64_t start_sample=0,end_sample=0;
   std::vector<TrackUpdate> tracks;
+  // Native diarizer clock: 8 feature hops (80 ms) per prediction. This is
+  // activity evidence, NOT a separated waveform or an identity assertion.
+  uint64_t activity_start_frame=0;
+  std::vector<float> activity;
 };
 // Incremental 16 kHz mono capture. Keeps only the next feature window and its
 // nine-frame left context, while the recognizers own bounded speaker caches.
@@ -22,7 +26,7 @@ class Microphone {
   aii::asr::Frontend frontend_;
   std::vector<float> mel_;
   size_t position_=0;
-  uint64_t epoch_=0;
+  uint64_t epoch_=0,activity_frames_=0;
   bool ended_=false,faulted_=false;
   std::vector<MicrophoneUpdate> consume(bool final);
 };

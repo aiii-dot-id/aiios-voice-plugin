@@ -1,4 +1,5 @@
 #include "microphone.h"
+#include "speaker_evidence.h"
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -22,10 +23,15 @@ int main(int argc,char** argv) {
     for(int file=3;file<argc;++file) {
     const auto pcm=load(argv[file],16000*600);mic.reset(static_cast<uint64_t>(file-2));
     std::array<std::vector<int64_t>,4> tokens;
+    std::vector<float> activity;
+    aii::multitalker::SpeakerEvidence evidence;
     size_t chunks=0,maximum=0;
     auto collect=[&](const std::vector<aii::multitalker::MicrophoneUpdate>& updates){
       for(const auto& update:updates) {
         ++chunks;
+        if(update.activity_start_frame!=activity.size()/4)throw std::runtime_error("activity clock gap");
+        evidence.push(update.activity_start_frame,update.activity);
+        activity.insert(activity.end(),update.activity.begin(),update.activity.end());
         if(update.end_sample>pcm.size() || update.end_sample<=update.start_sample)
           throw std::runtime_error("microphone span outside audio");
         for(const auto& track:update.tracks)for(const auto& t:track.tokens)tokens[track.track].push_back(t.id);
@@ -45,6 +51,12 @@ int main(int argc,char** argv) {
       for(size_t i=0;i<tokens[track].size();++i){if(i)std::cout<<',';std::cout<<tokens[track][i];}
       std::cout<<']';
     }
+    std::cout<<"],\"activity\":[";
+    for(size_t i=0;i<activity.size();++i){if(i)std::cout<<',';std::cout<<activity[i];}
+    std::cout<<"],\"evidence_spans\":[";
+    const auto spans=evidence.finish(pcm.size());
+    for(size_t i=0;i<spans.size();++i){if(i)std::cout<<',';const auto& s=spans[i];
+      std::cout<<"{\"track\":"<<s.track<<",\"start\":"<<s.start<<",\"end\":"<<s.end<<",\"active_samples\":"<<s.active_samples<<'}';}
     std::cout<<"]}"<<std::endl;
     }
     return 0;

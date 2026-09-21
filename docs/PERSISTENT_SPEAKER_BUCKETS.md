@@ -11,6 +11,10 @@ current worker creates these records. The opt-in native composition now emits
 separated acoustic tracks, but has no persistent anonymous profile owner.
 Random IDs on mixed input or per-utterance track numbers do not satisfy it.
 
+The [native registry and acoustic evidence implementation](ANONYMOUS_SPEAKER_IMPLEMENTATION.md)
+now has process-restart and real-model tests. Its durable worker/host connection
+remains open; this does not change the installed capability statement above.
+
 ## Three different identities
 
 1. A **segment** is an immutable transcript unit with session, final sequence,

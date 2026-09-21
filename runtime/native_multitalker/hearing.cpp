@@ -6,7 +6,7 @@ Hearing::Hearing(const std::string& root):capture_(root),encoder_(root),backend_
 void Hearing::reset(uint64_t epoch) {
   if(!epoch || epoch<=epoch_)throw std::invalid_argument("hearing epoch must advance");
   capture_.reopen(); encoder_.reset(epoch); decoder_.reset(epoch);
-  diar_={}; recent_.clear(); clocks_={}; epoch_=epoch;faulted_=ended_=false;cancelled_.store(false);
+  diar_={}; recent_.clear(); activity_.clear(); clocks_={}; epoch_=epoch;faulted_=ended_=false;cancelled_.store(false);
 }
 void Hearing::cancel() noexcept {
   cancelled_.store(true);capture_.cancel();encoder_.cancel();decoder_.cancel();
@@ -21,6 +21,7 @@ std::vector<TrackUpdate> Hearing::push(uint64_t epoch,const float* features,size
     auto diar_chunk=capture_.preencode(features,frames,valid,drop,true);
     auto probabilities=capture_.diarize(diar_.input(diar_chunk.values));
     auto current=diar_.update(diar_chunk.values,probabilities);
+    activity_=current;
     recent_.insert(recent_.end(),current.begin(),current.end());
     if(recent_.size()>28*4)recent_.erase(recent_.begin(),recent_.end()-28*4);
     std::array<bool,4> active{};
