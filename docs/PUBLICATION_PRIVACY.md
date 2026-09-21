@@ -57,6 +57,14 @@ strip third-party license text. Loopback addresses and reserved documentation
 addresses are legitimate. Use portable placeholder paths and anonymous speaker
 labels in fixtures, and store private evidence under external evidence IDs.
 
+Audit every release-owned image, including unchanged libraries inherited from a
+parent checkpoint. A scan of only rebuilt images is not a runtime privacy gate.
+Windows source mappings must preserve both the supplied path spelling and its
+canonical form: short directory aliases can survive in compiler macros. The
+endpoint dependency uses ordinary compiler includes so its assertion paths are
+normalized consistently. Keep the assertions and verify exact numerical parity
+after a privacy rebuild; do not patch strings out of a signed image.
+
 Use the GitHub account's verified no-reply address for public commits. Do not
 merge old pre-cleanup branches into the rewritten history. Reapply and review
 needed changes without importing their old ancestry. Never push a private backup

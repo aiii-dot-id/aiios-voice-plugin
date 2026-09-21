@@ -20,13 +20,15 @@ class NativeSourcePrivacy(unittest.TestCase):
             source, external, build = (root / n for n in ('source with spaces', 'dependency with spaces', 'build with spaces'))
             source.mkdir(); external.mkdir()
             (external / 'fixture.c').write_text('const char* dependency_file(void) { return __FILE__; }\n')
+            (external / 'header.h').write_text('inline const char* header_file() { return __FILE__; }\n')
             (external / 'CMakeLists.txt').write_text('add_library(dependency STATIC fixture.c)\n')
-            (source / 'main.cpp').write_text('#include <cstdio>\nextern "C" const char* dependency_file(void);\nint main() { std::puts(__FILE__); std::puts(dependency_file()); }\n')
+            (source / 'main.cpp').write_text('#include <cstdio>\n#include <header.h>\nextern "C" const char* dependency_file(void);\nint main() { std::puts(__FILE__); std::puts(dependency_file()); std::puts(header_file()); }\n')
             helper = (ROOT / 'runtime/cmake/SourcePrivacy.cmake').as_posix()
             (source / 'CMakeLists.txt').write_text(
                 'cmake_minimum_required(VERSION 3.22)\nproject(privacy_probe LANGUAGES C CXX)\n'
                 'add_subdirectory("${UID_FRONTEND_SOURCE}" dependency)\n'
-                'add_executable(probe main.cpp)\ntarget_link_libraries(probe PRIVATE dependency)\n')
+                'add_executable(probe main.cpp)\ntarget_link_libraries(probe PRIVATE dependency)\n'
+                'target_include_directories(probe PRIVATE "${UID_FRONTEND_SOURCE}")\n')
             def run(*args):
                 result = subprocess.run(list(map(str, args)), capture_output=True, timeout=180)
                 self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
@@ -37,8 +39,14 @@ class NativeSourcePrivacy(unittest.TestCase):
             candidates = [build / 'probe', build / config / 'probe.exe', build / 'probe.exe']
             executable = next(p for p in candidates if p.is_file())
             lines = run(executable).stdout.decode().replace('\\', '/').splitlines()
-            self.assertEqual(lines, ['/aii-source/entry/main.cpp', '/aii-deps/UID_FRONTEND_SOURCE/fixture.c'],
-                             (compiled.stdout + compiled.stderr).decode(errors='replace'))
+            diagnostic = (compiled.stdout + compiled.stderr).decode(errors='replace')
+            project = build / 'probe.vcxproj'
+            if project.is_file():
+                diagnostic += '\n' + '\n'.join(line for line in project.read_text().splitlines()
+                    if '<AdditionalOptions>' in line)
+            self.assertEqual(lines, ['/aii-source/entry/main.cpp', '/aii-deps/UID_FRONTEND_SOURCE/fixture.c',
+                                     '/aii-deps/UID_FRONTEND_SOURCE/header.h'],
+                             diagnostic)
             data = executable.read_bytes()
             for private in (str(source), str(external), str(build)):
                 for spelling in (private, private.replace('\\', '/')):

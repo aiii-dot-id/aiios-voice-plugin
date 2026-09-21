@@ -37,7 +37,10 @@ target_include_directories(aii_native_endpoint PRIVATE "${ORT_INCLUDE}")
 target_link_libraries(aii_native_endpoint PRIVATE "${ORT_LIBRARY}")
 if(AII_ENDPOINT_ATEN)
   target_compile_definitions(aii_native_endpoint PRIVATE AII_ENDPOINT_ATEN)
-  target_include_directories(aii_native_endpoint SYSTEM PRIVATE "${ATEN_ROOT}/include")
+  # Use ordinary includes: CMake's MSVC /external:I form preserves mixed path
+  # separators in __FILE__, which defeats the compiler's source-path mapping.
+  # This changes warning classification only, not the bound header bytes.
+  target_include_directories(aii_native_endpoint PRIVATE "${ATEN_ROOT}/include")
   target_link_libraries(aii_native_endpoint PRIVATE "${ATEN_ROOT}/lib/torch_cpu.lib" "${ATEN_ROOT}/lib/c10.lib")
 else()
   add_library(aii_endpoint_fft STATIC fft.cpp)
