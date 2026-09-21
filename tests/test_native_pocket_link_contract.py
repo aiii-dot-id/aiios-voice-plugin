@@ -37,7 +37,9 @@ def test_profile_export_builds_and_resolves_on_portable_runtime(tmp_path):
 def test_readback_is_required_even_after_cached_success(tmp_path):
     compiler=shutil.which('c++'); cmake=shutil.which('cmake')
     assert compiler and cmake
-    source=tmp_path/'adapter.cpp'; library=tmp_path/'adapter.so'
+    # Without an ELF SONAME CMake may emit -ladapter; use the same
+    # conventional lib prefix as the production shared library on Linux.
+    source=tmp_path/'adapter.cpp'; library=tmp_path/'libadapter.so'
     def build(text):
         source.write_text(text)
         subprocess.run([compiler,'-shared','-fPIC',str(source),'-o',str(library)],
