@@ -8,3 +8,5 @@ scipy==1.15.3
 packaging==25.0
 # Declarative consumer contract validation only; never a shipped dependency.
 jsonschema==4.23.0
+# Model download-layout byte-preservation tests; never a shipped dependency.
+onnx==1.23.0

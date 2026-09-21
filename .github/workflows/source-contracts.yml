@@ -72,3 +72,4 @@ jobs:
           tests/test_public_privacy.py
           tests/test_native_binary_privacy.py
           tests/test_native_rebuild_libraries.py
+          tests/test_compact_multitalker_graphs.py

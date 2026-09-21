@@ -15,6 +15,10 @@ struct EnrollmentUnavailable : std::runtime_error { using std::runtime_error::ru
 // Private composition boundary, not a second Plugin SDK protocol. The model
 // owner outlives Session. Each interface has exactly one inference caller;
 // cancel() is the only concurrent entry and must not wait for inference.
+struct RecognizedSegment {
+  std::string track, text;
+  uint64_t start=0,end=0; // relative to this utterance's input clock
+};
 struct Recognizer {
   virtual ~Recognizer() = default;
   virtual std::string execution_info() const { return R"({"encoder_provider":"unspecified","hardware_execution_verified":false})"; }
@@ -22,6 +26,11 @@ struct Recognizer {
   virtual void begin() = 0;
   virtual std::string push(const float*, size_t) = 0;
   virtual std::string finish() = 0;
+  virtual bool separated() const { return false; }
+  // Capture-context models consume silence as well as speech. VAD still owns
+  // turn activity/commit; it must not move this recognizer's feature origin.
+  virtual bool continuous_input() const { return false; }
+  virtual std::vector<RecognizedSegment> segments() const { return {}; }
   virtual void reset() = 0;
   virtual void cancel() noexcept = 0;
 };
@@ -84,6 +93,7 @@ struct Event {
   uint64_t sequence = 0, turn = 0, generation = 0, start = 0, end = 0;
   std::string kind, text;
   uint64_t refers_to = 0; // speaker observations refer to this final sequence
+  std::string track{}; // acoustic evidence, never an enrolled-person identity
 };
 struct Audio {
   uint64_t generation = 0, start = 0;

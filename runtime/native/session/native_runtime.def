@@ -28,4 +28,5 @@ EXPORTS
     aii_voice_generation_status
     aii_voice_next_event
     aii_voice_next_event_with_reference
+    aii_voice_next_event_with_track
     aii_voice_next_audio

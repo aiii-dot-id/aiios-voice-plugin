@@ -178,4 +178,85 @@ std::vector<float> OnnxEncoder::push(uint64_t epoch, uint32_t track, const float
     return encoded;
   } catch (...) { p_->faulted=true; throw; }
 }
+
+struct OnnxCapture::Impl {
+  Ort::Env env{ORT_LOGGING_LEVEL_ERROR,"multitalker-capture"};
+  Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator,OrtMemTypeDefault);
+  Ort::RunOptions run;
+  Ort::Session asr{nullptr}, diar{nullptr}, classifier{nullptr};
+  std::atomic<bool> cancelled{false};
+  bool faulted = false;
+  explicit Impl(const std::string& root) {
+    env.DisableTelemetryEvents();
+    Ort::SessionOptions options;
+    options.SetIntraOpNumThreads(2); options.SetInterOpNumThreads(1);
+    options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
+    asr=Ort::Session(env,(std::filesystem::path(root)/"asr_preencode"/"model.onnx").c_str(),options);
+    diar=Ort::Session(env,(std::filesystem::path(root)/"diar_preencode"/"model.onnx").c_str(),options);
+    classifier=Ort::Session(env,(std::filesystem::path(root)/"diar_classifier"/"model.onnx").c_str(),options);
+    signature(asr,{"features","lengths"},{"embeddings","encoded_lengths"});
+    signature(diar,{"features","lengths"},{"embeddings","encoded_lengths"});
+    signature(classifier,{"embeddings","lengths"},{"probabilities"});
+  }
+  void available() const {
+    if(faulted || cancelled.load()) throw std::runtime_error("capture epoch retired");
+  }
+};
+OnnxCapture::OnnxCapture(const std::string& root):p_(std::make_unique<Impl>(root)){}
+OnnxCapture::~OnnxCapture()=default;
+void OnnxCapture::cancel() noexcept {
+  p_->cancelled.store(true);
+  try { p_->run.SetTerminate(); } catch (...) {}
+}
+void OnnxCapture::reopen() {
+  p_->run.UnsetTerminate(); p_->faulted=false; p_->cancelled.store(false);
+}
+CaptureEmbeddings OnnxCapture::preencode(const float* features,size_t frames,
+                                         size_t valid,size_t drop,bool diarization) {
+  p_->available();
+  if(!features || !frames || frames>1024 || !valid || valid>frames || drop>2)
+    throw std::invalid_argument("capture feature extent");
+  for(size_t i=0;i<frames*128;++i)
+    if(!std::isfinite(features[i]))throw std::invalid_argument("nonfinite capture features");
+  int64_t length=static_cast<int64_t>(valid); const int64_t one[]{1};
+  std::vector<Ort::Value> inputs;
+  inputs.push_back(floats(features,frames*128,{1,static_cast<int64_t>(frames),128},p_->memory));
+  inputs.push_back(Ort::Value::CreateTensor<int64_t>(p_->memory,&length,1,one,1));
+  const char* in[]{"features","lengths"}; const char* out[]{"embeddings","encoded_lengths"};
+  try {
+    auto results=(diarization?p_->diar:p_->asr).Run(p_->run,in,inputs.data(),2,out,2);
+    p_->available();
+    const auto width=diarization?512:1024;
+    const auto shape=results[0].GetTensorTypeAndShapeInfo().GetShape();
+    if(shape.size()!=3 || shape[0]!=1 || shape[1]<=static_cast<int64_t>(drop) ||
+       shape[1]>128 || shape[2]!=width)throw std::runtime_error("capture embedding geometry");
+    auto info=results[1].GetTensorTypeAndShapeInfo();
+    if(info.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 || info.GetShape()!=std::vector<int64_t>{1})
+      throw std::runtime_error("capture length signature");
+    const auto n=results[1].GetTensorData<int64_t>()[0];
+    if(n<=static_cast<int64_t>(drop) || n>shape[1])throw std::runtime_error("capture embedding length");
+    const auto values=checked(results[0],shape);
+    return {{values+drop*width,values+shape[1]*width},static_cast<size_t>(shape[1])-drop,
+            static_cast<size_t>(n)-drop};
+  } catch(...) { p_->faulted=true; throw; }
+}
+std::vector<float> OnnxCapture::diarize(const std::vector<float>& embeddings) {
+  p_->available();
+  if(embeddings.empty() || embeddings.size()%512 || embeddings.size()>504*512)
+    throw std::invalid_argument("capture diarization extent");
+  for(float x:embeddings)if(!std::isfinite(x))throw std::invalid_argument("nonfinite diarization input");
+  int64_t n=static_cast<int64_t>(embeddings.size()/512); const int64_t one[]{1};
+  std::vector<Ort::Value> inputs;
+  inputs.push_back(floats(embeddings.data(),embeddings.size(),{1,n,512},p_->memory));
+  inputs.push_back(Ort::Value::CreateTensor<int64_t>(p_->memory,&n,1,one,1));
+  const char* in[]{"embeddings","lengths"}; const char* out[]{"probabilities"};
+  try {
+    auto results=p_->classifier.Run(p_->run,in,inputs.data(),2,out,1);
+    p_->available();
+    const auto values=checked(results[0],{1,n,4});
+    for(int64_t i=0;i<n*4;++i)if(values[i]<0 || values[i]>1)
+      throw std::runtime_error("diarization probability range");
+    return {values,values+n*4};
+  } catch(...) { p_->faulted=true; throw; }
+}
 }

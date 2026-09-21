@@ -41,7 +41,7 @@ def main():
         import nemo
         if not Path(nemo.__file__).resolve().is_relative_to(a.nemo.resolve()):
             raise ValueError('upstream import path differs')
-        from nemo.collections.asr.parts.utils.multispk_transcribe_utils import MultiTalkerInstanceManager
+        from nemo.collections.asr.parts.utils.multispk_transcribe_utils import MultiTalkerInstanceManager, SpeakerTaggedASR
         from nemo.collections.asr.parts.mixins.multitalker_asr_mixins import SpeakerKernelMixin
         from nemo.collections.asr.parts.mixins.mixins import ASRModuleMixin
         from nemo.collections.asr.parts.submodules.rnnt_decoding import AbstractRNNTDecoding
@@ -51,6 +51,7 @@ def main():
         original_targets=SpeakerKernelMixin.set_speaker_targets
         # conformer_stream_step is inherited from ASRModuleMixin in this pin.
         original_step=ASRModuleMixin.conformer_stream_step
+        original_capture=SpeakerTaggedASR.perform_parallel_streaming_stt_spk
         epoch=0; owners=[]; clocks={}; geometry=set(); active_inputs=None; targets=None; final_chunk=False
         def reset(owner,*args,**kwargs):
             nonlocal epoch,clocks
@@ -75,9 +76,32 @@ def main():
             return original_step(owner,**kwargs)
         trace_path=a.out/'decoder.trace'
         conditioned_path=a.out/'conditioned.trace'
-        with trace_path.open('xb') as trace, conditioned_path.open('xb') as conditioned:
+        capture_path=a.out/'capture.trace'
+        with trace_path.open('xb') as trace, conditioned_path.open('xb') as conditioned, capture_path.open('xb') as capture:
             trace.write(b'AIIMTR01')
             conditioned.write(b'AIIMTR02')
+            capture.write(b'AIIMTC01')
+            def capture_step(owner,step_num,chunk_audio,chunk_lengths,is_buffer_empty,
+                             drop_extra_pre_encoded,diar_chunk_audio=None,diar_chunk_lengths=None):
+                if chunk_audio.shape[0]!=1 or chunk_audio.shape[1]!=128:
+                    raise ValueError('capture trace requires one 128-bin microphone')
+                value=original_capture(owner,step_num=step_num,chunk_audio=chunk_audio,
+                    chunk_lengths=chunk_lengths,is_buffer_empty=is_buffer_empty,
+                    drop_extra_pre_encoded=drop_extra_pre_encoded,
+                    diar_chunk_audio=diar_chunk_audio,diar_chunk_lengths=diar_chunk_lengths)
+                features=chunk_audio[0].transpose(0,1).detach().cpu().numpy().astype('<f4')
+                frames=len(features);valid=int(chunk_lengths[0])
+                if not 0<valid<=frames<=1024 or not np.isfinite(features).all():
+                    raise ValueError('capture features invalid')
+                capture.write(struct.pack('<IIIII',epoch,frames,valid,drop_extra_pre_encoded,int(is_buffer_empty)))
+                capture.write(features.tobytes())
+                state=owner.instance_manager.batch_asr_states[0]
+                for track in range(4):
+                    hypothesis=state.previous_hypothesis[track] if track<len(state.previous_hypothesis) else None
+                    tokens=[] if hypothesis is None else [int(x) for x in hypothesis.y_sequence]
+                    capture.write(struct.pack('<I',len(tokens)))
+                    capture.write(struct.pack('<'+'I'*len(tokens),*tokens))
+                return value
             def decode(owner,encoder_output,encoded_lengths,return_hypotheses=False,partial_hypotheses=None):
                 value=original_decode(owner,encoder_output,encoded_lengths,return_hypotheses,partial_hypotheses)
                 if not return_hypotheses or len(value)!=len(owners):
@@ -119,6 +143,7 @@ def main():
             AbstractRNNTDecoding.rnnt_decoder_predictions_tensor=decode
             SpeakerKernelMixin.set_speaker_targets=set_targets
             ASRModuleMixin.conformer_stream_step=step
+            SpeakerTaggedASR.perform_parallel_streaming_stt_spk=capture_step
             upstream=a.nemo/'examples/asr/asr_cache_aware_streaming/speech_to_text_multitalker_streaming_infer.py'
             if digest(upstream)!=reference['upstream_script_sha256']:raise ValueError('upstream script binding')
             raw=a.out/'upstream.seglst.json'
@@ -134,6 +159,7 @@ def main():
         if digest(raw)!=reference['raw_output_sha256']:raise ValueError('tracing changed reference output')
         result.update(passed=True,epochs=epoch,tracks=sorted(geometry),trace_sha256=digest(trace_path),
                       conditioned_trace_sha256=digest(conditioned_path),
+                      capture_trace_sha256=digest(capture_path),
                       reference_result_sha256=digest(a.reference),source_sha256=digest(__file__),
                       upstream_revision=NEMO_REV,raw_output_sha256=digest(raw),models=reference['models'])
     except BaseException as error:

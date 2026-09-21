@@ -8,7 +8,10 @@ SPDX-License-Identifier: Apache-2.0
 Upstream: https://github.com/NVIDIA/NeMo
 Sources: nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py,
 nemo/collections/asr/modules/conformer_encoder.py, and
-nemo/collections/asr/parts/mixins/multitalker_asr_mixins.py.
+nemo/collections/asr/parts/mixins/multitalker_asr_mixins.py,
+nemo/collections/asr/modules/sortformer_modules.py,
+nemo/collections/asr/models/sortformer_diar_models.py, and
+nemo/collections/asr/parts/preprocessing/features.py.
 
 The C++ implementation, explicit epoch/track custody, cancellation behavior,
 input validation, and recorded-trace qualification were implemented for this

@@ -1056,8 +1056,9 @@ class Worker {
     size_t n = 0;
     for (;;) {
       uint64_t reference=0;
+      char track[64]{};
       const auto rc =
-          aii_voice_next_event_with_reference(session_, &e, &reference, text, sizeof text, &n, &error_);
+          aii_voice_next_event_with_track(session_, &e, &reference, track, sizeof track, text, sizeof text, &n, &error_);
       if (rc == AII_VOICE_AGAIN)
         break;
       if (rc == AII_VOICE_CAPACITY)
@@ -1108,9 +1109,9 @@ class Worker {
       if (kind == "pause_query" || kind == "pause_resolved")
         continue;
       if(kind=="transcript_final") {
-        put(data,"track_id",string("")); // explicitly unresolved, not a made-up speaker
+        put(data,"track_id",string(track));
         put(data,"attribution",attributions_.add(e.sequence,
-            FinalKey{sid_,"",sequence_+1,e.start,e.end},
+            FinalKey{sid_,track,sequence_+1,e.start,e.end},
             uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count()),
             readiness_.models_loaded==5));
       }

@@ -163,6 +163,9 @@ aii_voice_result aii_voice_generation_status(aii_voice_session*, uint64_t genera
 aii_voice_result aii_voice_next_event(aii_voice_session*, aii_voice_event*, char* text, size_t capacity, size_t* required_text, aii_voice_error*);
 /* Additive ABI: original event struct and entry retain their binary layout. */
 aii_voice_result aii_voice_next_event_with_reference(aii_voice_session*, aii_voice_event*, uint64_t* refers_to, char* text, size_t capacity, size_t* required_text, aii_voice_error*);
+/* Additive acoustic-track readout. track must provide 64 bytes; the existing
+ * event layout and legacy entrypoints remain unchanged. */
+aii_voice_result aii_voice_next_event_with_track(aii_voice_session*, aii_voice_event*, uint64_t* refers_to, char* track, size_t track_capacity, char* text, size_t capacity, size_t* required_text, aii_voice_error*);
 aii_voice_result aii_voice_next_audio(aii_voice_session*, aii_voice_audio*, float* pcm, size_t capacity, size_t* required_samples, aii_voice_error*);
 #ifdef __cplusplus
 }

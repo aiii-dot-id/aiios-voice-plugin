@@ -104,6 +104,53 @@ def optional_libraries(profile, *, uid_frontend=None, uid=None, tts=None):
     return selected
 
 
+def replace_hearing_models(frozen, runtime, graphs, frontend, out, bindings):
+    """Explicit native hearing replacement; preserve all other model bytes."""
+    from scripts.prove_native_multitalker import verify_graphs
+    graph_record = verify_graphs(graphs)
+    if not graph_record.get('compaction', {}).get('graphs'):
+        raise ValueError('download-layout hearing graphs required')
+    feature_record = json.loads((frontend / 'result.json').read_text())
+    mel = frontend / 'mel.f32'
+    if (mel.is_symlink() or mel.stat().st_size != 128*257*4
+            or sha(mel) != feature_record['files']['mel.f32']):
+        raise ValueError('hearing frontend binding differs')
+    native = json.loads((runtime / 'native-profile.json').read_text())
+    if native['models']['asr'] != 'stt' or native['models']['asr_mel'] != 'stt/mel.f32':
+        raise ValueError('explicit stt model layout required')
+    selected = {name: Path(frozen['models_root']) / name for name in frozen['models']
+                if not name.startswith('stt/')}
+    selected.update({'stt/' + name: graphs / name for name in graph_record['artifacts']})
+    if 'stt/mel.f32' in selected:
+        raise ValueError('graph set must not override bound frontend')
+    selected['stt/mel.f32'] = mel
+    # The SDK owns these bounds; changing models does not waive admission.
+    if len(selected) > 128:
+        raise ValueError('hearing model inventory exceeds accelerator profile bound')
+    target = out / 'data'
+    target.mkdir(exist_ok=False)
+    rows = {}
+    for name, source in selected.items():
+        safe_relative(name)
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('regular model source required')
+        binding = sha(source)
+        bindings[str(source)] = binding
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        if sha(destination) != binding:
+            raise ValueError('model changed during copy')
+        rows[name] = dict(sha256=binding, bytes=destination.stat().st_size)
+    for path in (graphs / 'result.json', frontend / 'result.json'):
+        bindings[str(path)] = sha(path)
+    frozen.update(models_root=str(target), models=rows,
+                  model_bytes=sum(row['bytes'] for row in rows.values()),
+                  models_copied=len(rows), hearing_replaced=True,
+                  hearing_inventory_sha256=sha(graphs / 'result.json'),
+                  hearing_frontend_sha256=sha(frontend / 'result.json'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('parent', 'worker', 'asr', 'session-library', 'out', 'go'):
@@ -112,7 +159,13 @@ def main():
     for name in ('uid-frontend', 'uid', 'tts'):
         parser.add_argument('--'+name, type=Path,
                             help='Explicit replacement for an existing declared native library; fresh qualification required')
+    parser.add_argument('--hearing-graphs', type=Path,
+                        help='Explicit byte-verified native multi-speaker model replacement')
+    parser.add_argument('--hearing-frontend', type=Path,
+                        help='Pinned native frontend paired with --hearing-graphs')
     args = parser.parse_args()
+    if (args.hearing_graphs is None) != (args.hearing_frontend is None):
+        parser.error('hearing graphs and frontend must be selected together')
     parent, out = args.parent.resolve(), args.out.resolve()
     frozen, profile, bindings = parent_bytes(parent, args.parent_sha256)
     platform = profile['platform']
@@ -154,11 +207,22 @@ def main():
     if 'resources/settings.json' not in profile['files']:
         raise ValueError('parent lacks runtime settings declaration')
     write_current_settings(runtime / worker_name, runtime, out)
+    added_notices = set()
+    if args.hearing_graphs is not None:
+        root = Path(__file__).resolve().parents[1]
+        for source in (root / 'runtime/native_multitalker/NOTICE', root / 'LICENSE'):
+            name = 'resources/notices/native-multitalker/' + source.name
+            destination = runtime / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            bindings[str(source)] = sha(source)
+            shutil.copy2(source, destination)
+            added_notices.add(name)
     updated = copy.deepcopy(profile)
     updated['files'] = runtime_inventory(runtime, target_platform=platform)
     updated['qualified'] = False
-    delta = {n for n in profile['files'] if profile['files'][n] != updated['files'][n]}
-    if not delta or not delta <= set(replacements) | {'resources/settings.json'}:
+    delta = {n for n in set(profile['files']) | set(updated['files'])
+             if profile['files'].get(n) != updated['files'].get(n)}
+    if not delta or not delta <= set(replacements) | {'resources/settings.json'} | added_notices:
         raise ValueError('unexpected runtime delta')
     (runtime / 'voice-runtime.json').write_text(json.dumps(updated, indent=2) + '\n')
     binding = sha(runtime / 'voice-runtime.json')
@@ -174,7 +238,7 @@ def main():
                   parent_checkpoint=str(parent), parent_freeze_sha256=args.parent_sha256,
                   runtime_manifest_sha256=binding, worker_sha256=sha(runtime / worker_name),
                   carrier_sha256=json.loads((out / 'carrier-build.json').read_text())['carrier_sha256'],
-                  changed_images=sorted(delta - {'resources/settings.json'}), models_copied=0,
+                  changed_images=sorted(n for n in delta if not n.startswith('resources/')), models_copied=0,
                   settings_changed='resources/settings.json' in delta,
                   settings_sha256=sha(out / 'settings.json'),
                   bindings=bindings)
@@ -183,6 +247,9 @@ def main():
             result['library_hashes'][Path(name).name] = sha(runtime / name)
             result.setdefault('libraries', {})[Path(name).name] = dict(source=str(source),
                 source_sha256=sha(source), relocated_sha256=sha(runtime / name))
+    if args.hearing_graphs is not None:
+        replace_hearing_models(result, runtime, args.hearing_graphs.resolve(),
+                               args.hearing_frontend.resolve(), out, bindings)
     for path, digest in bindings.items():
         if sha(path) != digest:
             raise ValueError('input changed during build: ' + path)

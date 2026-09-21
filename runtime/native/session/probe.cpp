@@ -52,7 +52,7 @@ int main(int argc,char** argv) {
         final|=e.kind=="transcript_final";
         std::cout<<"{\"kind\":"<<quote(e.kind)<<",\"sequence\":"<<e.sequence<<",\"generation\":"<<e.generation
           <<",\"turn\":"<<e.turn<<",\"start\":"<<e.start<<",\"end\":"<<e.end
-          <<",\"text\":"<<quote(e.text)<<",\"seconds\":"<<seconds(start)<<"}\n"<<std::flush;
+          <<",\"text\":"<<quote(e.text)<<",\"track\":"<<quote(e.track)<<",\"seconds\":"<<seconds(start)<<"}\n"<<std::flush;
       }
       Audio audio;
       while(session.audio(audio)) {

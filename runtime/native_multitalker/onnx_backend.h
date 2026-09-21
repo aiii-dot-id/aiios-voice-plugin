@@ -33,4 +33,23 @@ class OnnxEncoder {
   struct Impl;
   std::unique_ptr<Impl> p_;
 };
+struct CaptureEmbeddings {
+  std::vector<float> values;
+  size_t frames = 0, valid = 0;
+};
+// Shared microphone feature owner. Neither caller-provided speaker masks nor
+// reference transcripts enter these graphs.
+class OnnxCapture {
+ public:
+  explicit OnnxCapture(const std::string& graph_root);
+  ~OnnxCapture();
+  CaptureEmbeddings preencode(const float* features, size_t frames,
+                              size_t valid, size_t drop, bool diarization);
+  std::vector<float> diarize(const std::vector<float>& embeddings);
+  void cancel() noexcept;
+  void reopen();
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> p_;
+};
 }

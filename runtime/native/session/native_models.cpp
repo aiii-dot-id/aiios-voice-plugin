@@ -10,6 +10,11 @@
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#ifdef AII_MULTITALKER_ASR
+#include "../../native_multitalker/recognizer.h"
+#include "worker_json.h"
+#include <filesystem>
+#endif
 
 extern "C" {
 void* nv_create_bound(const char*,const char*,const char*,int,char*,size_t) noexcept;
@@ -212,10 +217,32 @@ struct Pocket final:Synthesizer {
   }
 };
 }
+namespace {
+std::unique_ptr<Recognizer> default_recognizer(const ModelPaths& p) {
+#ifdef AII_MULTITALKER_ASR
+  if(!p.asr_execution.empty())throw std::invalid_argument("multitalker candidate has no qualified alternate execution profile");
+  const auto mel=floats(p.mel,128*257);
+  const auto path=std::filesystem::u8path(p.asr)/"tokens.json";
+  const auto raw=bytes(path.string(),1024*1024);
+  auto tokens=aii::voice::wire::parse(std::string(raw.begin(),raw.end()));
+  if(!cJSON_IsArray(tokens.get()) || cJSON_GetArraySize(tokens.get())!=1024)
+    throw std::runtime_error("multitalker vocabulary geometry");
+  std::vector<std::string> vocabulary;
+  for(auto* token=tokens->child;token;token=token->next) {
+    if(!cJSON_IsString(token) || !token->valuestring)
+      throw std::runtime_error("multitalker vocabulary token");
+    vocabulary.emplace_back(token->valuestring);
+  }
+  return std::make_unique<aii::multitalker::Recognizer>(p.asr,mel.data(),mel.size(),std::move(vocabulary));
+#else
+  return std::make_unique<Asr>(p);
+#endif
+}
+}
 struct NativeModels::Impl {
   std::unique_ptr<Recognizer> asr; VoiceVad vad; VoiceEndpoint endpoint; Pocket pocket;
   Impl(const ModelPaths& p,std::unique_ptr<Recognizer> supplied)
-      :asr(supplied?std::move(supplied):std::make_unique<Asr>(p)),vad(p),endpoint(p),pocket(p) {}
+      :asr(supplied?std::move(supplied):default_recognizer(p)),vad(p),endpoint(p),pocket(p) {}
 };
 NativeModels::NativeModels(const ModelPaths& p):NativeModels(p,nullptr) {}
 NativeModels::NativeModels(const ModelPaths& p,std::unique_ptr<Recognizer> supplied)

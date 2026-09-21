@@ -7,8 +7,9 @@ identity can associate a name or external person ID later, including after the
 conversation ends. Live enrollment during speech is not a prerequisite.
 
 This is a release requirement and implementation plan, not a claim that the
-current worker creates these records. The current containment adapter still
-has no separated acoustic tracks. Random IDs on mixed input do not satisfy it.
+current worker creates these records. The opt-in native composition now emits
+separated acoustic tracks, but has no persistent anonymous profile owner.
+Random IDs on mixed input or per-utterance track numbers do not satisfy it.
 
 ## Three different identities
 

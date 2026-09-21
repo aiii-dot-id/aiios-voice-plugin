@@ -282,10 +282,13 @@ struct Session::Impl {
     std::deque<Block> preroll, provisional;
     uint64_t position=0,valid_position=0,silence=0,turn=0,start=0;
     bool active=false, boundary=false;
+    const bool continuous=asr.continuous_input();
+    bool begun=false;
+    uint64_t consumed=0;
     std::vector<float> speaker_pcm;
     bool speaker_overflow=false;
     auto retain_speaker=[&](const Block& b) {
-      if(!speaker || speaker_overflow) return;
+      if(!speaker || asr.separated() || speaker_overflow) return;
       if(speaker_pcm.size()+b.valid>480000) {
         speaker_pcm.clear(); speaker_overflow=true; return;
       }
@@ -293,16 +296,47 @@ struct Session::Impl {
     };
     std::string last;
     auto partial=[&](std::string text) {
+      if(asr.separated()) {
+        if(!text.empty())throw std::runtime_error("separated recognizer returned pooled text");
+        return;
+      }
       if(!text.empty() && text!=last && !stopping) {
         last=std::move(text); emit(Event{0,turn,0,start,valid_position,"transcript_partial",last});
       }
     };
-    auto push=[&](const Block& b){ partial(asr.push(b.pcm.data(),b.valid)); };
+    auto push=[&](const Block& b){
+      if(continuous && !begun){asr.begin();begun=true;start=consumed;}
+      partial(asr.push(b.pcm.data(),b.valid));
+      if(continuous)consumed+=b.valid;
+    };
     auto complete=[&](const char* reason) {
       if(!active) return;
       const auto text=asr.finish(); partial(text);
-      asr.reset(); active=false;
+      const bool separated=asr.separated();
+      const auto segments=separated?asr.segments():std::vector<RecognizedSegment>{};
+      if(segments.size()>128)throw std::runtime_error("recognizer segment bound");
+      for(const auto& segment:segments) {
+        if(segment.track.empty() || segment.track.size()>63 || segment.text.empty() || segment.text.size()>131071 ||
+           segment.start>=segment.end || segment.end>valid_position-start)
+          throw std::runtime_error("separated recognizer segment extent");
+        for(unsigned char c:segment.track)if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='-'||c=='_'||c=='.'))
+          throw std::runtime_error("recognizer track identifier");
+      }
+      asr.reset(); active=false; begun=false;
       { std::lock_guard<std::mutex> lock(mutex); recognition_active=false; }
+      if(separated) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if(!stopping)for(const auto& segment:segments) {
+          Event final{0,turn,0,start+segment.start,start+segment.end,"transcript_final",segment.text};
+          final.track=segment.track;emit_locked(final);final.sequence=sequence;
+          // The pooled microphone must never become per-track UID evidence.
+          // A speaker-specific evidence owner supplies later matching; until
+          // then each separated final gets an explicit non-authoritative state.
+          Event observation{0,turn,0,final.start,final.end,"speaker_observation",
+              R"({"outcome":"unavailable","reason":"speaker_specific_evidence_unavailable","used_for_permissions":false})",final.sequence};
+          observation.track=segment.track;emit_locked(std::move(observation));
+        }
+      }
       if(!text.empty() || !last.empty()) {
         std::lock_guard<std::mutex> lock(mutex);
         if(!stopping) {
@@ -324,7 +358,7 @@ struct Session::Impl {
           }
         }
       }
-      if(!text.empty()) emit(Event{0,turn,0,start,valid_position,"turn_committed",reason});
+      if(!text.empty() || !segments.empty()) emit(Event{0,turn,0,start,valid_position,"turn_committed",reason});
       preroll.clear(); last.clear(); silence=0; gate.reset();
       speaker_pcm.clear(); speaker_overflow=false;
     };
@@ -353,15 +387,25 @@ struct Session::Impl {
           active=true; ++turn; silence=0; last.clear(); boundary=false;
           { std::lock_guard<std::mutex> lock(mutex); recognition_active=true; }
           uint64_t retained=0; for(const auto& b:preroll) retained+=b.valid;
-          start=valid_position-retained;
+          if(!continuous)start=valid_position-retained;
+          else if(!begun)start=consumed;
           speaker_pcm.clear(); speaker_overflow=false;
-          asr.begin(); gate.reset();
+          if(!continuous)asr.begin();
+          gate.reset();
           emit(Event{0,turn,0,start,valid_position,"speech_start",""});
-          for(const auto& b:preroll) { retain_speaker(b); gate.append(b.pcm.data(),block_size); push(b); }
+          for(const auto& b:preroll) {
+            retain_speaker(b); gate.append(b.pcm.data(),block_size);
+            if(!continuous)push(b);
+          }
+          if(continuous)push(block);
         } else if(active) {
           retain_speaker(block);
           gate.append(block.pcm.data(),block_size);
           if(boundary) provisional.push_back(block); else push(block);
+        } else if(continuous) {
+          // Preserve the actual capture and feature-clock origin. Discarding
+          // pre-VAD context changed diarization and lost the quieter speaker.
+          push(block);
         }
         if(active && !stopping) {
           silence=speech?0:silence+block_size;
@@ -374,6 +418,7 @@ struct Session::Impl {
           if(provisional.size()>4) throw std::runtime_error("endpoint provisional tail exceeded bound");
           if(decision!=Gate::Decision::None) {
             complete(decision==Gate::Decision::SemanticNoHold?"semantic_pause":"bounded_silence");
+            if(continuous)for(const auto& b:provisional)push(b);
             preroll=std::move(provisional); provisional.clear(); boundary=false;
           }
         }

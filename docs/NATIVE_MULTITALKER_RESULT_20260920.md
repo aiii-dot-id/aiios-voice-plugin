@@ -1,5 +1,10 @@
 # Native speaker-conditioned recognition checkpoint
 
+Historical component checkpoint. The subsequent
+[native hearing integration](NATIVE_HEARING_INTEGRATION_20260921.md) connects
+raw PCM, diarization and the resident SDK path; its remaining release limits
+are stated separately. The measurements below retain their original scope.
+
 This checkpoint adds native C++ recognition components to beta.5 development
 source. **It is not yet connected to the plugin worker. No package, public
 release, catalog entry, live identity or enrollment was changed.** The installed

@@ -34,6 +34,29 @@ def test_sdk_directory_entries_and_exact_files_are_accepted(tmp_path):
     check_archive(path,declaration,rows)
 
 
+def test_release_cannot_strip_required_notice_from_runtime(tmp_path):
+    path=tmp_path/'runtime.tar.gz';declaration,rows=fixture(path)
+    notice=b'Required component attribution\n'
+    rows['resources/VOICE-SOURCE-LICENSES.md']=dict(bytes=len(notice),
+        sha256=hashlib.sha256(notice).hexdigest(),executable=False)
+    # A self-consistent archive and inventory still cannot omit a file in the
+    # carrier's sealed profile. The previous private packaging path did this.
+    with pytest.raises(ValueError):check_archive(path,declaration,rows)
+
+
+def test_release_cannot_downgrade_shared_library_mode(tmp_path):
+    path=tmp_path/'runtime.tar.gz'
+    content=b'shared-library';digest=hashlib.sha256(content).hexdigest()
+    name='lib/libvoice.dylib'
+    raw=json.dumps({'files':[dict(path=name,size=len(content),sha256='sha256:'+digest,mode='file')]}).encode()
+    with tarfile.open(path,'w:gz') as archive:
+        for n,data in [('runtime/inventory.json',raw),('runtime/'+name,content)]:
+            info=tarfile.TarInfo(n);info.size=len(data);info.mode=0o644;archive.addfile(info,io.BytesIO(data))
+    declaration=dict(sha256=sha(path),size=path.stat().st_size,inventory_sha256=hashlib.sha256(raw).hexdigest(),files=1,installed_bytes=len(content))
+    rows={name:dict(bytes=len(content),sha256=digest,executable=True)}
+    with pytest.raises(ValueError):check_archive(path,declaration,rows)
+
+
 @pytest.mark.parametrize('damage',['mode','bytes','duplicate','symlink','extra','traversal','budget'])
 def test_bad_archive_refused_even_with_recomputed_archive_digest(tmp_path,damage):
     path=tmp_path/'runtime.tar.gz';declaration,rows=fixture(path,damage)

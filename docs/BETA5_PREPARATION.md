@@ -52,8 +52,10 @@ tokens across 110 streaming updates in seven recorded conversations. Both an
 unconditioned-model mutation and a shared-speaker-cache mutation fail that
 comparison. Six neural graph exports pass their declared numerical checks.
 See [the native checkpoint and exact remaining boundary](NATIVE_MULTITALKER_RESULT_20260920.md).
-These components are not yet selected by the resident worker; the release gates
-below remain open and the installed mixed-speaker UID defect is not closed.
+The subsequent [native hearing integration](NATIVE_HEARING_INTEGRATION_20260921.md)
+connects raw capture and diarization to an opt-in resident worker and passes the
+recorded SDK panel. It also repairs a VAD/context integration failure. The
+release gates below remain open: this is not persistent UID or installed proof.
 
 ## Promotion requirements still open
 

@@ -191,12 +191,18 @@ aii_voice_result aii_voice_next_event(aii_voice_session* s,aii_voice_event* out,
   uint64_t ignored=0;return aii_voice_next_event_with_reference(s,out,&ignored,text,capacity,required,e);
 }
 aii_voice_result aii_voice_next_event_with_reference(aii_voice_session* s,aii_voice_event* out,uint64_t* reference,char* text,size_t capacity,size_t* required,aii_voice_error* e) {
+  char ignored[64];return aii_voice_next_event_with_track(s,out,reference,ignored,sizeof ignored,text,capacity,required,e);
+}
+aii_voice_result aii_voice_next_event_with_track(aii_voice_session* s,aii_voice_event* out,uint64_t* reference,char* track,size_t track_capacity,char* text,size_t capacity,size_t* required,aii_voice_error* e) {
   return call(e,[&]{need(out && required && (text || !capacity),"event/buffer/size required");
+    need(track && track_capacity>=64,"64-byte acoustic track output required");track[0]=0;
     need(reference!=nullptr,"event reference output required");*reference=0;
     aii::voice::Event event;*required=0;
     if(!get(s).event_bounded(event,capacity,*required))return *required?AII_VOICE_CAPACITY:AII_VOICE_AGAIN;
     *reference=event.refers_to;*out={};out->sequence=event.sequence;out->turn=event.turn;out->generation=event.generation;
     out->start=event.start;out->end=event.end;copy(out->kind,event.kind.c_str());
+    if(event.track.size()>63)throw std::runtime_error("acoustic track exceeded core bound");
+    std::memcpy(track,event.track.c_str(),event.track.size()+1);
     std::memcpy(text,event.text.c_str(),*required);return AII_VOICE_OK;});
 }
 aii_voice_result aii_voice_next_audio(aii_voice_session* s,aii_voice_audio* out,float* pcm,size_t capacity,size_t* required,aii_voice_error* e) {
