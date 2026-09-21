@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('checkpoint', 'panel', 'out'):
         parser.add_argument('--'+name, type=Path, required=True)
+    parser.add_argument('--registry', action='store_true', help='Require resident durable UUIDs and post-session naming through the test host')
     args = parser.parse_args()
     out, checkpoint = args.out.resolve(), args.checkpoint.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -41,6 +42,7 @@ def main():
     host = None
     stopped = threading.Event()
     broker = None
+    registry_broker = None
     errors = []
     hypotheses = {}
     started = time.monotonic()
@@ -48,11 +50,12 @@ def main():
         owner = out/'owner'
         owner.mkdir()
         carrier = checkpoint/'runtime'/('aii-voice-t3.exe' if frozen.get('platform') == 'windows' else 'aii-voice-t3')
-        host = SDKHost(SimpleNamespace(output=owner, carrier=carrier, fixture=False,
+        host_args = SimpleNamespace(output=owner, carrier=carrier, fixture=False,
             backend='native-common-'+frozen['backend'], stage=None, sdk_source=SDK_SOURCE,
             packaged_runtime=True, runtime_manifest_sha=frozen['runtime_manifest_sha256'],
             model_data_root=Path(frozen['models_root']),
-            operator_settings={'tts_voice':'alba', 'turn_pause_ms':5000}, extra_host_operations=['fs.read']))
+            operator_settings={'tts_voice':'alba', 'turn_pause_ms':5000}, extra_host_operations=['fs.read','fs.write','fs.publish'] if args.registry else ['fs.read'])
+        host = SDKHost(host_args)
 
         def absent_private_store():
             try:
@@ -74,8 +77,13 @@ def main():
             except Exception as error:
                 errors.append(repr(error))
 
-        broker = threading.Thread(target=absent_private_store)
-        broker.start()
+        if args.registry:
+            from scripts.speaker_registry_test_host import RegistryBroker, operation
+            registry_broker = RegistryBroker(host)
+            bindings[str(Path(__file__).with_name('speaker_registry_test_host.py'))] = sha(Path(__file__).with_name('speaker_registry_test_host.py'))
+        else:
+            broker = threading.Thread(target=absent_private_store)
+            broker.start()
         report['ready'] = host.readiness()
         assert report['ready']['models_loaded'] == 5
         for index, case in enumerate(panel['cases']):
@@ -133,10 +141,83 @@ def main():
                 final = by_sequence[observation['refers_to']]
                 assert all(observation[key] == final[key] for key in ('track_id', 'start_sample', 'end_sample'))
                 assert observation['decision'] == 'uncertain' and not observation['speaker_id']
+                if args.registry:
+                    import uuid
+                    assert str(uuid.UUID(observation['speaker_uuid'])) == observation['speaker_uuid']
+                    assert observation['continuity'] in ('matched','new_profile','provisional')
+                    assert int(observation['registry_revision']) > 0
             assert not any(e['type']=='failure' for e in host.events)
             report['cases'].append(dict(case=case['id'], finals=finals, observations=observations,
                 interruption=interruption, recovery=recovered, terminal=terminal))
         report['score'] = evaluate(panel, hypotheses)
+        if args.registry:
+            baseline={}
+            for case in report['cases']:
+                mapping={str(s['hypothesis_track']):s['reference_speaker'] for s in report['score']['cases'][case['case']]['speakers']}
+                for observation in case['observations']:
+                    speaker=mapping[observation['track_id']]
+                    value=observation['speaker_uuid']
+                    if case['case'] in ('solo_a','solo_b'):
+                        assert observation['continuity']=='new_profile'
+                        baseline[speaker]=value
+                    elif observation['continuity']=='matched':
+                        assert value==baseline[speaker], 'wrong persistent speaker'
+                    else:
+                        assert observation['continuity']=='provisional' and value not in baseline.values()
+            assert len(baseline)==2 and len(set(baseline.values()))==2
+            listed=operation(host,'speaker.buckets',{})
+            assert listed['session_open'] is False
+            selected=next(iter(baseline.values()))
+            named=operation(host,'speaker.associate',dict(speaker_uuid=selected,
+                registry_revision=listed['registry_revision'],display_label='Operator-selected label'),confirmed=True)
+            assert any(r['speaker_uuid']==selected and r.get('display_label')=='Operator-selected label' for r in named['speakers'])
+            report['registry']=dict(resident_uuid_path=True,post_session_naming=True,listing=named,
+                                   test_host_only=True,process_restart_qualified=False)
+            # Retire the actual carrier/worker, retaining only test-host storage.
+            # Re-list and label from a fresh process without opening a mic.
+            report['first_process_events']=host.events
+            assert host.close()==0 and host.process.poll() is not None
+            registry_broker.close()
+            retained=registry_broker.storage
+            host_args.output=out/'restarted-owner'
+            host_args.output.mkdir()
+            host=SDKHost(host_args)
+            registry_broker=RegistryBroker(host,retained)
+            host.readiness()
+            reloaded=operation(host,'speaker.buckets',{})
+            assert reloaded==named, 'registry projection changed across process restart'
+            renamed=operation(host,'speaker.associate',dict(speaker_uuid=selected,
+                registry_revision=reloaded['registry_revision'],display_label='Later label'),confirmed=True)
+            assert any(r['speaker_uuid']==selected and r.get('display_label')=='Later label' for r in renamed['speakers'])
+            report['registry']['process_restart_qualified']=True
+            report['registry']['rename_after_restart']=renamed
+            again=panel['cases'][0]
+            assert again['id']=='solo_a', 'restart fixture must be the first enrolled acoustic speaker'
+            with wave.open(str(args.panel.parent/again['audio_file']),'rb') as audio:
+                pcm=audio.readframes(audio.getnframes())
+            sid='restart-acoustic-match'
+            host.call('open',dict(session_id=sid,input_handle='mic',output_handle='speaker',
+                audio=dict(format='s16le',input=dict(rate=16000,channels=1),output=dict(rate=24000,channels=1))))
+            host.event('session_ready',session_id=sid)
+            begun=time.monotonic()
+            for sequence,offset in enumerate(range(0,again['samples'],512),1):
+                host.to_engine.write(Frame(PCM,7,sequence,offset,pcm[offset*2:(offset+512)*2]).encode())
+                time.sleep(max(0,min(offset+512,again['samples'])/16000-(time.monotonic()-begun)))
+            host.call('finish_input',dict(session_id=sid,stream_id='mic',end_sample=again['samples']))
+            host.to_engine.write(Frame(END,7,sequence+1,again['samples']).encode())
+            host.event('input_finished',timeout=90,session_id=sid)
+            host.call('close',dict(session_id=sid,mode='drain'))
+            assert host.event('session_end',session_id=sid)['status']=='completed'
+            observations=[e for e in host.events if e['session_id']==sid and e['type']=='speaker_observation']
+            assert len(observations)==1 and observations[0]['speaker_uuid']==selected
+            assert observations[0]['continuity']=='matched' and observations[0]['display_label']=='Later label'
+            report['registry']['acoustic_match_after_restart']=observations[0]
+            forgotten=operation(host,'speaker.forget',dict(speaker_uuid=selected,
+                registry_revision=renamed['registry_revision']),confirmed=True)
+            assert all(r['speaker_uuid']!=selected for r in forgotten['speakers'])
+            assert len(forgotten['speakers'])==len(renamed['speakers'])-1
+            assert forgotten['session_open'] is False
+            report['registry']['confirmed_forget_after_close']=True
         report['events'] = host.events
         assert report['score']['passed'], 'speaker-specific words did not meet the frozen panel gate'
         for path, digest in bindings.items():
@@ -151,6 +232,13 @@ def main():
             report['broker_retired'] = not broker.is_alive()
             report['passed'] &= report['broker_retired'] and not errors
         report['broker_errors'] = errors
+        if registry_broker is not None:
+            try:
+                registry_broker.close()
+                report['registry_broker_retired']=True
+            except Exception as error:
+                report['registry_broker_error']=repr(error)
+                report['passed']=False
         if host is not None:
             report['events'] = host.events
             try:

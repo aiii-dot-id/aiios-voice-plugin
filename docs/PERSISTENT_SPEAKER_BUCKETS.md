@@ -6,14 +6,15 @@ speaker UUID; its attributed segments belong to that speaker. The consuming
 identity can associate a name or external person ID later, including after the
 conversation ends. Live enrollment during speech is not a prerequisite.
 
-This is a release requirement and implementation plan, not a claim that the
-current worker creates these records. The opt-in native composition now emits
-separated acoustic tracks, but has no persistent anonymous profile owner.
-Random IDs on mixed input or per-utterance track numbers do not satisfy it.
+This is a release requirement, not a claim about an installed public release.
+The opt-in native composition now connects separated acoustic tracks to a
+persistent anonymous profile owner. Random IDs on mixed input or per-utterance
+track numbers do not satisfy it.
 
 The [native registry and acoustic evidence implementation](ANONYMOUS_SPEAKER_IMPLEMENTATION.md)
-now has process-restart and real-model tests. Its durable worker/host connection
-remains open; this does not change the installed capability statement above.
+now has process-restart and real-model resident SDK tests. The private-store
+broker connection is implemented; the installed host consumer and release
+qualification remain open. See the [resident integration record](RESIDENT_SPEAKER_REGISTRY.md).
 
 ## Three different identities
 

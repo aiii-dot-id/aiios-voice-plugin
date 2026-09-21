@@ -7,6 +7,7 @@
 #include "speaker_observation.h"
 #include "attribution.h"
 #include "snapshot_bridge.h"
+#include "speaker_registry_store.h"
 #include "capture_enrollment.h"
 #include "uid_recovery.h"
 #include "capture_input.h"
@@ -109,6 +110,7 @@ struct TerminalReceipt {
 class Worker {
   aii_voice_models *models_;
   aii::voice::SnapshotBridge& uid_snapshot_;
+  std::unique_ptr<aii::voice::SpeakerRegistryStore> registry_;
   aii_voice_readiness readiness_;
   Pipe controls_, wire_, input_, output_;
   std::atomic<bool> readers_stop_{false}, io_stop_{false};
@@ -621,7 +623,8 @@ class Worker {
     });
   }
   bool enroll(uint64_t request,const std::string& op,const cJSON* a) {
-    if(op!="speaker.enroll"&&op!="speaker.list"&&op!="speaker.remove"&&op!="speaker.reset"&&op!="speaker.discard_capture"&&op!="speaker.upgrade_policy")return false;
+    const bool buckets=op=="speaker.buckets"||op=="speaker.associate"||op=="speaker.forget";
+    if(!buckets&&op!="speaker.enroll"&&op!="speaker.list"&&op!="speaker.remove"&&op!="speaker.reset"&&op!="speaker.discard_capture"&&op!="speaker.upgrade_policy")return false;
     require(cJSON_IsObject(a)&&uid_policies_.has_value()&&readiness_.models_loaded==5,"native UID operation unavailable");
     require(op!="speaker.upgrade_policy"||lifecycle_=="closed","close speech before confirmed enrollment policy upgrade");
     const bool recovery=field(a,"recovery")!=nullptr;
@@ -642,7 +645,7 @@ class Worker {
     require(!enrollment_.valid()&&!capturing_.valid()&&(!capture_||lifecycle_=="closed")&&
         (lifecycle_=="open"||lifecycle_=="closed"),"speaker management waits for capture close, opening, closing or enrollment");
     require(!captures||(field(a,"session_id")&&lifecycle_=="open"&&session_),"enrollment requires live finalized recordings; call speaker.list for session_open and eligible_final_sequences");
-    const bool mutates=op!="speaker.list";std::string act;
+    const bool mutates=op!="speaker.list"&&op!="speaker.buckets";std::string act;
     if(mutates) {
       const auto* stamp=field(a,"_host_operator_act");
       require(cJSON_IsObject(stamp),"operator confirmation required");
@@ -651,6 +654,29 @@ class Worker {
       // resident speech session. Allocation/runtime failures still fault it.
       try { enrollment_acts_.check(act); }
       catch (const std::invalid_argument& e) { throw Refused(e.what()); }
+    }
+    if(buckets) {
+      require(bool(registry_),"speaker registry unavailable");
+      std::string uuid,label,external;uint64_t revision=0;
+      if(op!="speaker.buckets") {
+        uuid=str(field(a,"speaker_uuid"),36);
+        if(op=="speaker.associate")label=str(field(a,"display_label"),512);
+        if(field(a,"external_id"))external=str(field(a,"external_id"),512);
+        const auto raw=str(field(a,"registry_revision"),16);
+        require(!raw.empty()&&raw.find_first_not_of("0123456789")==std::string::npos &&
+          (raw=="0"||raw[0]!='0'),"canonical registry revision required");
+        revision=std::stoull(raw);require(revision<=9007199254740991ULL,"registry revision exceeds bound");
+      }
+      if(lifecycle_=="closed")uid_snapshot_.begin("uid-management-"+std::to_string(request));
+      if(mutates)enrollment_acts_.consume(act);
+      enrollment_request_=request;
+      enrollment_=std::async(std::launch::async,[this,op,revision,uuid,label,external] {
+        auto data=op=="speaker.forget"?registry_->forget(revision,uuid):
+            op=="speaker.associate"?registry_->associate(revision,uuid,label,external):registry_->list();
+        put(data,"session_open",boolean(false));
+        auto result=object();put(result,"status",string("succeeded"));put(result,"operation_result",std::move(data));return result;
+      });
+      return true;
     }
     const auto speaker=op=="speaker.enroll"||op=="speaker.remove"?str(field(a,"speaker_id"),128):"";
     const auto label=op=="speaker.enroll"?str(field(a,"label"),512):"";
@@ -1331,7 +1357,11 @@ public:
         input_(audio_descriptor("AII_AUDIO_IN_FD", true)),
         output_(audio_descriptor("AII_AUDIO_OUT_FD", false), true) {
     uid_snapshot_.sender([this](Json message){send(std::move(message));});
-    if(!policy.empty())uid_policies_.emplace(policy,previous);
+    if(!policy.empty()) {
+      uid_policies_.emplace(policy,previous);
+      registry_=std::make_unique<aii::voice::SpeakerRegistryStore>(uid_snapshot_,uid_policies_->current());
+      core(aii_voice_models_track_observer(models_,aii::voice::SpeakerRegistryStore::callback,registry_.get(),&error_),error_);
+    }
   }
   // The bridge outlives this worker; a sender bound to it must not.
   ~Worker() { uid_snapshot_.sender({}); }

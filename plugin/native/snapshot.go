@@ -17,6 +17,7 @@ import (
 // canonical empty snapshot means that no speakers have been enrolled.
 const snapshotPath = "uid/enrollment.json"
 const pendingCapturesPath = "uid/captures.json"
+const speakerRegistryPath = "uid/speakers.json"
 const snapshotPageBytes = 65536
 
 type snapshotQuery struct {
@@ -38,7 +39,7 @@ func hexDigest(s string) bool {
 	return e == nil && len(b) == 32 && hex.EncodeToString(b) == s
 }
 func (q snapshotQuery) valid() bool {
-	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && !q.recovery()) || q.Offset > q.limit() {
+	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && q.Resource != "speaker_registry" && !q.recovery()) || q.Offset > q.limit() {
 		return false
 	}
 	switch q.Action {
@@ -68,6 +69,9 @@ func (q snapshotQuery) limit() uint64 {
 	return 8 << 20
 }
 func (q snapshotQuery) stagePath() string {
+	if q.Resource == "speaker_registry" {
+		return "uid/.speakers-" + q.Upload + ".pending"
+	}
 	if q.recovery() {
 		return "uid/.recovery-" + q.Upload + ".pending"
 	}
@@ -79,6 +83,9 @@ func (q snapshotQuery) stagePath() string {
 func (q snapshotQuery) target() string {
 	if q.Action == "stage" {
 		return q.stagePath()
+	}
+	if q.Resource == "speaker_registry" {
+		return speakerRegistryPath
 	}
 	if q.recovery() {
 		return "uid/recovery-" + strings.TrimPrefix(q.Resource, "recovery:") + ".json"

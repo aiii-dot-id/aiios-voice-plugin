@@ -18,6 +18,7 @@ struct NativeSpeaker::Impl {
   aii::uid::Policy policy;
   std::optional<aii::uid::Policy> previous;
   ReadSnapshot read;
+  ObserveTrack observe;
   std::atomic<bool> cancelled{false};
   std::atomic<uint64_t> active{0};
   uint64_t next=0; // one inference caller, monotonic across session reuse
@@ -78,6 +79,20 @@ NativeSpeaker::NativeSpeaker(const std::string& path,const std::string& backend,
   if(!p_->model)throw std::runtime_error(error);
 }
 NativeSpeaker::~NativeSpeaker()=default;
+void NativeSpeaker::track_observer(ObserveTrack observer) {
+  if(!observer)throw std::invalid_argument("track observer required");
+  p_->observe=std::move(observer);
+}
+std::string NativeSpeaker::identify_track(uint64_t,const std::vector<float>& pcm) {
+  if(!p_->observe)throw EnrollmentUnavailable("speaker registry unavailable");
+  if(p_->cancelled)throw Cancelled("UID cancelled");
+  std::optional<aii::uid::Sample> sample;
+  if(!pcm.empty())sample=recording(pcm);
+  if(p_->cancelled)throw Cancelled("UID cancelled");
+  const auto result=p_->observe(sample,pcm.size());
+  if(p_->cancelled)throw Cancelled("UID cancelled");
+  return result;
+}
 void NativeSpeaker::warm() {
   if(p_->next==UINT64_MAX)throw std::runtime_error("UID generation exhausted");
   // The real frontend correctly refuses silence. A deterministic non-silent

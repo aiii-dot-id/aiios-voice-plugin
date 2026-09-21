@@ -51,7 +51,7 @@ def inputs(directory, multi, carrier_build):
         assert len(speech) == 8
         assert set(speaker) == {'speaker.enroll', 'speaker.list', 'speaker.remove',
                                 'speaker.reset', 'speaker.discard_capture',
-                                'speaker.upgrade_policy'}
+                                'speaker.upgrade_policy', 'speaker.buckets', 'speaker.associate', 'speaker.forget'}
         cfg['interfaces'] = [{'id': 'speech.session', 'version': 1, 'methods': speech},
                              {'id': 'speaker.uid', 'version': 1, 'methods': speaker}]
     (directory / 'plugin.json').write_text(json.dumps(cfg))
@@ -87,10 +87,10 @@ def test_two_interfaces_preserve_all_controls_and_confirmation(assembler, tmp_pa
             seen.add(row['id'])
             if interface['id'] == 'speaker.uid':
                 assert row['family'] == 'speaker' and row['examples'] and 'UID' in row['keywords']
-                assert row.get('operator_confirms', False) == (row['id'] != 'speaker.list')
+                assert row.get('operator_confirms', False) == (row['id'] not in ('speaker.list', 'speaker.buckets'))
                 for ref in (row['input'],row['output']):
                     assert files[prefix+'install-root/'+ref]==(ROOT/'plugin/native'/ref).read_bytes()
-    assert seen == {r['id'] for r in rows} and len(seen) == 14
+    assert seen == {r['id'] for r in rows} and len(seen) == 17
     assert manifest['variants'][0]['implements']['core'] == ['speech.session@1', 'speaker.uid@1']
 
 
@@ -99,8 +99,8 @@ def test_checkpoint_packager_preserves_the_full_guided_surface(tmp_path, carrier
     _, rows = inputs(tmp_path, True, carrier_build)
     interfaces = enrollment_interfaces(rows)
     assert {n for i in interfaces for n in i['methods']} == {r['id'] for r in rows}
-    assert len(interfaces[1]['methods']) == 6
-    for missing in ('speaker.discard_capture', 'speaker.upgrade_policy'):
+    assert len(interfaces[1]['methods']) == 9
+    for missing in ('speaker.discard_capture', 'speaker.upgrade_policy', 'speaker.buckets', 'speaker.associate', 'speaker.forget'):
         with pytest.raises(ValueError, match='incomplete'):
             enrollment_interfaces([r for r in rows if r['id'] != missing])
     with pytest.raises(ValueError, match='duplicate'):

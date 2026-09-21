@@ -45,7 +45,7 @@ def test_carrier_declares_playback_control_without_starting_a_worker(carrier):
         )
     }
     expected |= {"speaker." + name for name in
-                 ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy")}
+                 ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget")}
     assert set(operations) == expected and len(operations) == len(expected)
     assert "AII_VOICE_READY" not in result.stderr, "Describe must not load models"
 

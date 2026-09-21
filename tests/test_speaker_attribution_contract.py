@@ -33,6 +33,26 @@ def test_schema_is_valid():
     Draft202012Validator.check_schema(SCHEMA)
 
 
+@pytest.mark.parametrize('damage', [None, 'uuid', 'revision', 'missing_revision', 'missing_continuity', 'permission', 'named', 'orphan_label'])
+def test_anonymous_registry_projection(damage):
+    item = amendment(VECTORS[0])
+    item.update(decision='uncertain', reason='acoustic_profile_match', speaker='', speaker_id='',
+                speaker_uuid='12345678-1234-4234-8234-123456789abc', registry_revision='2',
+                continuity='matched', display_label='Chosen label')
+    item.pop('evidence_scope', None)
+    if damage == 'uuid': item['speaker_uuid'] = 'track-0'
+    elif damage == 'revision': item['registry_revision'] = '02'
+    elif damage == 'missing_revision': del item['registry_revision']
+    elif damage == 'missing_continuity': del item['continuity']
+    elif damage == 'permission': item['used_for_permissions'] = True
+    elif damage == 'named': item['decision'] = 'known'
+    elif damage == 'orphan_label':
+        for key in ('speaker_uuid', 'registry_revision', 'continuity'): del item[key]
+    if damage is None: VALIDATOR.validate(item)
+    else:
+        with pytest.raises(ValidationError): VALIDATOR.validate(item)
+
+
 @pytest.mark.parametrize('row', VECTORS, ids=lambda row: row['name'])
 def test_shared_producer_shapes(row):
     VALIDATOR.validate(final(row))

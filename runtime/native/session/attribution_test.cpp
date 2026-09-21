@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 using namespace aii::voice::wire;
+using aii::voice::speaker_queue_capacity;
 void refused(const std::function<void()>& f) {
   bool caught=false;try{f();}catch(const Refused&){caught=true;}
   require(caught,"unsafe attribution accepted");
@@ -99,9 +100,37 @@ void bounded_retirement() {
   a.begin("session-b");
   for(uint64_t i=1;i<=Attributions::pending_capacity;++i)
     a.add(i,FinalKey{"session-b","track-a",i,i*32000,(i+1)*32000},1,true);
-  refused([&]{a.add(9,FinalKey{"session-b","track-a",9,0,32000},1,true);});
-  auto ended=a.end("session_failed");require(ended.size()==8 && a.pending()==0,"failure lost pending finals");
+  const auto overflow=Attributions::pending_capacity+1;
+  refused([&]{a.add(overflow,FinalKey{"session-b","track-a",overflow,0,32000},1,true);});
+  auto ended=a.end("session_failed");require(ended.size()==Attributions::pending_capacity && a.pending()==0,"failure lost pending finals");
   require(a.end("session_failed").empty(),"failure duplicated amendments");
+}
+void anonymous_projection() {
+  Attributions a;a.begin("session");FinalKey key{"session","track-a",7,0,64000};a.add(1,key,0,true);
+  auto detail=evidence("unavailable");put(detail,"speaker_uuid",string("12345678-1234-4234-8234-123456789abc"));
+  put(detail,"registry_revision",string("3"));put(detail,"continuity",string("matched"));put(detail,"display_label",string("Chosen label"));
+  put(detail,"private_vector",string("must-not-escape"));
+  auto result=a.resolve(1,key,clone(detail.get()));
+  require(str(field(result.get(),"speaker_uuid"))=="12345678-1234-4234-8234-123456789abc" &&
+    str(field(result.get(),"decision"))=="uncertain" && !flag(field(result.get(),"used_for_permissions")),"UUID is not a person/authority assertion");
+  auto snapshot=a.snapshot();auto* first=cJSON_GetArrayItem(snapshot.get(),0);
+  require(str(field(first,"display_label"))=="Chosen label"&&str(field(first,"registry_revision"))=="3","UUID lost at status reconciliation");
+  require(encode(result).find("must-not-escape")==std::string::npos,"private evidence leaked");
+  require(cJSON_IsNull(a.resolve(1,key,std::move(detail)).get()),"duplicate anonymous attribution emitted twice");
+}
+void queued_matcher_backpressure() {
+  Attributions a;a.begin("busy");
+  // One matcher is running and its eight waiting slots are full. Every later
+  // final still needs a pending row until its immediate unavailable arrives.
+  for(uint64_t i=1;i<=speaker_queue_capacity+1;++i)
+    a.add(i,FinalKey{"busy","track",i,0,32000},1,true);
+  for(uint64_t i=speaker_queue_capacity+2;i<500;++i) {
+    const FinalKey key{"busy","track",i,0,32000};
+    a.add(i,key,1,true);
+    a.resolve(i,key,evidence("unavailable"));
+    require(a.pending()==speaker_queue_capacity+1,"backpressure lost an outstanding job");
+  }
+  require(a.end("session_aborted").size()==speaker_queue_capacity+1,"abort missed queued matches");
 }
 void vectors(const char* path) {
   std::ifstream input(path);require(bool(input),"attribution vectors missing");
@@ -120,7 +149,7 @@ void vectors(const char* path) {
   }
 }
 int main(int argc,char** argv) {try {
-  transitions();hostile_bindings();mixture_and_overlap();bounded_retirement();
+  transitions();hostile_bindings();mixture_and_overlap();bounded_retirement();anonymous_projection();queued_matcher_backpressure();
   require(argc==2,"shared attribution vectors required");vectors(argv[1]);
   std::cout<<"pending transitions, exact segment binding, mixture containment, duplicate/stale fences and bounded retirement PASS\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

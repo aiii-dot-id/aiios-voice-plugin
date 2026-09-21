@@ -34,6 +34,13 @@ aii_voice_models* wrap_models(std::unique_ptr<ModelOwner> owner) {
 }
 }
 extern "C" {
+aii_voice_result aii_voice_models_track_observer(aii_voice_models* m,aii_voice_track_observer observer,void* context,aii_voice_error* e) {
+  return call(e,[&]{need(m&&observer&&context,"models and track observer required");
+    bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
+    try {m->owner->track_observer(observer,context);m->leased=false;return AII_VOICE_OK;}
+    catch(...){m->leased=false;throw;}
+  });
+}
 aii_voice_result aii_voice_models_execution(aii_voice_models* m,char* out,size_t capacity,size_t* required,aii_voice_error* e) {
   if(out&&capacity)out[0]=0;
   if(required)*required=0;

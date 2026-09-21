@@ -40,4 +40,8 @@ RegistryChange observe_speaker(const std::string&,const PolicyDocument&,
 RegistryChange associate_speaker(const std::string&,const PolicyDocument&,
     uint64_t expected_revision,const std::string& uuid,
     const std::string& label,const std::string& external_id);
+// Explicit confirmed retention action; removes the selected profile/metadata,
+// never rewrites transcripts or reassigns that UUID to another person.
+RegistryChange forget_speaker(const std::string&,const PolicyDocument&,
+    uint64_t expected_revision,const std::string& uuid);
 }

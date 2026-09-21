@@ -277,7 +277,10 @@ def main():
     descriptors=json.loads(subprocess.check_output([str(carriers['macos'])],env={'PATH':'','AIISDK_DESCRIBE':'1'},timeout=10))
     cfg['interfaces']=enrollment_interfaces(descriptors)
     schemas={d[k] for d in descriptors for k in ('input','output') if d.get(k)}
-    if len(schemas)!=7:raise ValueError('guided speaker schema set changed')
+    expected_schemas={'schemas/speaker-'+name+'.input.json' for name in
+        ('list','enroll','remove','reset','discard_capture','upgrade_policy','buckets','associate','forget')}
+    expected_schemas.update(('schemas/speaker.output.json','schemas/speaker-buckets.output.json'))
+    if schemas!=expected_schemas:raise ValueError('complete speaker schema set required')
     out.mkdir(parents=True,exist_ok=False);author=out/'author'
     assets={};plans={}
     for v in cfg['variants']:

@@ -1,4 +1,5 @@
 EXPORTS
+  aii_voice_models_track_observer
   aii_voice_prepare_capture
   aii_voice_enroll_selected
   aii_voice_enrollment_finals

@@ -55,14 +55,17 @@ See [the native checkpoint and exact remaining boundary](NATIVE_MULTITALKER_RESU
 The subsequent [native hearing integration](NATIVE_HEARING_INTEGRATION_20260921.md)
 connects raw capture and diarization to an opt-in resident worker and passes the
 recorded SDK panel. It also repairs a VAD/context integration failure. The
-release gates below remain open: this is not persistent UID or installed proof.
+release gates below remain open. The subsequent
+[resident UUID integration](RESIDENT_SPEAKER_REGISTRY.md) adds measured persistent
+UID and later naming through the SDK, but is not installed-host proof.
 
 ## Promotion requirements still open
 
 The operator also requires [persistent anonymous speaker buckets](PERSISTENT_SPEAKER_BUCKETS.md):
 speaker separation and UUID attribution before naming, followed by a name/ID
 association at any time. A live enrollment ceremony cannot be the only route.
-The containment adapter described below does not yet implement that registry.
+The resident implementation now contains that registry; the host consumer and
+final installed/platform acceptance remain required.
 
 1. Integrate the measured speaker-aware reference into native hearing. Preserve
    actual foreground/background conditioning and independent track caches;

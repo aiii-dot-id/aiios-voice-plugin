@@ -112,4 +112,13 @@ RegistryChange associate_speaker(const std::string& raw,const PolicyDocument& p,
   advance(r);found->associations.push_back({r.revision,label,external_id});
   return prepared(raw,r,p,id,"associated","metadata_only_not_authorization");
 }
+RegistryChange forget_speaker(const std::string& raw,const PolicyDocument& p,uint64_t expected,const std::string& id) {
+  auto r=read_registry(raw,p);require(r.revision==expected,"stale speaker registry revision");uuid(id);
+  const auto found=std::find_if(r.buckets.begin(),r.buckets.end(),[&](const auto& b){return b.uuid==id;});
+  require(found!=r.buckets.end(),"speaker UUID not found");advance(r);r.buckets.erase(found);
+  r.profiles.speakers.erase(std::remove_if(r.profiles.speakers.begin(),r.profiles.speakers.end(),
+      [&](const auto& profile){return profile.id==id;}),r.profiles.speakers.end());
+  r.profiles.revision=r.revision;
+  return prepared(raw,r,p,id,"forgotten","confirmed_profile_and_metadata_removal");
+}
 }

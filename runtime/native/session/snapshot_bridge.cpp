@@ -7,7 +7,7 @@ namespace aii::voice {
 using namespace wire;
 using Clock=std::chrono::steady_clock;
 static size_t store_limit(SnapshotBridge::Store store) {
-  if(store==SnapshotBridge::Store::Enrollment)return 8u<<20;
+  if(store==SnapshotBridge::Store::Enrollment||store==SnapshotBridge::Store::SpeakerRegistry)return 8u<<20;
   if(store==SnapshotBridge::Store::Recovery)return 12u<<20;
   require(store==SnapshotBridge::Store::PendingCaptures,"unknown UID storage resource");return 65536;
 }
@@ -38,6 +38,7 @@ Json SnapshotBridge::exchange(Json query,Clock::time_point deadline,Store store,
   require(store==Store::Recovery ? archive.size()==64&&archive.find_first_not_of("0123456789abcdef")==std::string::npos : archive.empty(),"invalid recovery archive identity");
   if(store==Store::Recovery)put(query,"resource",string("recovery:"+archive));
   if(store==Store::PendingCaptures)put(query,"resource",string("captures"));
+  if(store==Store::SpeakerRegistry)put(query,"resource",string("speaker_registry"));
   std::unique_lock<std::mutex> l(mutex_);
   require(live_&&Clock::now()<deadline,"UID read cancelled/deadline");
   require(next_<9007199254740991ULL,"UID request IDs exhausted");

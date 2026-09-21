@@ -12,7 +12,7 @@ namespace aii::voice {
 class SnapshotBridge {
  public:
   // Two fixed private resources; never a caller-provided filesystem path.
-  enum class Store { Enrollment, PendingCaptures, Recovery };
+  enum class Store { Enrollment, PendingCaptures, Recovery, SpeakerRegistry };
   using Send=std::function<void(wire::Json)>;
   explicit SnapshotBridge(Send send={}):send_(std::move(send)){}
   void sender(Send send) {send_=std::move(send);} // before any session opens

@@ -21,6 +21,9 @@ class NativeSpeaker final:public SpeakerIdentifier {
   // evidence. No profile callback, persistence or enrollment occurs here.
   aii::uid::Sample prepare_capture(const std::vector<float>&);
   std::string identify(uint64_t,const std::vector<float>&) override;
+  using ObserveTrack=std::function<std::string(const std::optional<aii::uid::Sample>&,size_t)>;
+  void track_observer(ObserveTrack);
+  std::string identify_track(uint64_t,const std::vector<float>&) override;
   // Same exclusive UID inference owner as identify; never call concurrently.
   // Selection/authorization and final-span custody belong to the composition
   // root. Produces only candidate bytes: no file write or automatic enrollment.

@@ -1,5 +1,6 @@
 #include "capture_enrollment.h"
 #include "uid_recovery.h"
+#include "speaker_registry_store.h"
 #include "../vendor/picosha2/picosha2.h"
 #include <iostream>
 #include <optional>
@@ -51,7 +52,7 @@ struct Host {
   void answer(Json request){
     auto* q=field(request.get(),"snapshot_request");
     const std::string key=field(q,"resource")?str(field(q,"resource")):"enrollment";
-    check(key=="captures"||key=="enrollment"||key.rfind("recovery:",0)==0,"arbitrary private resource");
+    check(key=="captures"||key=="enrollment"||key=="speaker_registry"||key.rfind("recovery:",0)==0,"arbitrary private resource");
     const auto fault_key=key.rfind("recovery:",0)==0?"recovery":key;
     auto& current=key=="captures"?pending:key=="enrollment"?profile:archives[key];
     auto reply=object();put(reply,"id",clone(field(q,"id")));put(reply,"session_id",clone(field(q,"session_id")));
@@ -210,6 +211,39 @@ void process_step(const std::string& mode,const std::filesystem::path& directory
   }else throw std::invalid_argument("unknown process step");
   std::cout<<"fresh-process "<<mode<<" PASS; fixture broker, no host durability or acoustic claim\n";
 }
+void registry_contract(){
+  Host host;const auto p=policy();SpeakerRegistryStore store(host.bridge,p);
+  auto empty=store.list();check(str(field(empty.get(),"registry_revision"))=="0","new registry not empty");
+  aii_voice_capture sample{};sample.samples=64000;
+  std::snprintf(sample.embedding_binding,sizeof sample.embedding_binding,"%s",p.policy.embedding_binding.c_str());
+  std::snprintf(sample.pcm_sha256,sizeof sample.pcm_sha256,"%s",hash("clean-track").c_str());sample.embedding[0]=1;
+  auto first=store.observe(&sample);const auto id=str(field(first.get(),"speaker_uuid"));
+  check(str(field(first.get(),"continuity"))=="new_profile"&&host.publications.size()==1,"registry publication missing");
+  auto same=store.observe(&sample);check(str(field(same.get(),"speaker_uuid"))==id&&host.publications.size()==1,"matched voice duplicated");
+  host.bridge.cancel();host.bridge.begin("later-session");SpeakerRegistryStore restarted(host.bridge,p);
+  auto named=restarted.associate(1,id,"Chosen speaker","");
+  check(str(field(named.get(),"registry_revision"))=="2","closed-session naming missing");
+  same=restarted.observe(&sample);check(str(field(same.get(),"speaker_uuid"))==id&&str(field(same.get(),"display_label"))=="Chosen speaker","restart lost UUID/label");
+  refused([&]{restarted.associate(1,id,"Stale","");},"stale");
+  auto provisional=restarted.observe(nullptr);check(str(field(provisional.get(),"speaker_uuid"))!=id&&str(field(provisional.get(),"continuity"))=="provisional","ambiguous audio borrowed identity");
+  check(!host.profile&&!host.pending,"registry overwrote legacy stores");
+  refused([&]{restarted.forget(2,id);},"stale");
+  auto forgotten=restarted.forget(3,id);
+  check(!flag(field(cJSON_GetArrayItem(field(forgotten.get(),"speakers"),0),"profile_available")),
+      "forget retained acoustic profile");
+  check(cJSON_GetArraySize(field(forgotten.get(),"speakers"))==1,"forget changed another UUID");
+  auto reobserved=restarted.observe(&sample);
+  check(str(field(reobserved.get(),"speaker_uuid"))!=id&&str(field(reobserved.get(),"continuity"))=="new_profile",
+      "forgotten UUID was revived");
+  for(const std::string fault:{"denied","conflict","unsynced","readback"}) {
+    Host broken;SpeakerRegistryStore owner(broken.bridge,p);
+    if(fault=="denied")broken.denied_read="speaker_registry";
+    if(fault=="conflict")broken.fail_publish="speaker_registry";
+    if(fault=="unsynced")broken.unsynced="speaker_registry";
+    if(fault=="readback")broken.bad_read="speaker_registry";
+    refused([&]{owner.observe(&sample);},fault=="denied"?"unavailable":fault=="conflict"?"not published":fault=="unsynced"?"durability":"unresolved");
+  }
+}
 void recovery_contract(){
   const auto p=policy();BoundPolicies bound(p.canonical);
   const auto old=read_policy("{\"calibration_sha256\":\""+std::string(64,'c')+"\",\"embedding_binding\":\""+std::string(64,'d')+"\",\"minimum_enrollment_samples\":1,\"minimum_margin\":0.105,\"threshold\":0.56}");
@@ -260,7 +294,7 @@ void recovery_contract(){
 int main(int argc,char** argv){try{
   if(argc==3)process_step(argv[1],argv[2]);
   else{
-  check(argc==1,"unexpected arguments");complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();
+  check(argc==1,"unexpected arguments");complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();registry_contract();
   std::cout<<"guided enrollment publication: closed-mic confirmation, profile-first durable readback, explicit restart reconciliation, no duplicated identity, cleanup uncertainty and fail-closed reads PASS\n";
   }
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

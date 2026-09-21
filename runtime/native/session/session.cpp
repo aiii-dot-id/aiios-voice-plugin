@@ -1,4 +1,5 @@
 #include "session.h"
+#include "speaker_limits.h"
 #include "text.h"
 #include "../../native_endpoint/pause_gate.h"
 #include <array>
@@ -60,7 +61,7 @@ struct Session::Impl {
   std::deque<std::shared_ptr<Query>> queries;
   std::map<uint64_t,std::shared_ptr<Job>> jobs;
   std::shared_ptr<Job> current;
-  std::unique_ptr<SpeakerJob> speaker_job;
+  std::deque<SpeakerJob> speaker_jobs;
   bool speaker_busy=false;
 
   Impl(Synthesizer& t,Settings s,std::optional<Hearing> h)
@@ -321,6 +322,14 @@ struct Session::Impl {
           throw std::runtime_error("separated recognizer segment extent");
         for(unsigned char c:segment.track)if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='-'||c=='_'||c=='.'))
           throw std::runtime_error("recognizer track identifier");
+        if(!segment.evidence.empty()) {
+          if(segment.evidence.size()<31920 || segment.evidence.size()>160000 ||
+             segment.evidence_start<segment.start || segment.evidence_start>segment.end ||
+             segment.evidence.size()>segment.end-segment.evidence_start)
+            throw std::runtime_error("recognizer track evidence extent");
+          for(float x:segment.evidence)if(!std::isfinite(x)||x<-1||x>1)
+            throw std::runtime_error("recognizer track evidence PCM");
+        }
       }
       asr.reset(); active=false; begun=false;
       { std::lock_guard<std::mutex> lock(mutex); recognition_active=false; }
@@ -329,11 +338,14 @@ struct Session::Impl {
         if(!stopping)for(const auto& segment:segments) {
           Event final{0,turn,0,start+segment.start,start+segment.end,"transcript_final",segment.text};
           final.track=segment.track;emit_locked(final);final.sequence=sequence;
-          // The pooled microphone must never become per-track UID evidence.
-          // A speaker-specific evidence owner supplies later matching; until
-          // then each separated final gets an explicit non-authoritative state.
+          // Only selected track evidence reaches matching. An empty sample
+          // asks for an anonymous provisional bucket, never pooled inference.
+          if(speaker && speaker_jobs.size()<speaker_queue_capacity) {
+            speaker_jobs.push_back({final,segment.evidence});
+            speaker_busy=true;changed.notify_all();continue;
+          }
           Event observation{0,turn,0,final.start,final.end,"speaker_observation",
-              R"({"outcome":"unavailable","reason":"speaker_specific_evidence_unavailable","used_for_permissions":false})",final.sequence};
+              R"({"outcome":"unavailable","reason":"speaker_worker_unavailable","used_for_permissions":false})",final.sequence};
           observation.track=segment.track;emit_locked(std::move(observation));
         }
       }
@@ -352,7 +364,7 @@ struct Session::Impl {
               emit_locked(Event{0,turn,0,start,valid_position,"speaker_observation",
                 std::string("{\"outcome\":\"unavailable\",\"reason\":\"")+unavailable+"\",\"used_for_permissions\":false}",final.sequence});
             } else {
-              speaker_job=std::make_unique<SpeakerJob>(SpeakerJob{final,std::move(speaker_pcm)});
+              speaker_jobs.push_back({final,std::move(speaker_pcm)});
               speaker_busy=true; changed.notify_all();
             }
           }
@@ -430,16 +442,17 @@ struct Session::Impl {
   }
   void speaker_loop() {
     for(;;) {
-      std::unique_ptr<SpeakerJob> job;
+      SpeakerJob job;
       {
         std::unique_lock<std::mutex> lock(mutex);
-        changed.wait(lock,[&]{return stopping || speaker_job!=nullptr;});
-        if(stopping) { speaker_job.reset(); speaker_busy=false; return; }
-        job=std::move(speaker_job);
+        changed.wait(lock,[&]{return stopping || !speaker_jobs.empty();});
+        if(stopping) { speaker_jobs.clear(); speaker_busy=false; return; }
+        job=std::move(speaker_jobs.front());speaker_jobs.pop_front();
       }
       std::string result;
       try {
-        result=speaker->identify(job->final.sequence,job->pcm);
+        result=job.final.track.empty()?speaker->identify(job.final.sequence,job.pcm):
+          speaker->identify_track(job.final.sequence,job.pcm);
         if(result.empty() || result.size()>8192) throw std::runtime_error("invalid speaker observation size");
       } catch(const EnrollmentUnavailable&) {
         result="{\"outcome\":\"unavailable\",\"reason\":\"enrollment_unavailable\",\"used_for_permissions\":false}";
@@ -448,9 +461,9 @@ struct Session::Impl {
       }
       {
         std::lock_guard<std::mutex> lock(mutex);
-        if(!stopping) emit_locked(Event{0,job->final.turn,0,job->final.start,job->final.end,
-                                       "speaker_observation",std::move(result),job->final.sequence});
-        speaker_busy=false; maybe_close_locked();
+        if(!stopping) emit_locked(Event{0,job.final.turn,0,job.final.start,job.final.end,
+                                       "speaker_observation",std::move(result),job.final.sequence,job.final.track});
+        speaker_busy=!speaker_jobs.empty(); maybe_close_locked();
       }
       changed.notify_all();
     }

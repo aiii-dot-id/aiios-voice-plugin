@@ -18,6 +18,8 @@ struct EnrollmentUnavailable : std::runtime_error { using std::runtime_error::ru
 struct RecognizedSegment {
   std::string track, text;
   uint64_t start=0,end=0; // relative to this utterance's input clock
+  uint64_t evidence_start=0;
+  std::vector<float> evidence{}; // private selected track PCM, never the pooled capture
 };
 struct Recognizer {
   virtual ~Recognizer() = default;
@@ -72,6 +74,9 @@ struct SpeakerIdentifier {
   virtual ~SpeakerIdentifier() = default;
   virtual void open() {}
   virtual std::string identify(uint64_t, const std::vector<float>&) = 0;
+  virtual std::string identify_track(uint64_t, const std::vector<float>&) {
+    return R"({"outcome":"unavailable","reason":"speaker_registry_unavailable","used_for_permissions":false})";
+  }
   virtual void cancel() noexcept = 0;
 };
 struct Settings {

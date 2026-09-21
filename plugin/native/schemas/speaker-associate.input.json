@@ -1,0 +1,13 @@
+{
+  "type":"object",
+  "description":"Associate a human-chosen label or external ID with an existing anonymous speaker UUID after operator confirmation. No open microphone or new recording is required. Read speaker.buckets first and copy its exact UUID and registry_revision. Stale revisions refuse without overwriting newer choices. Empty display_label clears the label; omitted external_id clears that association. This changes metadata, not historic words, acoustic profiles or authority.",
+  "properties":{
+    "speaker_uuid":{"type":"string","description":"Exact persistent UUID returned by speaker.buckets; never a track number.","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "registry_revision":{"type":"string","description":"Exact decimal revision returned by speaker.buckets; stale writes refuse.","pattern":"^(0|[1-9][0-9]{0,15})$"},
+    "display_label":{"type":"string","description":"Human-chosen display name; empty clears it. Not an authority grant.","maxLength":128},
+    "external_id":{"type":"string","description":"Optional operator-chosen external identifier; omission clears it.","maxLength":128},
+    "session_id":{"type":"string","description":"Optional exact current session ID; omit for management after microphone close.","minLength":1,"maxLength":128}
+  },
+  "required":["speaker_uuid","registry_revision","display_label"],
+  "additionalProperties":false
+}

@@ -58,4 +58,9 @@ std::vector<EvidenceSpan> SpeakerEvidence::finish(uint64_t actual) {
 size_t SpeakerEvidence::retained_spans() const {
   size_t n=0;for(const auto& span:best_)n+=span.end>span.start;return n;
 }
+std::vector<EvidenceSpan> SpeakerEvidence::spans() const {
+  std::vector<EvidenceSpan> result;
+  for(const auto& span:best_)if(span.end>span.start)result.push_back(span);
+  return result;
+}
 }

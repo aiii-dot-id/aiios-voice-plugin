@@ -21,27 +21,37 @@ void Recognizer::open() {
 void Recognizer::begin() {
   if(active_ || epoch_==std::numeric_limits<uint64_t>::max())throw std::runtime_error("recognizer lifecycle");
   if(cancelled_.load())throw aii::voice::Cancelled("multitalker cancelled");
-  microphone_.reset(++epoch_);samples_=0;finished_=false;text_={};active_=true;
+  microphone_.reset(++epoch_);evidence_={};evidence_audio_={};samples_=0;finished_=false;text_={};active_=true;
   if(cancelled_.load()){microphone_.cancel();throw aii::voice::Cancelled("multitalker cancelled");}
 }
 void Recognizer::append(const std::vector<MicrophoneUpdate>& updates) {
   if(cancelled_.load())throw aii::voice::Cancelled("multitalker cancelled");
-  for(const auto& update:updates)for(const auto& track:update.tracks)for(const auto& token:track.tokens) {
+  for(const auto& update:updates) {
+    if(!update.activity.empty())evidence_.push(update.activity_start_frame,update.activity);
+    evidence_audio_.select(evidence_.spans());
+    for(const auto& track:update.tracks)for(const auto& token:track.tokens) {
     auto& text=text_.at(track.track);const auto& piece=vocabulary_.at(static_cast<size_t>(token.id));
     if(piece.size()>131071-text.size())throw std::runtime_error("speaker transcript extent exceeded");
     text+=piece;
+    }
   }
 }
 std::string Recognizer::push(const float* pcm,size_t count) {
   if(!active_ || finished_)throw std::runtime_error("recognizer is not accepting speech");
   if(count>std::numeric_limits<uint64_t>::max()-samples_)throw std::overflow_error("recognizer sample clock");
-  try {append(microphone_.accept(pcm,count));samples_+=count;}
+  try {
+    // Bound lookahead custody even when a caller supplies a large audio batch.
+    while(count) {
+      const auto n=std::min(count,EvidenceAudio::maximum_chunk);
+      evidence_audio_.append(pcm,n);append(microphone_.accept(pcm,n));samples_+=n;pcm+=n;count-=n;
+    }
+  }
   catch(...) {if(cancelled_.load())throw aii::voice::Cancelled("multitalker cancelled");throw;}
   return {}; // Never collapse distinct speakers into one partial string.
 }
 std::string Recognizer::finish() {
   if(!active_ || finished_)throw std::runtime_error("recognizer is not accepting speech");
-  try {append(microphone_.finish());finished_=true;}
+  try {append(microphone_.finish());if(samples_)evidence_audio_.select(evidence_.finish(samples_));finished_=true;}
   catch(...) {if(cancelled_.load())throw aii::voice::Cancelled("multitalker cancelled");throw;}
   return {};
 }
@@ -54,9 +64,11 @@ std::vector<aii::voice::RecognizedSegment> Recognizer::segments() const {
     // The utterance extent is conservative, not a claimed word alignment.
     result.push_back({"utterance-"+std::to_string(epoch_)+".track-"+std::to_string(track),
                       text_[track].substr(first,last-first+1),0,samples_});
+    const auto& selected=evidence_audio_.track(track);
+    result.back().evidence_start=selected.span.start;result.back().evidence=selected.pcm;
   }
   return result;
 }
-void Recognizer::reset(){active_=false;finished_=false;text_={};samples_=0;}
+void Recognizer::reset(){active_=false;finished_=false;text_={};samples_=0;evidence_={};evidence_audio_={};}
 void Recognizer::cancel() noexcept {cancelled_.store(true);microphone_.cancel();}
 }

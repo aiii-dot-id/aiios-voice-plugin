@@ -30,12 +30,12 @@ func TestEnrollmentRequiresOperatorAndPreservesSpeechDeadline(t *testing.T) {
 		t.Fatal("discovery needs no caller knowledge of a session ID", err)
 	}
 	p := declaredPlugin()
-	if len(p.Operations()) != 14 {
+	if len(p.Operations()) != 17 {
 		t.Fatal("enrollment operations absent")
 	}
 	for _, d := range p.Descriptors() {
 		if enrollmentOperation(d.ID) {
-			if d.OperatorConfirms != (d.ID != "speaker.list") || len(d.Capabilities) != 1 || d.Capabilities[0] != "fs.private" {
+			if d.OperatorConfirms != (d.ID != "speaker.list" && d.ID != "speaker.buckets") || len(d.Capabilities) != 1 || d.Capabilities[0] != "fs.private" {
 				t.Fatal("wrong operator/capability gate", d)
 			}
 		}

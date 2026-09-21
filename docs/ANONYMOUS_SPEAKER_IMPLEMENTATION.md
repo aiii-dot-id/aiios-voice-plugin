@@ -1,8 +1,9 @@
 # Anonymous speaker implementation boundary
 
 The native UID module now has a bounded anonymous registry codec and decision
-functions. This is not yet connected to the resident worker's private-store
-broker or the host consumer. It is not a released plugin capability.
+functions. The [resident worker connection](RESIDENT_SPEAKER_REGISTRY.md) now
+uses its existing private-store broker. The host consumer and installed release
+qualification remain open. It is not a released plugin capability.
 
 ## Implemented
 
@@ -20,11 +21,14 @@ broker or the host consumer. It is not a released plugin capability.
   history and rejection of stale, foreign or malformed requests.
 - Bounded storage: 256 buckets, 1,024 association-history entries, 8 MiB. The
   registry stores model-bound profiles and metadata, never transcripts or raw
-  audio. At capacity it refuses new data; there is no silent eviction.
+  audio. At capacity it refuses new data; there is no silent eviction. The
+  confirmed `speaker.forget` operation removes one exact UUID's profile and
+  metadata under revision/CAS protection, without altering transcripts.
 
 The registry functions prepare candidate bytes and a base digest. They do not
-perform durable storage. The existing host-owned CAS and verified readback must
-be connected before a UUID may be described as durably published.
+perform durable storage. The resident owner now publishes them using host-owned
+CAS and verified durable readback before emitting a UUID. Real-host filesystem
+qualification remains separate from the simulated test host's receipts.
 
 ## Measured acoustic path
 
@@ -56,18 +60,20 @@ but had no isolated profile evidence: its two buckets remain provisional. The
 result explicitly reports incomplete profile coverage. These recordings are
 not seven independent conversations or broad biometric-accuracy evidence.
 
-## Remaining product connection
+## Product connection
 
-1. Carry bounded speaker-specific PCM evidence from recognition into the UID
-   owner without ever passing the pooled capture as clean evidence.
-2. Publish the registry through the existing private-store broker, with typed
-   absence, exact CAS, cancellation and verified durable readback. Connect the
-   proposed list/associate operations and their complete shipped schemas.
+1. Implemented: bounded speaker-specific PCM from recognition into the UID
+   owner, never the pooled capture as clean evidence.
+2. Implemented: registry publication through the existing private-store broker,
+   typed absence, exact CAS, cancellation and verified durable readback;
+   list/associate/forget operations with complete packaged schemas.
 3. Bind UUID/revision/continuity to each original final and the host's live,
    stored and recovered consumer views. Join/filter on the UUID; a track index
    or a nearest named person is not a substitute.
 4. Run installed multi-speaker, restart, later-label and filter journeys on the
    final signed desktop artifacts before updating the release/catalog.
 
-The existing resident SDK checkpoint still reports separated finals with
-uncertain attribution. The native registry tests do not change that fact.
+The resident SDK checkpoint now reports persistent UUID/revision/continuity
+fields on exact-key observations. The named-person `decision` remains uncertain:
+an anonymous acoustic UUID or chosen label is not verified personal identity.
+The host must consume the new fields rather than coercing them into `speaker_id`.

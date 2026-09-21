@@ -70,6 +70,12 @@ typedef struct aii_voice_capture {
   char embedding_binding[65], pcm_sha256[65];
   double embedding[256];
 } aii_voice_capture;
+/* Private model-composition callback, not a Plugin SDK operation. Runs only
+ * on the bounded speaker worker. Null evidence means a provisional track.
+ * The owner publishes via host CAS/readback before returning a UUID. Callback
+ * and context outlive models; cancellation must wake any host wait. */
+typedef aii_voice_result (*aii_voice_track_observer)(void*, const aii_voice_capture*, char*, size_t, size_t*);
+aii_voice_result aii_voice_models_track_observer(aii_voice_models*, aii_voice_track_observer, void*, aii_voice_error*);
 
 /* Cold model load and session open may block for initialization; they belong on
  * an initialization owner, never the ordered SDK admission/reader goroutine.

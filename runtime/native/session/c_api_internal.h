@@ -11,6 +11,9 @@ struct ModelOwner {
   virtual Endpoint& endpoint() = 0;
   virtual Synthesizer& synthesizer() = 0;
   virtual SpeakerIdentifier* speaker() { return nullptr; }
+  virtual void track_observer(aii_voice_track_observer,void*) {
+    throw std::invalid_argument("speaker registry unavailable in this model owner");
+  }
   virtual aii_voice_capture prepare_capture(const std::vector<float>&) {
     throw std::invalid_argument("native capture preparation unavailable in this model owner");
   }

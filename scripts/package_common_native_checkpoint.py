@@ -9,7 +9,7 @@ from scripts.build_plugin_carrier import SDK_SOURCE,PIN
 from scripts.package_native_runtime import verify
 ROOT=Path(__file__).resolve().parents[1];GO='/usr/local/go1.27/bin/go'
 SPEAKER_OPERATIONS={'speaker.enroll','speaker.list','speaker.remove','speaker.reset',
-                    'speaker.discard_capture','speaker.upgrade_policy'}
+                    'speaker.discard_capture','speaker.upgrade_policy','speaker.buckets','speaker.associate','speaker.forget'}
 
 def enrollment_interfaces(descriptors):
     """Current enrollment surface must ship whole, never a silently reduced kit."""
@@ -17,11 +17,11 @@ def enrollment_interfaces(descriptors):
     if len(ids)!=len(set(ids)):raise ValueError('duplicate operation descriptor')
     speech=[n for n in ids if n.startswith('speech.session.')]
     speaker=[n for n in ids if n.startswith('speaker.')]
-    if len(speech)!=8 or set(speaker)!=SPEAKER_OPERATIONS or len(ids)!=14:
+    if len(speech)!=8 or set(speaker)!=SPEAKER_OPERATIONS or len(ids)!=17:
         raise ValueError('incomplete guided enrollment interface')
     for descriptor in descriptors:
         if descriptor['id'] in SPEAKER_OPERATIONS:
-            if descriptor.get('operator_confirms',False)!=(descriptor['id']!='speaker.list'):
+            if descriptor.get('operator_confirms',False)!=(descriptor['id'] not in ('speaker.list','speaker.buckets')):
                 raise ValueError('speaker confirmation declaration differs')
     return [{'id':'speech.session','version':1,'methods':speech},
             {'id':'speaker.uid','version':1,'methods':speaker}]
@@ -108,7 +108,7 @@ def main():
     # Execute the platform-named original. The assembler's input basename is
     # intentionally common; its emitted entrypoint comes from the variant.
     desc=subprocess.run([str(carrier)],env={'PATH':'','AIISDK_DESCRIBE':'1'},capture_output=True,check=True,timeout=10)
-    descriptors=json.loads(desc.stdout);assert not desc.stderr and len(descriptors)==(14 if a.enrollment else 8)
+    descriptors=json.loads(desc.stdout);assert not desc.stderr and len(descriptors)==(17 if a.enrollment else 8)
     (a.out/'descriptors.json').write_bytes(desc.stdout)
     schema_files={}
     schema_root=a.schema_root.resolve() if a.schema_root else ROOT/'plugin/native'

@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"List persistent anonymous speaker UUIDs and the exact registry_revision. Works after microphone close or restart. profile_available=false means provisional continuity, not a recognized person. display_label is optional metadata, never authentication. Copy the exact UUID and revision into speaker.associate for operator-confirmed naming; do not invent either.",
+  "properties":{"session_id":{"type":"string","description":"Optional exact current session ID; omit to inspect the durable registry without an open microphone.","minLength":1,"maxLength":128}},
+  "additionalProperties":false
+}

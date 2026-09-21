@@ -1,4 +1,5 @@
 #include "speaker_evidence.h"
+#include "evidence_audio.h"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +12,16 @@ std::vector<float> activity(size_t frames,int track,int other=-1){
   return out;
 }
 int main(){try{
+  EvidenceAudio audio;std::vector<float> first(16000,.25f),second(16000,.75f);
+  for(int i=0;i<4;++i)audio.append(first.data(),first.size());
+  audio.select({{0,2560,60000,40000}});
+  for(int i=0;i<100;++i)audio.append(second.data(),second.size());
+  check(audio.track(0).pcm.size()==57440&&audio.track(0).pcm.front()==.25f&&audio.track(0).pcm.back()==.25f);
+  check(audio.retained_samples()<=EvidenceAudio::capacity+4*SpeakerEvidence::maximum_span);
+  audio.select({{1,2560,60000,40000}});check(audio.track(1).pcm.empty());
+  refuses([&]{audio.select({{4,0,40000,40000}});});
+  auto invalid_pcm=second;invalid_pcm.back()=NAN;
+  const auto before=audio.retained_samples();refuses([&]{audio.append(invalid_pcm.data(),invalid_pcm.size());});check(before==audio.retained_samples());
   SpeakerEvidence solo;solo.push(0,activity(50,2));auto spans=solo.finish(64000);
   check(spans.size()==1&&spans[0].track==2&&spans[0].start==2560&&spans[0].end==61440);
   refuses([&]{solo.push(50,activity(1,2));});

@@ -100,9 +100,9 @@ def validate_description(description):
     if any(not isinstance(x, str) for x in ids):
         raise ValueError("Resident operation IDs must be strings")
     enrollment = {"speaker." + name for name in
-                  ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy")}
-    if set(ids) != expected | enrollment or len(ids) != 14:
-        raise ValueError("The current carrier must declare all eight controls and six speaker operations")
+                  ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget")}
+    if set(ids) != expected | enrollment or len(ids) != 17:
+        raise ValueError("The current carrier must declare all eight controls and nine speaker operations")
     for row in description:
         if row["id"] in enrollment:
             # The SDK's eight controls are host lifecycle operations, not
@@ -110,13 +110,14 @@ def validate_description(description):
             # describe their complete contract to the identity.
             if not isinstance(row.get("summary"), str) or not row["summary"].strip():
                 raise ValueError("Speaker operation summary missing")
-            write = row["id"] != "speaker.list"
+            write = row["id"] not in ("speaker.list", "speaker.buckets")
             if (row.get("operator_confirms", False) is not write
                     or row.get("capabilities") != ["fs.private"]
                     or row.get("effects") != ("write.local" if write else "read.internal")):
                 raise ValueError("Enrollment effects/confirmation contract differs")
             name = row["id"].split(".")[1]
-            if row.get("input") != f"schemas/speaker-{name}.input.json" or row.get("output") != "schemas/speaker.output.json":
+            output = "schemas/speaker-buckets.output.json" if name in ("buckets", "associate", "forget") else "schemas/speaker.output.json"
+            if row.get("input") != f"schemas/speaker-{name}.input.json" or row.get("output") != output:
                 raise ValueError("Enrollment schema reference differs")
 
 

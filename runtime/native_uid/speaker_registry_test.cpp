@@ -54,6 +54,15 @@ int main(int argc,char** argv){try{
   auto saturated=SpeakerRegistry{256,{p.policy,0,{}},{}};
   for(unsigned i=1;i<=256;++i){char id[37]{};std::snprintf(id,sizeof id,"00000000-0000-4000-8000-%012x",i);saturated.buckets.push_back({id,i,{}});}
   refuses([&]{observe_speaker(write_registry(saturated,p),p,256,"ffffffff-ffff-4fff-8fff-ffffffffffff",std::nullopt);});
+  const auto full=write_registry(saturated,p);
+  const auto freed=forget_speaker(full,p,256,saturated.buckets.front().uuid);
+  check(read_registry(freed.document,p).buckets.size()==255 && freed.revision==257,"forget failed to release capacity");
+  const auto resumed=observe_speaker(freed.document,p,257,"ffffffff-ffff-4fff-8fff-ffffffffffff",std::nullopt);
+  check(read_registry(resumed.document,p).buckets.size()==256,"registry did not recover after explicit retention");
+  refuses([&]{forget_speaker(full,p,255,saturated.buckets.front().uuid);});
+  const auto removed=forget_speaker(first.document,p,1,a);
+  check(read_registry(removed.document,p).profiles.speakers.empty(),"forgotten profile retained");
+  refuses([&]{forget_speaker(removed.document,p,removed.revision,a);});
   auto history=read_registry(provisional.document,p);
   for(unsigned i=0;i<1024;++i)history.buckets[0].associations.push_back({i+2,"Label "+std::to_string(i),""});
   history.revision=1025;

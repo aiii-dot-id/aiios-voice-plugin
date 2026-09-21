@@ -19,6 +19,7 @@ class SpeakerEvidence {
   void push(uint64_t first_frame,const std::vector<float>& probabilities);
   std::vector<EvidenceSpan> finish(uint64_t actual_samples);
   size_t retained_spans() const;
+  std::vector<EvidenceSpan> spans() const;
  private:
   struct Run {uint64_t start=0,end=0,active=0,last_active_end=0;bool open=false;};
   std::array<Run,4> runs_{};

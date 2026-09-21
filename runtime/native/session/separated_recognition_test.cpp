@@ -9,13 +9,15 @@ using namespace aii::voice;
 namespace {
 void check(bool ok,const char* reason){if(!ok)throw std::runtime_error(reason);}
 struct Asr final:Recognizer {
-  size_t samples=0,begins=0,total=0;bool malformed=false,continuous=false;
+  size_t samples=0,begins=0,total=0;bool malformed=false,continuous=false,selected=false;
   void begin() override {samples=0;++begins;}
   std::string push(const float*,size_t count) override {samples+=count;total+=count;return {};}
   std::string finish() override {return {};}
   bool separated() const override {return true;}
   bool continuous_input() const override {return continuous;}
   std::vector<RecognizedSegment> segments() const override {
+    if(selected)return {{"utterance-1.track-0","first speaker's words",0,samples,0,std::vector<float>(32000,.25f)},
+                        {"utterance-1.track-1","second speaker's words",0,samples,32000,std::vector<float>(32000,.75f)}};
     return {{"utterance-1.track-0","first speaker's words",0,samples},
             {"utterance-1.track-1","second speaker's words",samples/2,malformed?samples+1:samples}};
   }
@@ -30,8 +32,16 @@ struct T:Synthesizer {
 };
 struct S:SpeakerIdentifier {
   std::atomic<size_t> calls{0};
+  std::atomic<size_t> tracks{0};std::atomic<bool> hold{false},cancelled{false};
   std::string identify(uint64_t,const std::vector<float>&)override{++calls;return "{}";}
-  void cancel()noexcept override{}
+  std::string identify_track(uint64_t,const std::vector<float>& pcm)override {
+    while(hold&&!cancelled)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if(cancelled)throw Cancelled("cancelled");
+    const auto index=tracks++;
+    if(!pcm.empty())check(pcm.size()==32000&&std::all_of(pcm.begin(),pcm.end(),[&](float x){return x==(index?.75f:.25f);}),"track PCM blended or misrouted");
+    return R"({"outcome":"unavailable","reason":"fixture_track","used_for_permissions":false})";
+  }
+  void cancel()noexcept override{cancelled=true;}
 };
 struct Owner:ModelOwner {
   Asr a;V v;E e;T t;S s;
@@ -50,7 +60,7 @@ void run(bool malformed) {
   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
   do {
     check(aii_voice_status(session,&snapshot,&error)==AII_VOICE_OK,"status");
-    if(snapshot.input_finished || *snapshot.error)break;
+    if((snapshot.input_finished&&!snapshot.draining) || *snapshot.error)break;
     check(std::chrono::steady_clock::now()<deadline,"completion deadline");
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   } while(true);
@@ -137,5 +147,25 @@ void capture_across_pause() {
   check(commits==2 && finals==4,"second pause final census");
   check(a.total==offset && a.begins==2,"capture skipped or repeated at turn transition");
 }
+void selected_uid_queue(bool abort) {
+  Asr a;a.selected=true;V v;E e;T t;S speaker;speaker.hold=true;
+  Session session(a,v,e,t,Settings{5000,.5f},&speaker);
+  std::vector<float> pcm(512,.5f);const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+  for(uint64_t offset=0;offset<64000;offset+=512)while(!session.feed(offset,pcm.data(),512)) {
+    check(std::chrono::steady_clock::now()<deadline,"selected feed deadline");std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  session.finish_input(64000);
+  while(!session.status().input_finished){check(std::chrono::steady_clock::now()<deadline,"selected finish deadline");std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+  check(session.status().draining,"queued speaker evidence called idle");
+  session.close(abort);
+  if(!abort){check(!session.wait_closed(10),"drain lost pending track evidence");speaker.hold=false;}
+  check(session.wait_closed(2000),"track worker retirement");
+  check(!speaker.calls && speaker.tracks==(abort?0u:2u),"track evidence lost or pooled");
+  size_t observations=0;Event event;
+  while(session.event(event))if(event.kind=="speaker_observation"){
+    check(event.track=="utterance-1.track-"+std::to_string(observations++),"asynchronous track binding changed");
+  }
+  check(observations==(abort?0u:2u),"track observation census");
 }
-int main(){try{run(false);run(true);capture_origin(false);capture_origin(true);capture_across_pause();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+}
+int main(){try{run(false);run(true);capture_origin(false);capture_origin(true);capture_across_pause();selected_uid_queue(false);selected_uid_queue(true);return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

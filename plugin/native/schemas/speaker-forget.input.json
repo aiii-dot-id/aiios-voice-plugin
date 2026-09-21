@@ -1,0 +1,11 @@
+{
+  "type":"object",
+  "description":"After operator confirmation, forget the selected UUID's acoustic profile and label history. Copy the exact UUID and revision from speaker.buckets. No open microphone is required. This does not delete or relabel historical transcripts, other UUIDs, or legacy enrollments. A future observation may create a new UUID. This is the explicit retention action when the bounded registry is full.",
+  "properties":{
+    "speaker_uuid":{"type":"string","description":"Exact UUID to forget, copied from speaker.buckets; other speakers are unchanged.","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "registry_revision":{"type":"string","description":"Exact current decimal revision from speaker.buckets; stale deletion refuses.","pattern":"^(0|[1-9][0-9]{0,15})$"},
+    "session_id":{"type":"string","description":"Optional exact current session ID; no open microphone is required.","minLength":1,"maxLength":128}
+  },
+  "required":["speaker_uuid","registry_revision"],
+  "additionalProperties":false
+}

@@ -1,5 +1,6 @@
 #pragma once
 #include "speaker_observation.h"
+#include "speaker_limits.h"
 #include <deque>
 #include <map>
 #include <vector>
@@ -22,7 +23,7 @@ struct CleanEvidence {
 };
 class Attributions {
  public:
-  static constexpr size_t capacity = 128, pending_capacity = 8;
+  static constexpr size_t capacity = 128, pending_capacity = speaker_pending_capacity;
   static constexpr uint64_t timeout_ms = 15000;
   void begin(const std::string& session) {
     require(!session.empty() && session.size()<=128,"invalid attribution session");
@@ -148,7 +149,7 @@ class Attributions {
   static Json summary(const cJSON* out) {
     auto result=object();
     for(const auto* name:{"decision","reason","speaker","speaker_id","revision",
-                         "used_for_permissions","evidence_scope"})
+                         "used_for_permissions","evidence_scope","speaker_uuid","registry_revision","continuity","display_label"})
       if(field(out,name))put(result,name,clone(field(out,name)));
     return result;
   }

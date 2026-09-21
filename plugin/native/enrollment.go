@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 
 func enrollmentOperation(op string) bool {
 	switch op {
-	case "speaker.list", "speaker.enroll", "speaker.remove", "speaker.reset", "speaker.discard_capture", "speaker.upgrade_policy":
+	case "speaker.list", "speaker.enroll", "speaker.remove", "speaker.reset", "speaker.discard_capture", "speaker.upgrade_policy", "speaker.buckets", "speaker.associate", "speaker.forget":
 		return true
 	}
 	return false
@@ -25,6 +26,32 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 		return errors.New("bounded enrollment arguments required")
 	}
 	allowed := map[string]bool{"session_id": true}
+	if op == "speaker.associate" || op == "speaker.forget" {
+		for _, name := range []string{"speaker_uuid", "registry_revision"} {
+			allowed[name] = true
+		}
+		id, ok := args.String("speaker_uuid")
+		if !ok || !speakerUUID(id) {
+			return errors.New("canonical speaker_uuid from speaker.buckets required")
+		}
+		raw, ok := args.String("registry_revision")
+		n, err := strconv.ParseUint(raw, 10, 64)
+		if !ok || err != nil || n > 9007199254740991 || strconv.FormatUint(n, 10) != raw {
+			return errors.New("exact registry_revision from speaker.buckets required")
+		}
+		if op == "speaker.associate" {
+			allowed["display_label"], allowed["external_id"] = true, true
+			label, ok := args.String("display_label")
+			if !ok || len(label) > 512 {
+				return errors.New("display_label required; empty clears the current label")
+			}
+			if _, present := fields["external_id"]; present {
+				if value, ok := args.String("external_id"); !ok || len(value) > 512 {
+					return errors.New("bounded external_id string required")
+				}
+			}
+		}
+	}
 	if op == "speaker.reset" {
 		allowed["recovery"] = true
 	}
@@ -82,7 +109,7 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 	} else if sid, ok := args.String("session_id"); !ok || sid == "" || len(sid) > 128 {
 		return errors.New("invalid session_id: expected a non-empty string of at most 128 bytes; call speaker.list to obtain the current session_id")
 	}
-	if op != "speaker.list" {
+	if op != "speaker.list" && op != "speaker.buckets" {
 		var nowMillis int64
 		if json.Unmarshal(fields["_host_now_ms"], &nowMillis) != nil || nowMillis <= 0 {
 			return errors.New("host invocation time required")
@@ -99,20 +126,50 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 	}
 	return nil
 }
+func speakerUUID(s string) bool {
+	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' || s[14] != '4' || !strings.ContainsRune("89ab", rune(s[19])) {
+		return false
+	}
+	for i, c := range s {
+		if i != 8 && i != 13 && i != 18 && i != 23 && !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
+}
 func declaredPlugin() *aiiosdk.Plugin {
 	p := aiiosdk.New("id.aiii.voice").DeclareSession()
-	for _, name := range []string{"list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy"} {
+	for _, name := range []string{"list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget"} {
 		op := "speaker." + name
 		effect := aiiosdk.EffectsWriteLocal
-		if name == "list" {
+		if name == "list" || name == "buckets" {
 			effect = aiiosdk.EffectsReadInternal
+		}
+		output := "schemas/speaker.output.json"
+		maxResult := 262144
+		if name == "buckets" || name == "associate" || name == "forget" {
+			output = "schemas/speaker-buckets.output.json"
+			// 256 rows can each carry two 128-scalar labels. Four-byte UTF-8
+			// names alone exceed the legacy result budget; retain the full list.
+			maxResult = 1 << 20
+		}
+		summaries := map[string]string{
+			"list":            "List enrolled speakers, durable captures and readiness without an open microphone.",
+			"enroll":          "Enroll a selected durable capture after operator confirmation; live-final selection is also supported.",
+			"remove":          "Remove one enrolled speaker after operator confirmation without an open microphone.",
+			"reset":           "Reset enrolled speakers after operator confirmation; no microphone required.",
+			"discard_capture": "Discard one pending capture after operator confirmation without changing enrolled speakers.",
+			"upgrade_policy":  "With speech closed and operator confirmation, upgrade to the runtime-bound policy, preserving usable speakers and refusing incomplete profiles.",
+			"buckets":         "List persistent anonymous speaker UUIDs and optional labels after microphone close or restart, with the exact revision for later naming.",
+			"associate":       "Associate a chosen name or external ID with an existing speaker UUID at an exact registry revision after operator confirmation; no microphone required or authority granted.",
+			"forget":          "Forget one anonymous speaker's acoustic profile and labels at an exact registry revision after operator confirmation. Historic transcripts are not deleted or reassigned; future observations may create a new UUID.",
 		}
 		p.Handle(op, func(aiiosdk.Call) (any, error) {
 			return nil, errors.New("speaker operations require the resident plugin transport; listing, removal and reset do not require an open microphone")
 		}).Describe(op, aiiosdk.Descriptor{
-			Summary: map[string]string{"list": "List enrolled speakers, durable pending capture handles, recording readiness and any required policy upgrade with the microphone closed; never grants authority.", "enroll": "Enroll a selected durable capture after operator confirmation, including after microphone close or restart. Existing live-final selection remains supported.", "remove": "Remove one enrolled speaker after operator confirmation; no open microphone needed.", "reset": "Remove all enrolled speakers after operator confirmation; no open microphone needed.", "discard_capture": "Discard one pending enrollment capture after operator confirmation without removing any enrolled speaker.", "upgrade_policy": "With speech closed, propose the runtime-bound guided enrollment policy upgrade. Operator confirmation required; preserves existing usable speakers exactly and refuses incomplete profiles by name."}[name],
-			Input:   "schemas/speaker-" + name + ".input.json", Output: "schemas/speaker.output.json", Effects: effect,
-			Capabilities: []string{"fs.private"}, OperatorConfirms: name != "list", MaxResultBytes: 262144,
+			Summary: summaries[name],
+			Input:   "schemas/speaker-" + name + ".input.json", Output: output, Effects: effect,
+			Capabilities: []string{"fs.private"}, OperatorConfirms: name != "list" && name != "buckets", MaxResultBytes: maxResult,
 			Family: "speaker", Keywords: []string{"voice", "UID", "speaker identity", "enrollment"},
 			// These are shown by the host's tools organ, not private README
 			// instructions. IDs and final numbers are examples, never defaults.
@@ -123,6 +180,9 @@ func declaredPlugin() *aiiosdk.Plugin {
 				"reset":           {`{}`, `{"recovery":{"enrollment_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","captures_sha256":"absent"}}`},
 				"discard_capture": {`{"capture_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`},
 				"upgrade_policy":  {`{}`},
+				"buckets":         {`{}`},
+				"associate":       {`{"speaker_uuid":"12345678-1234-4234-8234-123456789abc","registry_revision":"1","display_label":"Chosen name"}`},
+				"forget":          {`{"speaker_uuid":"12345678-1234-4234-8234-123456789abc","registry_revision":"1"}`},
 			}[name],
 		})
 	}

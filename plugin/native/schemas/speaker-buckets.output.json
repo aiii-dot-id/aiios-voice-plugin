@@ -1,0 +1,14 @@
+{
+  "type":"object",
+  "description":"Public registry projection. Contains no audio, embeddings or profile vectors. UUID is the stable bucket key; a display name is mutable presentation, not permission.",
+  "properties":{
+    "registry_revision":{"type":"string"},
+    "session_open":{"type":"boolean"},
+    "used_for_permissions":{"const":false},
+    "speakers":{"type":"array","maxItems":256,"items":{"type":"object","properties":{
+      "speaker_uuid":{"type":"string"},"profile_available":{"type":"boolean"},"display_label":{"type":"string"},"external_id":{"type":"string"}
+    },"required":["speaker_uuid","profile_available"],"additionalProperties":false}}
+  },
+  "required":["registry_revision","session_open","used_for_permissions","speakers"],
+  "additionalProperties":false
+}

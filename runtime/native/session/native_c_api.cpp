@@ -21,6 +21,23 @@ struct Owner final : aii::voice::ModelOwner {
   std::unique_ptr<aii::voice::NativeSpeaker> uid;
   std::optional<aii::uid::BoundPolicies> uid_policies;
   aii::voice::SpeakerIdentifier* speaker() override {return uid.get();}
+  void track_observer(aii_voice_track_observer callback,void* context) override {
+    if(!uid||!callback||!context)throw std::invalid_argument("native UID observer unavailable");
+    const auto binding=uid_policies->current().policy.embedding_binding;
+    uid->track_observer([callback,context,binding](const std::optional<aii::uid::Sample>& sample,size_t count) {
+      aii_voice_capture evidence{};
+      if(sample) {
+        evidence.samples=count;
+        std::snprintf(evidence.embedding_binding,sizeof evidence.embedding_binding,"%s",binding.c_str());
+        std::snprintf(evidence.pcm_sha256,sizeof evidence.pcm_sha256,"%s",sample->audio_sha256.c_str());
+        std::copy(sample->embedding.begin(),sample->embedding.end(),evidence.embedding);
+      }
+      char output[8192]{};size_t written=0;
+      if(callback(context,sample?&evidence:nullptr,output,sizeof output,&written)!=AII_VOICE_OK || !written || written>=sizeof output)
+        throw aii::voice::EnrollmentUnavailable("speaker registry publication unavailable");
+      return std::string(output,written);
+    });
+  }
   aii_voice_capture prepare_capture(const std::vector<float>& pcm) override {
     if(!uid)throw std::invalid_argument("native UID model unavailable");
     const auto sample=uid->prepare_capture(pcm);

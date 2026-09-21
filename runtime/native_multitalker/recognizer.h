@@ -1,5 +1,6 @@
 #pragma once
 #include "microphone.h"
+#include "evidence_audio.h"
 #include "../native/session/session.h"
 
 namespace aii::multitalker {
@@ -20,6 +21,8 @@ class Recognizer final:public aii::voice::Recognizer {
   void cancel() noexcept override;
  private:
   Microphone microphone_;
+  SpeakerEvidence evidence_;
+  EvidenceAudio evidence_audio_;
   std::vector<std::string> vocabulary_;
   std::array<std::string,4> text_;
   uint64_t epoch_=0,samples_=0;
