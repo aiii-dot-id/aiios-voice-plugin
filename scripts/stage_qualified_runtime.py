@@ -133,6 +133,7 @@ def main():
     result=dict(passed=True,scope=__doc__,variant_id=variant,sdk_revision=pin['revision'],
         runtime_manifest_sha256=a.runtime_sha256,carrier_sha256=frozen['carrier_sha256'],
         checkpoint_freeze_sha256=sha(cp/'freeze.json'),qualification_sha256=a.audit_sha256,
+        models=frozen['models'],
         # The archive travels with its unmodified receipt across machines.
         qualification_scope=proof['scope'],runtime_archive=dict(path=archive.name,**declaration),
         source_sha256=sha(__file__),models_in_archive=False,carrier_in_archive=False,

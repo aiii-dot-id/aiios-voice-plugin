@@ -44,7 +44,22 @@ def relocate_macos(path, runtime):
         raise ValueError('runtime still depends on a build path')
 
 
-def parent_bytes(parent, freeze_sha):
+def verified_parent_models(frozen, bound, model_root=None):
+    """Relocation is allowed; every original model byte remains mandatory."""
+    data = Path(model_root) if model_root is not None else Path(frozen['models_root'])
+    if data.is_symlink() or not data.is_dir():
+        raise ValueError('regular parent model directory required')
+    for name, row in frozen['models'].items():
+        safe_relative(name)
+        path = data / name
+        if (path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(data.resolve())
+                or path.stat().st_size != row['bytes'] or sha(path) != row['sha256']):
+            raise ValueError('parent model bytes differ: ' + name)
+        bound[str(path)] = row['sha256']
+    frozen['models_root'] = str(data.resolve())
+
+
+def parent_bytes(parent, freeze_sha, model_root=None):
     if sha(parent / 'freeze.json') != freeze_sha:
         raise ValueError('parent freeze binding differs')
     frozen = json.loads((parent / 'freeze.json').read_text())
@@ -59,13 +74,7 @@ def parent_bytes(parent, freeze_sha):
     bound[str(parent / 'runtime/voice-runtime.json')] = frozen['runtime_manifest_sha256']
     for name, row in profile['files'].items():
         bound[str(parent / 'runtime' / name)] = row['sha256']
-    data = Path(frozen['models_root'])
-    for name, row in frozen['models'].items():
-        safe_relative(name)
-        path = data / name
-        if path.is_symlink() or data.is_symlink() or path.stat().st_size != row['bytes'] or sha(path) != row['sha256']:
-            raise ValueError('parent model bytes differ: ' + name)
-        bound[str(path)] = row['sha256']
+    verified_parent_models(frozen, bound, model_root)
     return frozen, profile, bound
 
 
@@ -151,11 +160,27 @@ def replace_hearing_models(frozen, runtime, graphs, frontend, out, bindings):
                   hearing_frontend_sha256=sha(frontend / 'result.json'))
 
 
+def select_hearing_execution(runtime, execution):
+    """Never carry a previous recognizer's placement promise into new graphs."""
+    path = runtime/'native-profile.json'
+    profile = json.loads(path.read_text())
+    if execution not in (None, 'cpu'):
+        raise ValueError('unsupported new hearing execution selection')
+    if profile.get('asr_execution') and execution is None:
+        raise ValueError('explicit hearing execution required; previous model placement is not inherited')
+    if execution == 'cpu' and 'asr_execution' in profile:
+        del profile['asr_execution']
+        path.write_text(json.dumps(profile, indent=2)+'\n')
+    return dict(provider='cpu', qualification_inherited=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('parent', 'worker', 'asr', 'session-library', 'out', 'go'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--parent-sha256', required=True)
+    parser.add_argument('--parent-models-root', type=Path,
+                        help='Explicit relocated parent models; every original size/hash must still match')
     for name in ('uid-frontend', 'uid', 'tts'):
         parser.add_argument('--'+name, type=Path,
                             help='Explicit replacement for an existing declared native library; fresh qualification required')
@@ -163,11 +188,15 @@ def main():
                         help='Explicit byte-verified native multi-speaker model replacement')
     parser.add_argument('--hearing-frontend', type=Path,
                         help='Pinned native frontend paired with --hearing-graphs')
+    parser.add_argument('--hearing-execution', choices=('cpu',),
+                        help='Explicit new recognizer placement; does not change TTS or inherit GPU qualification')
     args = parser.parse_args()
     if (args.hearing_graphs is None) != (args.hearing_frontend is None):
         parser.error('hearing graphs and frontend must be selected together')
+    if args.hearing_execution and args.hearing_graphs is None:
+        parser.error('hearing execution requires explicit hearing model replacement')
     parent, out = args.parent.resolve(), args.out.resolve()
-    frozen, profile, bindings = parent_bytes(parent, args.parent_sha256)
+    frozen, profile, bindings = parent_bytes(parent, args.parent_sha256, args.parent_models_root)
     platform = profile['platform']
     suffix = {'darwin': '.dylib', 'linux': '.so', 'windows': '.dll'}[platform]
     worker_name = 'bin/aii_voice_worker' + ('.exe' if platform == 'windows' else '')
@@ -209,6 +238,7 @@ def main():
     write_current_settings(runtime / worker_name, runtime, out)
     added_notices = set()
     if args.hearing_graphs is not None:
+        hearing_execution = select_hearing_execution(runtime, args.hearing_execution)
         root = Path(__file__).resolve().parents[1]
         for source in (root / 'runtime/native_multitalker/NOTICE', root / 'LICENSE'):
             name = 'resources/notices/native-multitalker/' + source.name
@@ -222,7 +252,10 @@ def main():
     updated['qualified'] = False
     delta = {n for n in set(profile['files']) | set(updated['files'])
              if profile['files'].get(n) != updated['files'].get(n)}
-    if not delta or not delta <= set(replacements) | {'resources/settings.json'} | added_notices:
+    allowed = set(replacements) | {'resources/settings.json'} | added_notices
+    if args.hearing_graphs is not None:
+        allowed.add('native-profile.json')
+    if not delta or not delta <= allowed:
         raise ValueError('unexpected runtime delta')
     (runtime / 'voice-runtime.json').write_text(json.dumps(updated, indent=2) + '\n')
     binding = sha(runtime / 'voice-runtime.json')
@@ -238,7 +271,8 @@ def main():
                   parent_checkpoint=str(parent), parent_freeze_sha256=args.parent_sha256,
                   runtime_manifest_sha256=binding, worker_sha256=sha(runtime / worker_name),
                   carrier_sha256=json.loads((out / 'carrier-build.json').read_text())['carrier_sha256'],
-                  changed_images=sorted(n for n in delta if not n.startswith('resources/')), models_copied=0,
+                  changed_images=sorted(n for n in delta if n in replacements), models_copied=0,
+                  execution_profile_changed='native-profile.json' in delta,
                   settings_changed='resources/settings.json' in delta,
                   settings_sha256=sha(out / 'settings.json'),
                   bindings=bindings)
@@ -248,6 +282,7 @@ def main():
             result.setdefault('libraries', {})[Path(name).name] = dict(source=str(source),
                 source_sha256=sha(source), relocated_sha256=sha(runtime / name))
     if args.hearing_graphs is not None:
+        result['hearing_execution'] = hearing_execution
         replace_hearing_models(result, runtime, args.hearing_graphs.resolve(),
                                args.hearing_frontend.resolve(), out, bindings)
     for path, digest in bindings.items():

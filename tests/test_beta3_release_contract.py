@@ -3,7 +3,26 @@ import copy
 import hashlib
 import json
 import pytest
-from scripts.assemble_guided_beta_candidate import release_contract, operator_setup, candidate_inputs, staged_archive
+from scripts.assemble_guided_beta_candidate import release_contract, operator_setup, candidate_inputs, staged_archive, selected_models
+
+
+def test_download_selection_uses_qualified_inventory_not_historical_count():
+    models=[dict(name='hearing',path='stt/new.onnx',sha256='a'*64,size=41),
+            dict(name='voice',path='tts/model',sha256='b'*64,size=42),
+            dict(name='foreign',path='endpoint/other',sha256='c'*64,size=43)]
+    selection=dict(models=['hearing','voice'])
+    stage=dict(models={m['path']:dict(sha256=m['sha256'],bytes=m['size']) for m in models[:2]})
+    assert selected_models(models,selection,stage)==models[:2]
+    for field,value in [('sha256','d'*64),('size',40),('path','stt/old.onnx')]:
+        changed=copy.deepcopy(models);changed[0][field]=value
+        with pytest.raises(ValueError,match='qualified model inventory'):
+            selected_models(changed,selection,stage)
+    for bad in (['voice'],['hearing','voice','foreign'],['hearing','hearing'],['absent']):
+        with pytest.raises(ValueError):selected_models(models,dict(models=bad),stage)
+    with pytest.raises(ValueError):selected_models(models,selection,{})
+    with pytest.raises(ValueError):selected_models(models+[models[0]],selection,stage)
+    duplicate=copy.deepcopy(models);duplicate[1]['path']=duplicate[0]['path']
+    with pytest.raises(ValueError):selected_models(duplicate,selection,stage)
 
 
 def example():

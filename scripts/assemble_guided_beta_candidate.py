@@ -55,6 +55,21 @@ def operator_setup(platform):
     return {}
 
 
+def selected_models(models, accelerator, staged):
+    """The downloads must be exactly the model bytes used by this runtime."""
+    names = accelerator['models']
+    by_name = {row['name']: row for row in models}
+    if len(by_name) != len(models) or len(set(names)) != len(names):
+        raise ValueError('duplicate model declaration or selection')
+    if not names or any(name not in by_name for name in names):
+        raise ValueError('undeclared model selected')
+    selected = [by_name[name] for name in names]
+    observed = {row['path']: dict(sha256=row['sha256'], bytes=row['size']) for row in selected}
+    if len(observed) != len(selected) or not staged.get('models') or observed != staged['models']:
+        raise ValueError('declared downloads differ from qualified model inventory')
+    return selected
+
+
 def release_contract(cfg):
     """Apply agreed metadata without changing models, budgets or setting values."""
     keys = {'stt_language', 'turn_pause_ms', 'capture_limit_minutes', 'vad_threshold',
@@ -101,7 +116,7 @@ def current_windows_notices(profile, artifact_root=ROOT):
                 libraries.append(dict(component='onnxruntime' if dest.endswith('/onnxruntime.dll') else Path(dest).name,
                     platform='windows',distribution=distribution,source_sha256=h,shipped_sha256=h,
                     package_sha256=digest,package_member=src,
-                    execution_claim='Measured DirectML encoder; CPU decoder/joiner, VAD and UID. TTS uses Vulkan.'))
+                    execution_claim='Distribution and byte provenance only; runtime placement is established by the current execution evidence.'))
             for src,dest in notices.items():
                 raw=z.read(src);row=profile['files']['resources/notices/directml/'+dest]
                 if hashlib.sha256(raw).hexdigest()!=row['sha256'] or len(raw)!=row['bytes']:
@@ -189,6 +204,45 @@ def uid_replacement(cfg,index,model_template,notice_root):
     return files
 
 
+def hearing_replacement(cfg, index, model_template, notice_root):
+    """Replace recognition downloads and their notices as one checked unit."""
+    model = json.loads(model_template.read_text())
+    record_path = notice_root/'HEARING-REPLACEMENT.json'
+    record = json.loads(record_path.read_text())
+    if (model['id'], model['version']) != (cfg['id'], cfg['version']):
+        raise ValueError('hearing template identity differs')
+    before = {m['path']: m for m in cfg['models']}
+    after = {m['path']: m for m in model['models']}
+    if len(after) != len(model['models']) or len(before) != len(cfg['models']):
+        raise ValueError('duplicate hearing model path')
+    if ({k:v for k,v in before.items() if not k.startswith('stt/')} !=
+            {k:v for k,v in after.items() if not k.startswith('stt/')}):
+        raise ValueError('hearing replacement changes another component')
+    hearing = {k:dict(sha256=v['sha256'], bytes=v['size']) for k,v in after.items() if k.startswith('stt/')}
+    if not hearing or hearing != record['models'] or not record.get('upstream'):
+        raise ValueError('hearing notice inventory differs')
+    required = {'NOTICE', 'NVIDIA-OPEN-MODEL-LICENSE.pdf', 'parakeet-model-card.md', 'sortformer-model-card.md'}
+    if set(record['files']) != required:
+        raise ValueError('complete hearing terms and model cards required')
+    files = {}
+    for name, row in record['files'].items():
+        raw = (notice_root/name).read_bytes()
+        if len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
+            raise ValueError('hearing notice changed')
+        files['notices/native-multitalker/'+name] = raw
+    files['notices/native-multitalker/HEARING-REPLACEMENT.json'] = record_path.read_bytes()
+    updated = copy.deepcopy(index)
+    updated['models'] = [r for r in updated['models'] if not r['path'].startswith('stt/')]
+    updated['models'].extend(dict(path=name, **row, notice_group='native-multitalker') for name,row in hearing.items())
+    updated['hearing_replacement'] = record
+    # A prior model's legal disposition cannot qualify these different weights.
+    updated['distribution_review_complete'] = False
+    updated['open_items'].append('Review the bound native-multitalker model terms and redistribution notices for this release.')
+    cfg['models'] = copy.deepcopy(model['models'])
+    index.clear(); index.update(updated)
+    return files
+
+
 def apply_distribution_disposition(index, cfg, profiles, notices, source, digest):
     """Carry a named prior decision only over its unchanged components/notices.
 
@@ -232,6 +286,10 @@ def main():
     p.add_argument('--uid-notices',type=Path)
     p.add_argument('--uid-model-template-sha256')
     p.add_argument('--uid-notices-sha256')
+    p.add_argument('--hearing-model-template',type=Path)
+    p.add_argument('--hearing-model-template-sha256')
+    p.add_argument('--hearing-notices',type=Path)
+    p.add_argument('--hearing-notices-sha256')
     p.add_argument('--distribution-addendum',type=Path)
     p.add_argument('--distribution-addendum-sha256')
     p.add_argument('--version',help='New immutable release version; never overwrite a published tag')
@@ -249,6 +307,13 @@ def main():
         if not all((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):raise ValueError('complete UID replacement bindings required')
         if sha(a.uid_model_template)!=a.uid_model_template_sha256 or sha(a.uid_notices/'UID-REPLACEMENT.json')!=a.uid_notices_sha256:raise ValueError('UID replacement inputs changed')
         uid_files=uid_replacement(cfg,index,a.uid_model_template,a.uid_notices)
+    hearing_files = {}
+    if any((a.hearing_model_template,a.hearing_model_template_sha256,a.hearing_notices,a.hearing_notices_sha256)):
+        if not all((a.hearing_model_template,a.hearing_model_template_sha256,a.hearing_notices,a.hearing_notices_sha256)):
+            raise ValueError('complete hearing replacement bindings required')
+        if sha(a.hearing_model_template)!=a.hearing_model_template_sha256 or sha(a.hearing_notices/'HEARING-REPLACEMENT.json')!=a.hearing_notices_sha256:
+            raise ValueError('hearing replacement inputs changed')
+        hearing_files=hearing_replacement(cfg,index,a.hearing_model_template,a.hearing_notices)
     if a.version:
         if not re.fullmatch(r'\d+\.\d+\.\d+-beta\.\d+',a.version):raise ValueError('expected explicit beta version')
         old_base='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v'+cfg['version']+'/'
@@ -294,8 +359,7 @@ def main():
         decl.update(variant_id=variant,url='https://github.com/aiii-dot-id/aiios-voice-plugin/releases/download/v'+cfg['version']+'/'+name)
         cfg['runtimes'].append(decl);assets[name]=dict(kind='runtime',variant_id=variant,sha256=arc['sha256'],size=arc['size'])
         # Do not change measured model/backend/resource choices with packaging.
-        selected=[m for m in cfg['models'] if m['name'] in v['accelerator']['models']]
-        if len(selected)!=24 or len({m['path'] for m in selected})!=24:raise ValueError('variant model selection differs')
+        selected=selected_models(cfg['models'],v['accelerator'],r)
         if ('endpoint/windows/coefficients.f32' in {m['path'] for m in selected})!=(platform=='windows'):
             raise ValueError('foreign platform endpoint model selected')
         plans[platform]=dict(variant_id=variant,runtime=decl,carrier_sha256=r['carrier_sha256'],
@@ -321,6 +385,7 @@ def main():
     # this candidate. A missing or changed library is not a reusable notice.
     files,current=current_windows_notices(profiles['windows'],artifact_root)
     files.update(uid_files)
+    files.update(hearing_files)
     index['libraries']=[r for r in index['libraries'] if not (r['platform']=='windows' and r['component']=='onnxruntime')]+current
     # Keep the historical PyPI notice corpus, but select the exact unchanged
     # DLL from Intel's redistributable channel with its own original terms.

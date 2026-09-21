@@ -73,3 +73,7 @@ jobs:
           tests/test_native_binary_privacy.py
           tests/test_native_rebuild_libraries.py
           tests/test_compact_multitalker_graphs.py
+          tests/test_beta3_release_contract.py
+          tests/test_qualified_runtime_stage.py
+          tests/test_hearing_release_inventory.py
+          tests/test_distribution_disposition.py

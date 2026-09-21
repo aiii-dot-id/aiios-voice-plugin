@@ -6,6 +6,53 @@ import pytest
 
 from scripts.rebuild_native_checkpoint import optional_libraries
 from scripts.rebuild_native_checkpoint import replace_hearing_models
+from scripts.rebuild_native_checkpoint import verified_parent_models
+from scripts.rebuild_native_checkpoint import select_hearing_execution
+
+
+def test_old_recognizer_acceleration_requires_explicit_replacement(tmp_path):
+    path=tmp_path/'native-profile.json'
+    prior=dict(backend='vulkan',models={'tts':'tts','asr':'stt'},
+               asr_execution=dict(provider='directml',adapter='high_performance'))
+    path.write_text(json.dumps(prior));raw=path.read_bytes()
+    with pytest.raises(ValueError,match='explicit hearing execution'):
+        select_hearing_execution(tmp_path,None)
+    assert path.read_bytes()==raw
+    result=select_hearing_execution(tmp_path,'cpu')
+    assert result==dict(provider='cpu',qualification_inherited=False)
+    current=json.loads(path.read_text());del prior['asr_execution']
+    assert current==prior  # TTS placement and every model path unchanged.
+    raw=path.read_bytes()
+    assert select_hearing_execution(tmp_path,None)==result
+    assert path.read_bytes()==raw
+
+
+def test_relocated_parent_models_require_identical_bytes(tmp_path):
+    root=tmp_path/'relocated';root.mkdir()
+    blob=b'unchanged pinned model';(root/'model').write_bytes(blob)
+    expected=dict(bytes=len(blob),sha256=hashlib.sha256(blob).hexdigest())
+    frozen=dict(models_root='/unavailable/prior-location',models={'model':expected.copy()})
+    bindings={}
+    verified_parent_models(frozen,bindings,root)
+    assert frozen['models_root']==str(root.resolve())
+    assert frozen['models']=={'model':expected}
+    assert bindings=={str(root/'model'):expected['sha256']}
+    (root/'model').write_bytes(b'x'*len(blob))
+    with pytest.raises(ValueError,match='bytes differ'):
+        verified_parent_models(frozen,{},root)
+    (root/'model').unlink();(root/'other').write_bytes(blob);(root/'model').symlink_to(root/'other')
+    with pytest.raises(ValueError,match='bytes differ'):
+        verified_parent_models(frozen,{},root)
+
+
+def test_relocated_parent_refuses_missing_and_parent_directory_escape(tmp_path):
+    root=tmp_path/'root';root.mkdir()
+    outside=tmp_path/'outside';outside.mkdir()
+    raw=b'fixture';(outside/'model').write_bytes(raw)
+    frozen=dict(models_root=str(root),models={'sub/model':dict(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())})
+    with pytest.raises(ValueError,match='bytes differ'):verified_parent_models(frozen,{})
+    (root/'sub').symlink_to(outside,target_is_directory=True)
+    with pytest.raises(ValueError,match='bytes differ'):verified_parent_models(frozen,{})
 
 
 @pytest.mark.parametrize('platform,suffix,prefix', [
