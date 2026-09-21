@@ -71,14 +71,14 @@ def test_relocated_parent_refuses_missing_and_parent_directory_escape(tmp_path):
 @pytest.mark.parametrize('platform,suffix,prefix', [
     ('darwin', '.dylib', 'lib'), ('linux', '.so', 'lib'), ('windows', '.dll', '')])
 def test_replacements_name_existing_components_only(tmp_path, platform, suffix, prefix):
-    stems = ('aiii_uid_frontend', 'aii_native_uid', 'native_pocket_resident')
+    stems = ('aiii_uid_frontend', 'aii_native_uid', 'native_pocket_resident', 'aii_native_endpoint')
     names = ['lib/'+prefix+stem+suffix for stem in stems]
     paths = [tmp_path/(stem+suffix) for stem in stems]
     for path in paths:
         path.write_bytes(b'explicitly bound image fixture')
     profile = dict(platform=platform, files=dict.fromkeys(names+['lib/vendor'+suffix]))
     assert optional_libraries(profile) == {}
-    assert optional_libraries(profile, uid_frontend=paths[0], uid=paths[1], tts=paths[2]) == dict(zip(names, paths))
+    assert optional_libraries(profile, uid_frontend=paths[0], uid=paths[1], tts=paths[2], endpoint=paths[3]) == dict(zip(names, paths))
     assert optional_libraries(profile, uid_frontend=paths[0]) == {names[0]: paths[0]}
     del profile['files'][names[0]]
     with pytest.raises(ValueError, match='layout differs'):

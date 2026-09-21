@@ -100,12 +100,13 @@ def write_current_settings(worker, runtime, out):
     return settings
 
 
-def optional_libraries(profile, *, uid_frontend=None, uid=None, tts=None):
+def optional_libraries(profile, *, uid_frontend=None, uid=None, tts=None, endpoint=None):
     """Replace only explicitly selected, already declared native components."""
     suffix = {'darwin': '.dylib', 'linux': '.so', 'windows': '.dll'}[profile['platform']]
     selected = {}
     for stem, source in (('aiii_uid_frontend', uid_frontend),
-                         ('aii_native_uid', uid), ('native_pocket_resident', tts)):
+                         ('aii_native_uid', uid), ('native_pocket_resident', tts),
+                         ('aii_native_endpoint', endpoint)):
         if source is None:
             continue
         source = Path(source)
@@ -188,7 +189,7 @@ def main():
     parser.add_argument('--parent-sha256', required=True)
     parser.add_argument('--parent-models-root', type=Path,
                         help='Explicit relocated parent models; every original size/hash must still match')
-    for name in ('uid-frontend', 'uid', 'tts'):
+    for name in ('uid-frontend', 'uid', 'tts', 'endpoint'):
         parser.add_argument('--'+name, type=Path,
                             help='Explicit replacement for an existing declared native library; fresh qualification required')
     parser.add_argument('--hearing-graphs', type=Path,
@@ -217,7 +218,7 @@ def main():
         raise ValueError('parent session library layout differs')
     replacements[sessions[0]] = args.session_library.resolve()
     replacements.update(optional_libraries(profile, uid_frontend=args.uid_frontend,
-                                          uid=args.uid, tts=args.tts))
+                                          uid=args.uid, tts=args.tts, endpoint=args.endpoint))
     for path in replacements.values():
         bindings[str(path)] = sha(path)
     bindings[str(Path(__file__).resolve())] = sha(Path(__file__))
