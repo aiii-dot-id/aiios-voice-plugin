@@ -1,5 +1,13 @@
 # Beta.5 signed package checkpoint
 
+**Superseded candidate, not publishable:** the subsequent installed Windows
+check found a filename-based ONNX loading failure inside AppContainer. The
+standalone signed SDK pass did not cover this boundary. The
+[bound-model repair](WINDOWS_BOUND_HEARING_MODELS.md) must pass installed
+qualification, and the unified archive and catalog must be re-signed against
+its changed Windows bytes. The archive hash below is retained historical
+evidence, not the next release's final hash.
+
 The unified `id.aiii.voice` version `0.1.0-beta.5` archive selects one of three
 native variants: macOS arm64, Windows x86-64 or Ubuntu x86-64. Each selects
 thirty hash-bound model files. No system Python is required. The Plugin SDK

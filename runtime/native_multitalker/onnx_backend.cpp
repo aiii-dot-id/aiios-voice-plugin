@@ -4,6 +4,9 @@
 #include <cmath>
 #include <filesystem>
 #include <string>
+#ifdef _WIN32
+#include "bound_session.h"
+#endif
 
 namespace aii::multitalker {
 namespace {
@@ -44,8 +47,13 @@ struct OnnxBackend::Impl {
     options.SetIntraOpNumThreads(2);
     options.SetInterOpNumThreads(1);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
+#ifdef _WIN32
+    decoder = bound_session(env,root,"asr_decoder",options);
+    joiner = bound_session(env,root,"asr_joiner",options);
+#else
     decoder = Ort::Session(env, (std::filesystem::path(root)/"asr_decoder"/"model.onnx").c_str(), options);
     joiner = Ort::Session(env, (std::filesystem::path(root)/"asr_joiner"/"model.onnx").c_str(), options);
+#endif
     signature(decoder,{"tokens","hidden","cell"},{"predicted","next_hidden","next_cell"});
     signature(joiner,{"encoded","predicted"},{"logits"});
   }
@@ -98,7 +106,11 @@ struct OnnxEncoder::Impl {
     Ort::SessionOptions options;
     options.SetIntraOpNumThreads(2); options.SetInterOpNumThreads(1);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
+#ifdef _WIN32
+    session=bound_session(env,root,"asr_encoder",options);
+#else
     session=Ort::Session(env,(std::filesystem::path(root)/"asr_encoder"/"model.onnx").c_str(),options);
+#endif
     signature(session,{"embeddings","lengths","channel","temporal","valid","foreground","background"},
                       {"encoded","encoded_lengths","next_channel","next_temporal","next_valid"});
     if (session.GetInputTypeInfo(2).GetTensorTypeAndShapeInfo().GetShape()!=std::vector<int64_t>{24,-1,70,1024} ||
@@ -191,9 +203,15 @@ struct OnnxCapture::Impl {
     Ort::SessionOptions options;
     options.SetIntraOpNumThreads(2); options.SetInterOpNumThreads(1);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
+#ifdef _WIN32
+    asr=bound_session(env,root,"asr_preencode",options);
+    diar=bound_session(env,root,"diar_preencode",options);
+    classifier=bound_session(env,root,"diar_classifier",options);
+#else
     asr=Ort::Session(env,(std::filesystem::path(root)/"asr_preencode"/"model.onnx").c_str(),options);
     diar=Ort::Session(env,(std::filesystem::path(root)/"diar_preencode"/"model.onnx").c_str(),options);
     classifier=Ort::Session(env,(std::filesystem::path(root)/"diar_classifier"/"model.onnx").c_str(),options);
+#endif
     signature(asr,{"features","lengths"},{"embeddings","encoded_lengths"});
     signature(diar,{"features","lengths"},{"embeddings","encoded_lengths"});
     signature(classifier,{"embeddings","lengths"},{"probabilities"});
