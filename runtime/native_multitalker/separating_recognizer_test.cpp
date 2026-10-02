@@ -331,7 +331,14 @@ int main(){try{
     // A result that ignores cancellation and arrives after the budget is
     // abandoned with it; the separator is still re-armed.
     slow.separation->ignore_cancel=true;
-    slow.separation->on_separate=[&]{std::this_thread::sleep_for(budget+milliseconds(100));};
+    // The separator holds its result until the budget's cancel has reached it, so the result arrives after
+    // the budget by construction. A sleep past the budget would leave the timer thread 100 ms to be scheduled,
+    // which a loaded hosted runner can overrun; the guard only keeps a broken budget from hanging the test.
+    const size_t cancelled_before=slow.separation->cancels;
+    slow.separation->on_separate=[&]{
+      const auto give_up=Clock::now()+std::chrono::seconds(4);
+      while(slow.separation->cancels<=cancelled_before&&Clock::now()<give_up)std::this_thread::sleep_for(milliseconds(1));
+    };
     rows=slow.turn();
     check(rows[0].text=="original unresolved"&&slow.last()=="budget_expired"&&slow.count("budget_expired")==2&&
       slow.separation->opens==opened+2&&slow.source->begins==2,"late separator result replaced the live rows");
