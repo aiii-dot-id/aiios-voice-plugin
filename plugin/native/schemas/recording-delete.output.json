@@ -1,0 +1,7 @@
+{
+  "type":"object",
+  "description":"Private-file deletion receipt; deleted=false means that identifier was already absent.",
+  "properties":{"recording_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"deleted":{"type":"boolean"}},
+  "required":["recording_id","deleted"],
+  "additionalProperties":false
+}

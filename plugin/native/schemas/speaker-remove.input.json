@@ -1,0 +1,9 @@
+{
+  "type":"object",
+  "description":"Propose removal of one enrolled speaker. Read speaker.list first for the exact speaker_id. The host asks for operator confirmation; a microphone or open speech session is not required. No storage path or confirmation stamp is supplied by the caller.",
+  "properties":{
+    "session_id":{"type":"string","minLength":1,"maxLength":128,"description":"Optional session consistency check from speaker.list. Omit when managing enrollment without an open speech session."},
+    "speaker_id":{"type":"string","minLength":1,"maxLength":96,"pattern":"^[A-Za-z0-9][A-Za-z0-9_.-]*$","description":"Exact speaker_id to remove, as returned by speaker.list; not the display label."}
+  },
+  "required":["speaker_id"],"additionalProperties":false
+}

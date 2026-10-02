@@ -1,0 +1,89 @@
+                    // This private diagnostic gate holds AFTER a real NPU call,
+                    // before logit consumption. It cannot be released by cancel.
+                    // Thus admission returning cannot be confused with waiting
+                    // for inference to finish. No NPU preemption is claimed.
+                    val controls = JSONArray()
+                    var preCancelled = false
+                    nativeModel.cancel(100L)
+                    try { nativeModel.recognize(100L, nativeInputs[0], false, 0) }
+                    catch (wanted: IllegalStateException) { preCancelled = wanted.message?.contains("generation cancelled") == true }
+                    check(preCancelled) { "Pre-cancelled work ran" }
+                    report.put("native_pre_cancel_refused", true)
+                    for ((testIndex, heldCalls) in listOf(1, 10).withIndex()) {
+                        val id = 101L + testIndex * 2
+                        val value = java.util.concurrent.atomic.AtomicReference<String>()
+                        val fault = java.util.concurrent.atomic.AtomicReference<String>()
+                        val job = Thread {
+                            try { value.set(nativeModel.recognize(id, nativeInputs[testIndex], false, heldCalls)) }
+                            catch (t: Throwable) { fault.set(t.message ?: t.javaClass.name) }
+                        }
+                        job.start()
+                        try {
+                            val deadline = System.nanoTime() + 5_000_000_000L
+                            var held = JSONObject()
+                            while (System.nanoTime() < deadline) {
+                                held = JSONObject(nativeModel.status())
+                                if (held.getLong("active") == id && held.getBoolean("paused")) break
+                                check(job.isAlive) { "Recognition exited before diagnostic hold: ${fault.get()}" }
+                                Thread.sleep(1)
+                            }
+                            check(held.getLong("active") == id && held.getBoolean("paused") && held.getInt("completed_calls") == heldCalls)
+                            val beganCancel = System.nanoTime()
+                            nativeModel.cancel(id)
+                            val cancelMs = (System.nanoTime() - beganCancel) / 1e6
+                            check(cancelMs < 50.0) { "Cancellation admission waited: $cancelMs ms" }
+                            check(job.isAlive && value.get() == null && fault.get() == null)
+                            val afterCancel = JSONObject(nativeModel.status())
+                            check(afterCancel.getBoolean("paused") && afterCancel.getLong("active") == id)
+                            var busyRefused = false
+                            try { nativeModel.recognize(id + 1, nativeInputs[testIndex], false, 0) }
+                            catch (wanted: IllegalStateException) { busyRefused = wanted.message?.contains("owner busy") == true }
+                            check(busyRefused) { "Second inference owner admitted" }
+                            nativeModel.release(id)
+                            job.join(5000)
+                            check(!job.isAlive && value.get() == null && fault.get()?.contains("generation cancelled") == true)
+                            check(JSONObject(nativeModel.status()).getLong("active") == 0L)
+                            var traceRefused = false
+                            try { nativeModel.trace() } catch (wanted: IllegalStateException) { traceRefused = true }
+                            check(traceRefused) { "Cancelled recognition exposed a completed trace" }
+                            nativeModel.cancel(id) // repeat must not poison the fresh generation
+                            val recovery = JSONObject(nativeModel.recognize(id + 1, nativeInputs[testIndex], false, 0))
+                            check(recovery.getLong("generation") == id + 1)
+                            check(recovery.getJSONArray("tokens").toString() == prior.getJSONObject(testIndex).getJSONArray("tokens").toString())
+                            check(recovery.getLong("diagnostic_retained_bytes") == 0L && nativeModel.trace().isEmpty())
+                            controls.put(JSONObject().put("generation", id).put("held_after_real_calls", heldCalls)
+                                .put("cancel_ms", cancelMs).put("still_held_after_cancel", true)
+                                .put("cancelled_result_refused", true).put("concurrent_owner_refused", busyRefused)
+                                .put("cancelled_trace_refused", traceRefused).put("recovery", recovery))
+                            report.put("native_cancellation_trials", controls)
+                        } finally {
+                            nativeModel.release(id)
+                            job.join(5000)
+                            check(!job.isAlive) { "Diagnostic recognition owner did not retire" }
+                        }
+                    }
+                    val closeValue = java.util.concurrent.atomic.AtomicReference<String>()
+                    val closeFault = java.util.concurrent.atomic.AtomicReference<String>()
+                    val closingJob = Thread {
+                        try { closeValue.set(nativeModel.recognize(105L, nativeInputs[0], false, 1)) }
+                        catch (t: Throwable) { closeFault.set(t.message ?: t.javaClass.name) }
+                    }
+                    closingJob.start()
+                    val closeDeadline = System.nanoTime() + 5_000_000_000L
+                    var closeHeld = JSONObject()
+                    while (System.nanoTime() < closeDeadline) {
+                        closeHeld = JSONObject(nativeModel.status())
+                        if (closeHeld.getLong("active") == 105L && closeHeld.getBoolean("paused")) break
+                        check(closingJob.isAlive)
+                        Thread.sleep(1)
+                    }
+                    check(closeHeld.getLong("active") == 105L && closeHeld.getBoolean("paused"))
+                    val beganClose = System.nanoTime()
+                    nativeModel.close()
+                    val closeMs = (System.nanoTime() - beganClose) / 1e6
+                    closingJob.join(5000)
+                    check(closeMs < 50.0 && !closingJob.isAlive && closeValue.get() == null)
+                    check(closeFault.get()?.contains("recognizer retired") == true)
+                    report.put("native_close_while_active", JSONObject().put("close_ms", closeMs)
+                        .put("held_after_real_calls", 1).put("owner_retired", true).put("stale_result_refused", true))
+                    report.put("native_cancellation_passed", true)

@@ -1,0 +1,14 @@
+# Source/fixture validation only; not shipped runtime dependencies. Python 3.11+.
+pytest==8.3.5
+pytest-asyncio==0.26.0
+numpy==2.2.6
+# Recorded-speech qualification resamples the bound WAV; never shipped.
+scipy==1.15.3
+# Integrity/package helpers import these even for native runtime validation.
+packaging==25.0
+# Declarative consumer contract validation only; never a shipped dependency.
+jsonschema==4.23.0
+# Model download-layout byte-preservation tests; never a shipped dependency.
+onnx==1.23.0
+# Native graph rewrite semantics; test dependency only, never shipped.
+onnxruntime==1.24.2

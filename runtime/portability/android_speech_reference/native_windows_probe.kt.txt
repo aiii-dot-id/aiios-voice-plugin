@@ -1,0 +1,61 @@
+                    // The last public clip is intentionally repeated: a future
+                    // overlap merger must not mistake real repetition for replay.
+                    val gap = 4000
+                    val longPcm = FloatArray(nativeAudio[0].size + nativeAudio[1].size * 2 + gap * 2)
+                    nativeAudio[0].copyInto(longPcm)
+                    nativeAudio[1].copyInto(longPcm, nativeAudio[0].size + gap)
+                    nativeAudio[1].copyInto(longPcm, nativeAudio[0].size + gap + nativeAudio[1].size + gap)
+                    val sequenceTrials = JSONArray()
+                    var firstWindows: JSONArray? = null
+                    for ((index, pattern) in listOf(intArrayOf(512), intArrayOf(17, 1024, 511, 32000), intArrayOf(32000)).withIndex()) {
+                        val began = System.nanoTime()
+                        val result = JSONObject(nativeModel.sequence(30L + index, longPcm, pattern, 0))
+                        val windows = result.getJSONArray("windows")
+                        check(result.getBoolean("complete") && result.getInt("source_samples") == longPcm.size && result.getInt("emitted_through") == longPcm.size)
+                        check(result.getInt("retained_samples") == 80000 && windows.length() == (longPcm.size + 15999) / 16000)
+                        for (i in 0 until windows.length()) {
+                            val row = windows.getJSONObject(i)
+                            val end = minOf((i + 1) * 16000, longPcm.size)
+                            check(row.getInt("start") == maxOf(0, end - 80000) && row.getInt("end") == end && row.getBoolean("pcm_bits_identical"))
+                            val recognized = row.getJSONObject("result")
+                            check(recognized.getBoolean("complete") && recognized.getInt("input_samples") == end - row.getInt("start"))
+                            check(recognized.getLong("diagnostic_retained_bytes") == 0L)
+                            if (firstWindows != null) check(recognized.getJSONArray("tokens").toString() == firstWindows!!.getJSONObject(i).getJSONObject("result").getJSONArray("tokens").toString()) { "Packet layout changed recognition" }
+                        }
+                        if (firstWindows == null) firstWindows = windows
+                        result.put("packet_pattern", JSONArray(pattern.toList())).put("wall_ms", (System.nanoTime() - began) / 1e6)
+                        sequenceTrials.put(result);report.put("native_window_trials", sequenceTrials)
+                    }
+                    val sequenceValue = java.util.concurrent.atomic.AtomicReference<String>()
+                    val sequenceFault = java.util.concurrent.atomic.AtomicReference<String>()
+                    val sequenceJob = Thread {
+                        try { sequenceValue.set(nativeModel.sequence(60L, longPcm, intArrayOf(512), 2)) }
+                        catch (t: Throwable) { sequenceFault.set(t.message ?: t.javaClass.name) }
+                    }
+                    sequenceJob.start()
+                    try {
+                        val deadline = System.nanoTime() + 10_000_000_000L
+                        var held = JSONObject()
+                        while (System.nanoTime() < deadline) {
+                            held = JSONObject(nativeModel.status())
+                            if (held.getLong("active") == 60L && held.getBoolean("paused")) break
+                            check(sequenceJob.isAlive) { "Sequence exited before hold: ${sequenceFault.get()}" }
+                            Thread.sleep(1)
+                        }
+                        check(held.getLong("active") == 60L && held.getBoolean("paused") && held.getInt("completed_windows") == 2)
+                        val began = System.nanoTime();nativeModel.cancel(60L)
+                        val cancelMs = (System.nanoTime() - began) / 1e6
+                        check(cancelMs < 50.0 && sequenceJob.isAlive && sequenceValue.get() == null && sequenceFault.get() == null)
+                        nativeModel.release(60L);sequenceJob.join(5000)
+                        check(!sequenceJob.isAlive && sequenceValue.get() == null && sequenceFault.get()?.contains("generation cancelled") == true)
+                        val recovery = JSONObject(nativeModel.sequence(61L, longPcm, intArrayOf(511, 4096), 0))
+                        val recovered = recovery.getJSONArray("windows")
+                        check(recovered.length() == firstWindows!!.length())
+                        for (i in 0 until recovered.length()) check(recovered.getJSONObject(i).getJSONObject("result").getJSONArray("tokens").toString() == firstWindows!!.getJSONObject(i).getJSONObject("result").getJSONArray("tokens").toString())
+                        report.put("native_window_cancel", JSONObject().put("cancel_ms", cancelMs).put("held_after_windows", 2)
+                            .put("stale_sequence_refused", true).put("recovery", recovery))
+                    } finally {
+                        nativeModel.release(60L);sequenceJob.join(5000);check(!sequenceJob.isAlive)
+                    }
+                    report.put("native_window_recipe", JSONObject().put("source_indices", JSONArray(listOf(0, 1, 1))).put("gap_samples", gap).put("total_samples", longPcm.size))
+                    report.put("native_window_path_passed", true)

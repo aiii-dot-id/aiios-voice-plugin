@@ -1,0 +1,36 @@
+{
+  "floor": "0.1.14",
+  "base": {"variant_id":"v","url":"https://example.com/v-runtime.tar.gz","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1591022666,"installed_bytes":2498192347,"files":47,"inventory_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "declaration": [
+    {"name":"no-extent-earlier-floor","extent":"","min":"0.1.12","host":true,"author":true},
+    {"name":"no-extent-no-floor","extent":"","min":"","host":true,"author":true},
+    {"name":"no-extent-at-floor","extent":"","min":"0.1.14","host":true,"author":false},
+    {"name":"extent-at-floor","extent":",\"largest_file_bytes\":547383096,\"depth\":4","min":"0.1.14","host":true,"author":true},
+    {"name":"extent-later-host","extent":",\"largest_file_bytes\":547383096,\"depth\":4","min":"10.0.0","host":true,"author":true},
+    {"name":"extent-earlier-floor","extent":",\"largest_file_bytes\":547383096,\"depth\":4","min":"0.1.13","host":false,"author":false},
+    {"name":"extent-no-floor","extent":",\"largest_file_bytes\":547383096,\"depth\":4","min":"","host":false,"author":false},
+    {"name":"extent-prerelease-floor","extent":",\"largest_file_bytes\":547383096,\"depth\":4","min":"0.1.14-beta.1","host":false,"author":false},
+    {"name":"largest-without-depth","extent":",\"largest_file_bytes\":547383096","min":"0.1.14","host":false,"author":false},
+    {"name":"depth-without-largest","extent":",\"depth\":4","min":"0.1.14","host":false,"author":false},
+    {"name":"largest-zero","extent":",\"largest_file_bytes\":0,\"depth\":4","min":"0.1.14","host":false,"author":false},
+    {"name":"depth-zero","extent":",\"largest_file_bytes\":547383096,\"depth\":0","min":"0.1.14","host":false,"author":false},
+    {"name":"largest-negative","extent":",\"largest_file_bytes\":-1,\"depth\":4","min":"0.1.14","host":false,"author":false},
+    {"name":"largest-past-tree","extent":",\"largest_file_bytes\":2498192348,\"depth\":4","min":"0.1.14","host":false,"author":false},
+    {"name":"largest-is-tree","extent":",\"largest_file_bytes\":2498192347,\"depth\":4","min":"0.1.14","host":true,"author":true},
+    {"name":"largest-below-mean","extent":",\"largest_file_bytes\":53153028,\"depth\":4","min":"0.1.14","host":false,"author":false},
+    {"name":"largest-is-mean","extent":",\"largest_file_bytes\":53153029,\"depth\":4","min":"0.1.14","host":true,"author":true},
+    {"name":"depth-at-grammar-bound","extent":",\"largest_file_bytes\":547383096,\"depth\":255","min":"0.1.14","host":true,"author":true},
+    {"name":"depth-past-grammar-bound","extent":",\"largest_file_bytes\":547383096,\"depth\":256","min":"0.1.14","host":false,"author":false},
+    {"name":"largest-as-string","extent":",\"largest_file_bytes\":\"547383096\",\"depth\":4","min":"0.1.14","host":false,"author":false},
+    {"name":"depth-null","extent":",\"largest_file_bytes\":547383096,\"depth\":null","min":"0.1.14","host":false,"author":false}
+  ],
+  "preflight": [
+    {"name":"extent-default-ceilings","extent":true,"limits":{},"refused":{"plugins.runtime.max_compressed_bytes":1591022666,"plugins.runtime.max_installed_bytes":2498192347,"plugins.runtime.max_file_bytes":547383096}},
+    {"name":"extent-two-raised","extent":true,"limits":{"max_compressed_bytes":2147483648,"max_installed_bytes":3221225472},"refused":{"plugins.runtime.max_file_bytes":547383096}},
+    {"name":"extent-all-raised","extent":true,"limits":{"max_compressed_bytes":2147483648,"max_installed_bytes":3221225472,"max_file_bytes":629145600},"refused":{}},
+    {"name":"extent-file-exactly-admitted","extent":true,"limits":{"max_compressed_bytes":2147483648,"max_installed_bytes":3221225472,"max_file_bytes":547383096},"refused":{}},
+    {"name":"extent-depth-lowered","extent":true,"limits":{"max_compressed_bytes":2147483648,"max_installed_bytes":3221225472,"max_file_bytes":629145600,"max_depth":3},"refused":{"plugins.runtime.max_depth":4}},
+    {"name":"no-extent-two-raised","extent":false,"limits":{"max_compressed_bytes":2147483648,"max_installed_bytes":3221225472},"refused":{}},
+    {"name":"no-extent-default-ceilings","extent":false,"limits":{},"refused":{"plugins.runtime.max_compressed_bytes":1591022666,"plugins.runtime.max_installed_bytes":2498192347}}
+  ]
+}

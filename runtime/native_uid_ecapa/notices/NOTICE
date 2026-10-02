@@ -1,0 +1,37 @@
+ECAPA speaker embedding component
+
+Model: speechbrain/spkrec-ecapa-voxceleb
+Revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
+Model card: https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/blob/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/README.md
+The ONNX graph is an exported representation; its exact bytes and frontend
+contract are declared in configs/uid-ecapa-binding.json. The upstream model
+card declares Apache-2.0. SpeechBrain-LICENSE contains the upstream license.
+
+Modification: AIII retrained the final projection (weight and bias) of this
+model; all other weights are the upstream checkpoint's. The modified ONNX graph
+has SHA-256 46aef1e6f483a2033eb88344b3d0d09b21d177c15cf45e45b0451d207de1fc99.
+The upstream attribution and Apache-2.0 license above are retained.
+
+Projection training data: the dev-other partition of "LibriSpeech ASR corpus"
+(OpenSLR SLR12) by Vassil Panayotov with the assistance of Daniel Povey,
+derived from read audiobooks from the LibriVox project.
+Source: https://www.openslr.org/12
+License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+Changes: AIII built clean-preservation and separation-artifact training pairs
+from these recordings; the separated audio is output of the plugin's MossFormer2
+separator (Apache-2.0, noticed separately). No endorsement by the licensor is
+implied.
+
+Frontend reference: SpeechBrain 1.1.1 Fbank and sentence-mean normalization.
+Source: https://github.com/speechbrain/speechbrain/tree/v1.1.1
+Our native frontend implements that feature contract without Python at runtime.
+
+PocketFFT is statically incorporated into the native feature transform.
+Revision: 0fa0ef591e38c2758e3184c6c23e497b9f732ffa
+Source: https://github.com/mreineck/pocketfft/tree/0fa0ef591e38c2758e3184c6c23e497b9f732ffa
+PocketFFT-LICENSE preserves the upstream BSD-3-Clause license;
+PocketFFT-HEADER-LICENSE preserves the copyright and license comment in the
+exact incorporated header, including its additional named contributors.
+
+These notices identify the included components. They are not a claim about
+speaker-identification accuracy, authentication, or installed qualification.

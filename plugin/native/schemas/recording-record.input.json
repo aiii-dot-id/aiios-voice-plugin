@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"Save the last buffered microphone recording to a private WAV file now. No STT final, pre-arming, or separate confirmation is required. The call returns the saved-file receipt. The signal may include public-video playback and is not a separated speaker track.",
+  "properties":{},
+  "additionalProperties":false
+}

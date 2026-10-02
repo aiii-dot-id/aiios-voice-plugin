@@ -1,0 +1,7 @@
+{
+  "type":"object",
+  "description":"Bounded inventory of private WAV recordings. truncated means more directory entries exist than the host returned. Exact known recording IDs remain deletable even when not listed; after removing unwanted recordings, list again. Never treat a truncated result as complete.",
+  "properties":{"truncated":{"type":"boolean"},"recordings":{"type":"array","maxItems":1024,"items":{"type":"object","properties":{"recording_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"bytes":{"type":"integer","minimum":44,"maximum":1048576}},"required":["recording_id","bytes"],"additionalProperties":false}}},
+  "required":["recordings","truncated"],
+  "additionalProperties":false
+}

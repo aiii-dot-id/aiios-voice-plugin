@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Speaker segment attribution candidate contract",
+  "description": "Candidate engine contract. Host adoption and installed qualification remain required. Cross-field sample and session binding is enforced by the producer and must also be enforced by the consumer.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/final"
+    },
+    {
+      "$ref": "#/$defs/amendment"
+    }
+  ],
+  "$defs": {
+    "match": {
+      "type":"object",
+      "description":"Nearest candidate is diagnostic evidence and may have been rejected. Similarities are not probabilities or authorization.",
+      "additionalProperties":false,
+      "required":["outcome","reason","candidate_count","threshold","minimum_margin","profile_revision","policy_sha256","embedding_binding","evidence_samples"],
+      "properties":{
+        "outcome":{"enum":["known","unknown","ambiguous"]},
+        "reason":{"enum":["accepted","no_enrollments","below_acceptance_threshold","insufficient_enrollment","insufficient_separation"]},
+        "candidate_count":{"type":"integer","minimum":0,"maximum":256},
+        "candidate_uuid":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+        "score":{"type":"number","minimum":-1,"maximum":1},
+        "margin":{"type":"number","minimum":0,"maximum":2},
+        "threshold":{"type":"number","minimum":-1,"maximum":1},
+        "minimum_margin":{"type":"number","minimum":0,"maximum":2},
+        "profile_revision":{"type":"string","pattern":"^(0|[1-9][0-9]{0,15})$"},
+        "policy_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+        "embedding_binding":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+        "evidence_samples":{"type":"integer","minimum":31920,"maximum":160000}
+      },
+      "allOf":[
+        {"if":{"properties":{"candidate_count":{"const":0}}},"then":{"not":{"anyOf":[{"required":["score"]},{"required":["candidate_uuid"]}]}},"else":{"required":["score","candidate_uuid"]}},
+        {"if":{"properties":{"candidate_count":{"minimum":2}}},"then":{"required":["margin"]},"else":{"not":{"required":["margin"]}}}
+      ]
+    },
+    "evidence_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_sample",
+        "end_sample",
+        "policy_sha256",
+        "embedding_binding"
+      ],
+      "anyOf": [
+        {"required": ["enrollment_revision"]},
+        {"required": ["registry_revision"]}
+      ],
+      "properties": {
+        "start_sample": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_sample": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "enrollment_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "registry_revision": {
+          "type": "string", "pattern": "^[1-9][0-9]{0,15}$"
+        },
+        "policy_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "embedding_binding": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "required": [
+        "decision",
+        "reason",
+        "speaker",
+        "speaker_id",
+        "revision",
+        "used_for_permissions"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "pending",
+            "known",
+            "unknown",
+            "uncertain"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "speaker": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "speaker_id": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "revision": {
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "used_for_permissions": {
+          "const": false
+        },
+        "evidence_scope": {
+          "$ref": "#/$defs/evidence_scope"
+        },
+        "speaker_uuid": {
+          "type":"string",
+          "pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "registry_revision": {
+          "type":"string", "pattern":"^[1-9][0-9]{0,15}$"
+        },
+        "continuity": {
+          "enum":["provisional","new_profile","matched"]
+        },
+        "display_label": {
+          "type":"string", "maxLength":512
+        },
+        "match": {
+          "$ref":"#/$defs/match"
+        }
+      },
+      "allOf": [
+        {
+          "if":{"required":["speaker_uuid"]},
+          "then":{"required":["registry_revision","continuity","evidence_scope"],"properties":{"decision":{"enum":["uncertain","known"]},"revision":{"const":1},"evidence_scope":{"required":["registry_revision"]}}},
+          "else":{"not":{"anyOf":[{"required":["registry_revision"]},{"required":["continuity"]},{"required":["display_label"]}]}}
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "known"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "evidence_scope"
+            ],
+            "properties": {
+              "continuity": {"const": "matched"},
+              "evidence_scope": {"required": ["enrollment_revision"]},
+              "speaker": {
+                "minLength": 1
+              },
+              "speaker_id": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "speaker": {
+                "const": ""
+              },
+              "speaker_id": {
+                "const": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "evidence_scope"
+            ],
+            "properties": {"evidence_scope": {"required": ["enrollment_revision"]}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "enum": [
+                  "pending",
+                  "uncertain"
+                ]
+              }
+            }
+          },
+          "then": {
+            "if":{"not":{"required":["speaker_uuid"]}},
+            "then":{"not":{"required":["evidence_scope"]}}
+          }
+        }
+      ]
+    },
+    "bound": {
+      "type": "object",
+      "required": [
+        "track_id",
+        "start_sample",
+        "end_sample"
+      ],
+      "properties": {
+        "track_id": {
+          "type": "string",
+          "maxLength": 96,
+          "description": "Empty means no separated acoustic track, never an enrolled person."
+        },
+        "start_sample": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_sample": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "type",
+        "session_id",
+        "sequence",
+        "id",
+        "observed_monotonic_ns"
+      ],
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed_monotonic_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "final": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "required": ["start_sample", "end_sample"],
+          "properties": {
+            "track_id": {"type": "string", "minLength": 1, "maxLength": 96},
+            "start_sample": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+            "end_sample": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+          }
+        },
+        {
+          "required": [
+            "text",
+            "attribution"
+          ],
+          "properties": {
+            "type": {
+              "const": "transcript_final"
+            },
+            "text": {
+              "type": "string"
+            },
+            "attribution": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/state"
+                },
+                {
+                  "properties": {
+                    "decision": {
+                      "enum": ["pending", "uncertain"]
+                    },
+                    "revision": {
+                      "const": 0
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "amendment": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/bound"
+        },
+        {
+          "$ref": "#/$defs/state"
+        },
+        {
+          "if": {
+            "properties": {"decision": {"enum": ["known", "unknown"]}}
+          },
+          "then": {
+            "properties": {"track_id": {"minLength": 1}}
+          }
+        },
+        {
+          "required": [
+            "refers_to",
+            "late"
+          ],
+          "properties": {
+            "type": {
+              "const": "speaker_observation"
+            },
+            "refers_to": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "late": {
+              "const": true
+            },
+            "decision": {
+              "enum": [
+                "known",
+                "unknown",
+                "uncertain"
+              ]
+            },
+            "revision": {
+              "const": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

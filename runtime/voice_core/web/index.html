@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AII Voice · Local reference</title><link rel="stylesheet" href="/style.css"></head>
+<body><main><p class="eyebrow">AII VOICE / STANDALONE</p><h1>Listen. Speak. Interrupt.</h1>
+<p>Local Nemotron ASR · Silero VAD · Qwen TTS. No AII OS or cloud inference.</p>
+<p><a href="/native.html">Open the native Mac microphone/speaker loop</a> — no browser audio routing.</p>
+<p class="notice">Research reference: acoustic endpointing, not qualified semantic turn control.
+Starting records microphone, playback reference, generated audio, and event traces locally.</p>
+<label>Microphone<select id="mic"><option value="">System default</option></select></label>
+<label>Playback<select id="speaker"><option value="">System default (check for virtual devices)</option></select></label>
+<p id="routing" role="status"></p>
+<button id="devices">Enable and list audio devices</button>
+<button id="check-playback">Check playback connection (no microphone)</button>
+<p>This button requests microphone permission to reveal device names, then releases the microphone. Recording starts only with Start microphone.</p>
+<label>Reply text used after each recognized turn<textarea id="reply" maxlength="500">AII Voice is listening and ready to help.</textarea></label>
+<p>This explicit reply source tests the voice pipeline; it is not a reasoning assistant.</p>
+<div class="buttons"><button id="start">Start microphone</button><button id="interrupt" disabled>Interrupt playback</button><button id="stop" disabled>Finish session</button></div>
+<p>Playback uses a local-only WebRTC connection with browser echo cancellation. Automatic interruption remains enabled; raw-loudness interruption is removed. Physical echo and double-talk qualification is pending. The Interrupt playback button remains available.</p>
+<p id="status" role="status">Checking local models…</p><h2>Live transcript</h2><div id="transcript" aria-live="polite"></div>
+<h2>Playback and evidence</h2><pre id="events"></pre></main><script src="/playback.js"></script><script src="/rtc-playback.js"></script><script src="/app.js"></script></body></html>

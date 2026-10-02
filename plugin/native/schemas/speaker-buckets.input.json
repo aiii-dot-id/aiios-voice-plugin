@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"List persistent speaker UUIDs and the exact registry_revision. Works after microphone close or restart. profile_available means acoustic evidence is available; matching_ready is true for linked enrollment or the two recordings required for anonymous recognition. An older anonymous singleton retains its UUID/history but needs explicit enrollment with clean evidence rather than being treated as identified. display_label is the assigned name or unknown, never authentication. enrollment_id, when present, names the legacy enrollment bound to this UUID. Copy the exact UUID and revision into speaker.associate for operator-confirmed naming; do not invent either.",
+  "properties":{"session_id":{"type":"string","description":"Optional exact current session ID; omit to inspect the durable registry without an open microphone.","minLength":1,"maxLength":128}},
+  "additionalProperties":false
+}

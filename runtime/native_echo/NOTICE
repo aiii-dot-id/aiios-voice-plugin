@@ -1,0 +1,44 @@
+Native echo candidate
+
+The wrapper is part of this repository under its Apache-2.0 license.
+The separately built WebRTC AEC3 extraction is distributed under its own
+BSD-3-Clause LICENSE, installed alongside this notice as webrtc-aec3-LICENSE.
+Source: https://github.com/Enaium/webrtc-aec3
+Revision: 2cec2f52e26646f93bd2d5498bbabf59cba18da9
+
+Local build adaptation: aec3-portable-vector-access.patch replaces compiler-
+specific register subscripting with equivalent load/store intrinsics in the
+x86 matched filter. The verified upstream checkout remains unchanged; the
+patch is applied to a build-tree copy. Windows compiler options, SDK macros,
+exports and multimedia linkage are declared by the wrapper build.
+
+Additional notices retained from that source:
+
+Ooura FFT
+http://www.kurims.kyoto-u.ac.jp/~ooura/fft.html
+Copyright Takuya OOURA, 1996-2001
+You may use, copy, modify and distribute this code for any purpose (include
+commercial use) and without fee. Please refer to this package when you modify
+this code.
+WebRTC modifications: trivial type modifications; minimal subset for rdft of
+length 128; optimizations for known length; globals moved into a class for
+thread safety. These modifications carry the WebRTC license.
+
+JsonCpp
+Copyright 2007-2010 Baptiste Lepilleur
+The bundled headers identify MIT licensing, or public domain where recognized.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

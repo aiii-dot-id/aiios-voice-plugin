@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"After operator confirmation, delete only expired interrupted upload stages created by this voice plugin. No caller-selected path, identifier or age is accepted. Active and unrecognized private files are retained.",
+  "properties":{},
+  "additionalProperties":false
+}

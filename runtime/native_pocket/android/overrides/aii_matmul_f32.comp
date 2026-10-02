@@ -1,0 +1,52 @@
+#version 450
+// 32 rows x 8 columns, two output columns per invocation. No subgroup-size
+// assumptions, specialization constants or floating-point precision changes.
+layout(local_size_x=128, local_size_y=1, local_size_z=1) in;
+layout(binding=0) readonly buffer A { float a[]; };
+layout(binding=1) readonly buffer B { float b[]; };
+layout(binding=2) writeonly buffer D { float d[]; };
+layout(push_constant) uniform Params {
+    uint M; uint N; uint K;
+    uint stride_a; uint stride_b; uint stride_d;
+    uint batch_stride_a; uint batch_stride_b; uint batch_stride_d;
+    uint base_work_group_z; uint num_batches; uint k_split;
+    uint ne02; uint ne12; uint broadcast2; uint broadcast3; uint padded_N;
+} p;
+shared float sa[32*32];
+shared float sb[32*8];
+void main() {
+    uint tid=gl_LocalInvocationID.x;
+    uint row_lane=tid%32, col_lane=tid/32;
+    uint blocks_m=(p.M+31)/32;
+    uint row_block=(gl_WorkGroupID.x%blocks_m)*32;
+    uint split=gl_WorkGroupID.x/blocks_m;
+    uint col_block=gl_WorkGroupID.y*8;
+    uint batch=gl_WorkGroupID.z+p.base_work_group_z;
+    uint ba=((batch/p.ne12)/p.broadcast3)*p.ne02+(batch%p.ne12)/p.broadcast2;
+    uint start=split*p.k_split, end=min(p.K,start+p.k_split);
+    float s0=0.0, s1=0.0;
+    for(uint base=start;base<end;base+=32) {
+        for(uint i=tid;i<32*32;i+=128) {
+            uint r=i/32, k=i%32;
+            sa[k*32+r]=(row_block+r<p.M && base+k<end) ?
+                a[ba*p.batch_stride_a+(row_block+r)*p.stride_a+base+k] : 0.0;
+        }
+        for(uint i=tid;i<8*32;i+=128) {
+            uint c=i/32, k=i%32;
+            sb[k*8+c]=(col_block+c<p.N && base+k<end) ?
+                b[batch*p.batch_stride_b+(col_block+c)*p.stride_b+base+k] : 0.0;
+        }
+        barrier();
+        for(uint k=0;k<32;++k) {
+            float av=sa[k*32+row_lane];
+            s0=fma(av,sb[k*8+col_lane],s0);
+            s1=fma(av,sb[k*8+col_lane+4],s1);
+        }
+        barrier();
+    }
+    uint row=row_block+row_lane;
+    uint col=col_block+col_lane;
+    uint offset=(batch+split*p.num_batches)*p.batch_stride_d;
+    if(row<p.M && col<p.N) d[offset+col*p.stride_d+row]=s0;
+    if(row<p.M && col+4<p.N) d[offset+(col+4)*p.stride_d+row]=s1;
+}

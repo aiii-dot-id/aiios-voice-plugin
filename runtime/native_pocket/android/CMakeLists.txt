@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.22)
+project(aii_pocket_android LANGUAGES C CXX)
+if(NOT ANDROID OR NOT ANDROID_ABI STREQUAL "arm64-v8a")
+  message(FATAL_ERROR "This recipe is for Android arm64 only")
+endif()
+foreach(required ENGINE_SOURCE RESIDENT_SOURCE)
+  if(NOT DEFINED ${required})
+    message(FATAL_ERROR "Missing ${required}")
+  endif()
+endforeach()
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+add_compile_definitions(GGML_GELU_FORCE_F32)
+add_subdirectory("${ENGINE_SOURCE}" engine)
+add_library(native_pocket_resident SHARED
+  "${RESIDENT_SOURCE}/resident.cpp" "${RESIDENT_SOURCE}/assets_bound.cpp")
+target_compile_features(native_pocket_resident PRIVATE cxx_std_17)
+target_include_directories(native_pocket_resident PRIVATE
+  "${ENGINE_SOURCE}/include" "${ENGINE_SOURCE}/external/ggml/include"
+  "${ENGINE_SOURCE}/src/models/pocket_tts")
+# SentencePiece's bundled protobuf uses Android's logging API.
+find_library(ANDROID_LOG_LIBRARY log REQUIRED)
+target_link_libraries(native_pocket_resident PRIVATE engine_runtime ggml ${ANDROID_LOG_LIBRARY})
+add_executable(pocket_android_probe probe.cpp)
+target_compile_features(pocket_android_probe PRIVATE cxx_std_17)
+target_link_libraries(pocket_android_probe PRIVATE native_pocket_resident)

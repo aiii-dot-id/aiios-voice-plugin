@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.18)
+project(uid_vulkan_probe LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+if(NOT UID_NATIVE_ROOT OR NOT ncnn_DIR)
+  message(FATAL_ERROR "Explicit native/ncnn roots required")
+endif()
+find_package(ncnn REQUIRED)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(UID_KNF_ROOT "${UID_NATIVE_ROOT}/knf")
+set(UID_KISS_ROOT "${UID_NATIVE_ROOT}/kiss")
+add_subdirectory("${UID_NATIVE_ROOT}" native)
+add_executable(uid_vulkan_probe main.cc)
+target_include_directories(uid_vulkan_probe PRIVATE "${UID_NATIVE_ROOT}")
+target_link_libraries(uid_vulkan_probe PRIVATE aiii_uid_frontend ncnn)
+target_compile_options(uid_vulkan_probe PRIVATE -fno-fast-math -ffp-contract=off -Wall -Wextra)
+# Upstream exports -fno-exceptions for its library. This standalone owner uses
+# exceptions only to report its own bounded I/O failures, not across ncnn.
+set_source_files_properties(main.cc PROPERTIES COMPILE_OPTIONS "-fexceptions")

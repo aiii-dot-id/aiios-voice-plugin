@@ -1,0 +1,5 @@
+# Source inventories and vendored-library pins bind committed bytes.
+# Do not let a developer's core.autocrlf setting rewrite them on checkout.
+* -text
+# Unified patch context contains a required leading space on empty lines.
+runtime/native_multitalker/patches/*.patch whitespace=-blank-at-eol

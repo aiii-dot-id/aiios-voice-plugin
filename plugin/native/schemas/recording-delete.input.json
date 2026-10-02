@@ -1,0 +1,7 @@
+{
+  "type":"object",
+  "description":"Delete exactly one private WAV by its canonical recording_id from a save receipt or recording.list, even when the inventory is truncated. This is a confirmed write; the caller cannot supply a path or audio bytes.",
+  "properties":{"recording_id":{"type":"string","pattern":"^[0-9a-f]{64}$"}},
+  "required":["recording_id"],
+  "additionalProperties":false
+}
