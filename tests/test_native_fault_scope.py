@@ -153,3 +153,27 @@ def test_a_new_session_may_reuse_the_ended_streams_id(tmp_path):
         assert not any(e["type"] == "failure" for e in w.events), w.events
     finally:
         assert w.close() == 0
+
+
+def test_a_refused_settings_reply_fails_its_session_not_the_engines_exit(tmp_path):
+    # The failure is the last thing before shutdown: a later open would clear it.
+    w = worker(tmp_path, "settings")
+    try:
+        query = w.open("bad", settings=False)
+        w.configure(query, 100)  # below the 320 ms floor: the session's contract refuses it
+        failure = w.event("failure", "bad")
+        assert "pause must be 320" in failure["reason"], failure
+        assert w.p.poll() is None, "the engine process ended with its session"
+    finally:
+        assert w.close() == 0, "a session's refused settings failed the engine's exit"
+
+
+def test_an_unanswered_settings_request_fails_its_session_not_the_engines_exit(tmp_path):
+    w = worker(tmp_path, "unanswered")
+    try:
+        w.open("silent", settings=False)  # the host never answers the settings request
+        failure = w.event("failure", "silent", timeout=6)
+        assert failure["reason"] == "settings preparation timeout", failure
+        assert w.p.poll() is None
+    finally:
+        assert w.close() == 0, "a host's unanswered settings request failed the engine's exit"

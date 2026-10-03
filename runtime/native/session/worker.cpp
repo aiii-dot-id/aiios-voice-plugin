@@ -198,8 +198,8 @@ class Worker {
   // host numbers them all alike), so a frame is stale only when it also
   // cannot be the new session's first: that one starts at sample 0.
   std::deque<uint32_t> retired_streams_;
-  // The current failure was a session's input contract fault, contained to
-  // that session: reported in its own events, and not the process's exit.
+  // The current failure was one session's own (fail_session): reported in
+  // its events, and not the process's exit.
   bool failure_contained_ = false;
   // When the frame now pending was taken, and whether its hold was declared.
   // Input held longer than kHeldInputReport is back-pressure that reaches
@@ -477,6 +477,16 @@ class Worker {
         changed_.notify_all();
       }
     });
+  }
+  // A failure that belongs to one session — its own contract refused, or its
+  // host did not answer in time — ends that session; the engine is healthy,
+  // so the process's exit does not report it (the session already did).
+  // Engine and transport failures use fail() and do fail the exit.
+  void fail_session(const std::string &reason) {
+    const bool first = failure_.empty();
+    fail(reason);
+    if (first)
+      failure_contained_ = true;
   }
   void fail(const std::string &reason) {
     if (!failure_.empty())
@@ -1293,13 +1303,13 @@ class Worker {
       }
     }
     if (waiting_settings_ && Clock::now() > opening_deadline_)
-      fail("settings preparation timeout");
+      fail_session("settings preparation timeout");
     if(capture_) {
       if(!abort_&&snapshot_.cutoff_set&&!end_seen_&&Clock::now()>capture_tail_deadline_)
-        fail("enrollment capture final tail timeout");
+        fail_session("enrollment capture final tail timeout");
       if(lifecycle_=="draining") {
         if(!capturing_.valid()&&(abort_||input_final_sequence_))terminal();
-        else if(Clock::now()>closing_deadline_)fail("enrollment capture retirement deadline");
+        else if(Clock::now()>closing_deadline_)fail_session("enrollment capture retirement deadline");
       }
       return;
     }
@@ -1871,6 +1881,8 @@ public:
           } else if (settings_reply) {
             try {
               settings(settings_reply);
+            } catch (const Refused &e) {
+              fail_session(e.what());
             } catch (const std::exception &e) {
               fail(e.what());
             }
@@ -1894,10 +1906,7 @@ public:
           try {
             input();
           } catch (const Refused &e) {
-            const bool first = failure_.empty();
-            fail(e.what());
-            if (first)
-              failure_contained_ = true;
+            fail_session(e.what());
           }
         }
         if (quit_ && !session_ && !opening_.valid() && !enrollment_.valid() && !capturing_.valid() && !waveform_publish_.valid() && !pending_audio_)
