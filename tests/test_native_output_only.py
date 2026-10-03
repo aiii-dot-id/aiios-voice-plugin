@@ -175,11 +175,14 @@ def test_ambiguous_topology_refuses_without_reserving_session(worker, variant):
 def test_output_only_rejects_unexpected_audio(worker):
     w = worker
     open_output(w, 'no-mic')
-    w.expected_exit = 1
     w.input.write(struct.pack('>4sB3xIIQI', b'AUD1', 1, 1, 1, 0, 2) + b'\0\0')
     failure = w.event('failure', 'no-mic')
     assert 'no input direction' in str(failure)
     assert not any(e['type'].startswith('transcript_') for e in w.events)
+    # The fault is that session's: the engine process stays for the next one
+    # and exits cleanly (test_native_fault_scope.py).
+    assert w.p.poll() is None
+    w.expected_exit = 0
 
 
 @pytest.mark.parametrize('case', TOPOLOGY['open_requests'], ids=lambda case: case['name'])

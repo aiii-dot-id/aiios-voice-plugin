@@ -27,6 +27,8 @@ TESTS = (
     "test_native_capture_duration", "test_native_settings_packaging", "test_beta3_release_contract",
     "test_native_drain_progress",
     "test_native_lifetime",
+    "test_native_input_gap",
+    "test_native_fault_scope",
     "test_plugin_sdk_declaration",
     "test_native_output_only",
     "test_native_meeting_endurance",

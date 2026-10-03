@@ -698,7 +698,12 @@ bool Session::feed(uint64_t start,const float* data,size_t count) {
 void Session::finish_input(uint64_t end) {
   require(p_->hearing.has_value(),"session has no input direction");
   std::lock_guard<std::mutex> lock(p_->mutex);
-  require(!p_->stopping && end>=p_->received && end<=p_->input_limit,"finish requires bounded future input cutoff");
+  // Three different refusals, each saying which and with the numbers: one
+  // sentence for all of them left a page's toast unable to tell a late finish
+  // on a stopping session from a cutoff the engine had already passed.
+  require(!p_->stopping,"finish refused: the session is stopping");
+  require(end>=p_->received,("finish refused: cutoff "+std::to_string(end)+" is behind the "+std::to_string(p_->received)+" samples already received").c_str());
+  require(end<=p_->input_limit,("finish refused: cutoff "+std::to_string(end)+" is beyond the input limit "+std::to_string(p_->input_limit)).c_str());
   require(!p_->cutoff_set || end==p_->cutoff,"admitted input cutoff cannot change");
   if(!p_->cutoff_set) {
     p_->cutoff_set=true;p_->cutoff=end;

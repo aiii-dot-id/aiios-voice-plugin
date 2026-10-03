@@ -188,6 +188,29 @@ class Worker {
   bool input_enabled_ = true, input_started_ = false, end_seen_ = false;
   uint64_t input_limit_ = 0;
   bool capture_limit_reached_ = false;
+  // A gap the host declared (AUD1 kind 2) is being filled with the silence it
+  // replaced; gap_target_ is the sample the stream resumes at.
+  bool gap_open_ = false;
+  uint64_t gap_target_ = 0;
+  // The input streams of sessions that ended. A leftover frame of one can
+  // still be in the pipe when the next session opens. Stream ids are the
+  // host's to choose and may be reused by the next session (the SDK proof
+  // host numbers them all alike), so a frame is stale only when it also
+  // cannot be the new session's first: that one starts at sample 0.
+  std::deque<uint32_t> retired_streams_;
+  // The current failure was a session's input contract fault, contained to
+  // that session: reported in its own events, and not the process's exit.
+  bool failure_contained_ = false;
+  // When the frame now pending was taken, and whether its hold was declared.
+  // Input held longer than kHeldInputReport is back-pressure that reaches
+  // the host's queue; it is said on AII_VOICE_BACKPRESSURE, with its end, so
+  // a later declared gap can be traced to the stall (or ruled out).
+  Clock::time_point pending_since_{};
+  bool held_reported_ = false;
+  static constexpr auto kHeldInputReport = std::chrono::milliseconds(1000);
+  // A declared gap longer than this is not a glitch but a broken stream.
+  static constexpr uint64_t kMaxGapSamples = 16000ull * 30;
+  static constexpr uint64_t kGapChunkSamples = 4096;
   bool waiting_settings_ = false, pending_audio_ = false, abort_ = false,
        quit_ = false;
   Clock::time_point opening_deadline_, closing_deadline_, exit_deadline_;
@@ -727,13 +750,21 @@ class Worker {
     settled_delivered_=settled_rendered_=0;current_name_.clear();
     sequence_ = 0;
     failure_.clear();
+    failure_contained_ = false;
     abort_ = false;
     current_ = 0;
     generations_.clear();
+    if (input_started_) {
+      retired_streams_.push_back(input_stream_);
+      if (retired_streams_.size() > 16)
+        retired_streams_.pop_front();
+    }
     input_started_ = false;
     end_seen_ = false;
     input_limit_ = 0;
     capture_limit_reached_ = false;
+    gap_open_ = false;
+    gap_target_ = 0;
     input_received_ = input_final_sequence_ = 0;
     snapshot_ = {};
     capture_=std::move(capture);capture_result_=null();capture_cancelled_=false;
@@ -1499,8 +1530,80 @@ class Worker {
       emit("session_end", std::move(e));
     }
   }
+  // A DECLARED GAP IS FILLED WITH THE SILENCE IT REPLACED, AND SAID. The host
+  // plane declares a gap when its queue overflowed or the page's capture was
+  // lost; recognition of a live conversation cannot know what was spoken in
+  // it, but ending the session — and with it the engine process, whose
+  // restart takes about a minute and a half — is the wrong answer to a
+  // stalled phone. The input clock stays continuous, the endpointer sees
+  // silence, and the gap is declared on the worker's own diagnostic line
+  // (AII_VOICE_GAP) so it is never hidden. A gap that runs backwards or
+  // exceeds kMaxGapSamples is still a fault.
+  // queued: the frames waiting behind the pending one, read by the caller
+  // under mutex_ (one caller already holds it).
+  void report_held(const char *event, std::size_t queued) {
+    auto held = object();
+    put(held, "component", string("voice-worker"));
+    put(held, "event", string(event));
+    put(held, "session_id", string(sid_));
+    put(held, "received", number(input_received_));
+    put(held, "held_ms", number(double(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - pending_since_).count())));
+    put(held, "queued_frames", number(double(queued)));
+    std::cerr << "AII_VOICE_BACKPRESSURE " << encode(held) << '\n';
+  }
+  void fill_declared_gap(Frame &f) {
+    if (!gap_open_) {
+      require(!input_started_ ||
+                  (f.stream == input_stream_ && input_seq_ != UINT32_MAX &&
+                   f.seq == input_seq_ + 1),
+              "audio stream/sequence differs");
+      require(f.start >= input_received_, "audio gap runs backwards");
+      require(f.start - input_received_ <= kMaxGapSamples, "audio gap too long");
+      gap_open_ = true;
+      gap_target_ = f.start;
+      if (gap_target_ > input_received_) {
+        auto gap = object();
+        put(gap, "component", string("voice-worker"));
+        put(gap, "event", string("input_gap"));
+        put(gap, "session_id", string(sid_));
+        put(gap, "start", number(input_received_));
+        put(gap, "samples", number(gap_target_ - input_received_));
+        std::cerr << "AII_VOICE_GAP " << encode(gap) << '\n';
+      }
+    }
+    // A few chunks per pass, so the control wire and the output stay served
+    // while a long gap is fed; AGAIN keeps this frame pending and resumes
+    // from input_received_.
+    for (int chunks = 0; chunks < 8 && input_received_ < gap_target_ && !capture_limit_reached_; ++chunks) {
+      uint64_t n = std::min<uint64_t>(gap_target_ - input_received_, kGapChunkSamples);
+      if (input_limit_)
+        n = std::min<uint64_t>(n, input_limit_ - input_received_);
+      if (n == 0)
+        break;
+      const std::vector<float> silence(n, 0.f);
+      const auto rc = aii_voice_feed(session_, input_received_, silence.data(), n, &error_);
+      if (rc == AII_VOICE_AGAIN)
+        return;
+      core(rc, error_);
+      recent_waveforms_.feed(input_received_, silence.data(), n);
+      input_received_ += n;
+      capture_limit_reached_ = input_limit_ && input_received_ == input_limit_;
+    }
+    if (input_received_ < gap_target_ && !capture_limit_reached_)
+      return;
+    gap_open_ = false;
+    input_started_ = true;
+    input_stream_ = f.stream;
+    input_seq_ = f.seq;
+    input_pending_.reset();
+  }
   void input() {
     if (abort_ || !failure_.empty()) {
+      if (held_reported_) {
+        // The hold ends here: the session's input is discarded, not consumed.
+        held_reported_ = false;
+        report_held("input_backpressure_cleared", 0);
+      }
       input_pending_.reset();
       std::lock_guard<std::mutex> l(mutex_);
       audio_in_.clear();
@@ -1511,6 +1614,11 @@ class Worker {
     if (!input_pending_) {
       std::lock_guard<std::mutex> l(mutex_);
       if (!audio_in_.empty()) {
+        if (held_reported_) {
+          held_reported_ = false;
+          report_held("input_backpressure_cleared", audio_in_.size());
+        }
+        pending_since_ = Clock::now();
         audio_samples_ -= audio_in_.front().pcm.size();
         input_pending_ = std::move(audio_in_.front());
         audio_in_.pop_front();
@@ -1532,6 +1640,20 @@ class Worker {
 #endif
     if (!input_pending_)
       return;
+    if (!held_reported_ && Clock::now() - pending_since_ > kHeldInputReport) {
+      held_reported_ = true;
+      std::size_t queued = 0;
+      {
+        std::lock_guard<std::mutex> l(mutex_);
+        queued = audio_in_.size();
+      }
+      report_held("input_backpressure", queued);
+    }
+    if (!input_started_ && input_pending_->start != 0 &&
+        std::find(retired_streams_.begin(), retired_streams_.end(), input_pending_->stream) != retired_streams_.end()) {
+      input_pending_.reset();
+      return;
+    }
     require(input_enabled_,"session has no input direction");
     // The host may already have queued more capture when the engine's finite
     // cutoff arrives. Retire those bytes without admitting them as speech or
@@ -1561,7 +1683,16 @@ class Worker {
     if (!session_&&!capture_)
       return;
     auto &f = *input_pending_;
-    require(!end_seen_ && f.kind != 2, "input ended or discontinuous");
+    require(!end_seen_, "input ended or discontinuous");
+    if (f.kind == 2) {
+      // The host declared that samples before f.start were lost or never
+      // captured. An enrollment capture must be continuous to be an
+      // enrollment, and the paired echo input cannot conceal a lost
+      // reference: both stay fatal. A live conversation survives it.
+      require(!capture_ && !reference_input_, "input ended or discontinuous");
+      fill_declared_gap(f);
+      return;
+    }
     require(!input_started_ ||
                 (f.stream == input_stream_ && input_seq_ != UINT32_MAX &&
                  f.seq == input_seq_ + 1),
@@ -1754,8 +1885,21 @@ public:
             });
           }
         }
-        if (!quit_)
-          input();
+        // A CONTRACT FAULT IN ONE SESSION'S INPUT IS THAT SESSION'S. Refused
+        // (a frame the session's contract rejects) fails the session and
+        // leaves the engine ready for the next, as a refused settings reply
+        // already does; a core failure (runtime_error) still ends the
+        // process, whose restart is what clears a broken model state.
+        if (!quit_) {
+          try {
+            input();
+          } catch (const Refused &e) {
+            const bool first = failure_.empty();
+            fail(e.what());
+            if (first)
+              failure_contained_ = true;
+          }
+        }
         if (quit_ && !session_ && !opening_.valid() && !enrollment_.valid() && !capturing_.valid() && !waveform_publish_.valid() && !pending_audio_)
           break;
         if (quit_ && Clock::now() > exit_deadline_)
@@ -1822,7 +1966,9 @@ public:
     for (auto &t : threads_)
       t.join();
     std::lock_guard<std::mutex> l(mutex_);
-    return failure_.empty() && transport_fault_.empty() ? 0 : 1;
+    // The process reports its own health: a session failure it contained
+    // was already reported by that session and does not fail the exit.
+    return (failure_.empty() || failure_contained_) && transport_fault_.empty() ? 0 : 1;
   }
 };
 } // namespace
