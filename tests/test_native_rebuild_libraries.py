@@ -374,3 +374,138 @@ def test_rebuild_refuses_a_partial_nemo_set_before_writing(tmp_path, monkeypatch
     with pytest.raises(ValueError, match='whole'):
         run_rebuild(tmp_path, monkeypatch, parent, ['--nemo', str(sources[0])])
     assert not (tmp_path / 'candidate').exists()
+
+
+
+GGML = ('lib/libggml.0.dylib', 'lib/libggml-base.0.dylib', 'lib/libggml-blas.0.dylib',
+        'lib/libggml-cpu.0.dylib', 'lib/libggml-metal.0.dylib')
+POCKET, POCKET_KERNELS = 'lib/libnative_pocket_resident.dylib', 'lib/libnative_pocket_resident.metallib'
+LOADER = b'the image that carries ggml-metal could not be located'
+
+
+def image(path, *, embedded=False, loader=False):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'\xcf\xfa\xed\xfe' + (b'kernel void kernel_add(' if embedded else b'no shader source')
+                     + (LOADER if loader else b'') + b'\0' * 64)
+    return path
+
+
+def kernels(path, magic=b'MTLB'):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(magic + b'\0' * 64)
+    return path
+
+
+def test_ggml_library_set_is_replaced_whole_on_macos_only(tmp_path):
+    from scripts import rebuild_native_checkpoint as rebuild
+    profile = dict(platform='darwin', files=dict.fromkeys([*GGML, 'lib/libnemo_speech_asr.dylib']))
+    sources = [image(tmp_path / Path(n).name) for n in GGML]
+    assert rebuild.ggml_libraries(profile, None) == {}
+    assert rebuild.ggml_libraries(profile, sources) == dict(zip(GGML, (p.resolve() for p in sources)))
+    with pytest.raises(ValueError, match='whole'):
+        rebuild.ggml_libraries(profile, sources[:-1])
+    with pytest.raises(ValueError, match='darwin only'):
+        rebuild.ggml_libraries(dict(platform='linux', files={}), sources)
+
+
+def test_each_image_without_shader_source_gets_the_kernels_its_loader_reads(tmp_path):
+    from scripts.rebuild_native_checkpoint import metal_kernels
+    profile = dict(platform='darwin', files=dict.fromkeys([*GGML, POCKET, 'bin/aii_voice_worker']))
+    replaced = {'lib/libggml-metal.0.dylib': image(tmp_path / 'libggml-metal.0.dylib'),
+                POCKET: image(tmp_path / 'libnative_pocket_resident.dylib', loader=True)}
+    given = [kernels(tmp_path / 'k' / 'default.metallib'), kernels(tmp_path / 'k' / 'libnative_pocket_resident.metallib')]
+    assert metal_kernels(profile, replaced, given) == {
+        'bin/default.metallib': given[0].resolve(), POCKET_KERNELS: given[1].resolve()}
+    # Images that still embed their source need nothing, and nothing replaced needs nothing.
+    embedded = {POCKET: image(tmp_path / 'e' / 'libnative_pocket_resident.dylib', embedded=True)}
+    assert metal_kernels(profile, embedded, None) == {}
+    assert metal_kernels(profile, {}, None) == {}
+
+
+@pytest.mark.parametrize('fault,match', [
+    ('no-kernels', 'is required'), ('unreplaced-image', 'only together'), ('embedded-image', 'never reads'),
+    ('embedded-beside-declared', 'never reads'), ('unpatched-loader', 'metal-library-beside'),
+    ('unknown-name', 'no Metal image reads'), ('not-a-metallib', 'not a compiled Metal'),
+    ('twice', 'twice'), ('symlink', 'regular')])
+def test_metal_kernels_refuse_what_would_not_load(tmp_path, fault, match):
+    from scripts.rebuild_native_checkpoint import metal_kernels
+    profile = dict(platform='darwin', files=dict.fromkeys([*GGML, POCKET]))
+    replaced = {POCKET: image(tmp_path / 'libnative_pocket_resident.dylib', loader=fault != 'unpatched-loader',
+                              embedded=fault in ('embedded-image', 'embedded-beside-declared'))}
+    given = [kernels(tmp_path / 'k' / 'libnative_pocket_resident.metallib',
+                     magic=b'\x7fELF' if fault == 'not-a-metallib' else b'MTLB')]
+    if fault == 'no-kernels': given = []
+    if fault == 'unreplaced-image': given.append(kernels(tmp_path / 'k' / 'default.metallib'))
+    if fault == 'embedded-beside-declared': given = []; profile['files'][POCKET_KERNELS] = None
+    if fault == 'unknown-name': given = [kernels(tmp_path / 'k' / 'ggml.metallib')]
+    if fault == 'twice': given.append(given[0])
+    if fault == 'symlink':
+        link = tmp_path / 'l'; link.mkdir(); (link / given[0].name).symlink_to(given[0]); given = [link / given[0].name]
+    with pytest.raises(ValueError, match=match):
+        metal_kernels(profile, replaced, given)
+
+
+def darwin_rebuild(tmp_path, monkeypatch, change_ggml=True):
+    from scripts import rebuild_native_checkpoint as rebuild
+    from scripts.package_native_runtime import runtime_inventory
+    parent = tmp_path / 'parent'
+    runtime = parent / 'runtime'
+    for name in ('bin/aii_voice_worker', 'lib/libaii_native_asr.dylib', 'lib/libaii_voice_runtime.dylib', *GGML):
+        image(runtime / name)
+    image(runtime / POCKET, embedded=True)
+    (runtime / 'resources').mkdir()
+    (runtime / 'resources/settings.json').write_text('[{"key":"fixture"}]\n')
+    (runtime / 'aii-voice-t3').write_bytes(b'parent carrier')
+    profile = dict(schema='aiii.voice.native-runtime', platform='darwin', arch='arm64', qualified=False,
+                   files=runtime_inventory(runtime, target_platform='darwin'))
+    (runtime / 'voice-runtime.json').write_text(json.dumps(profile))
+    manifest, carrier = rebuild.sha(runtime / 'voice-runtime.json'), rebuild.sha(runtime / 'aii-voice-t3')
+    (parent / 'carrier-build.json').write_text(json.dumps(dict(carrier_sha256=carrier, runtime_manifest_sha256=manifest)))
+    (parent / 'freeze.json').write_text(json.dumps(dict(passed=True, signed=False, installed=False,
+        runtime_manifest_sha256=manifest, carrier_sha256=carrier, models_root=str(tmp_path), models={})))
+    def settings(worker, runtime, out):
+        (out / 'settings.json').write_bytes((runtime / 'resources/settings.json').read_bytes())
+    def bind(runtime, record, go):
+        (runtime / 'aii-voice-t3').write_bytes(b'rebuilt carrier')
+        record.write_text(json.dumps(dict(carrier_sha256=rebuild.sha(runtime / 'aii-voice-t3'),
+                                          runtime_manifest_sha256=rebuild.sha(runtime / 'voice-runtime.json'))))
+    monkeypatch.setattr(rebuild, 'write_current_settings', settings)
+    monkeypatch.setattr(rebuild, 'bind_carrier', bind)
+    monkeypatch.setattr(rebuild, 'verify_checkpoint', lambda out: None)
+    monkeypatch.setattr(rebuild, 'relocate_macos', lambda path, runtime: None)
+    new = tmp_path / 'new'
+    ggml = [image(new / 'ggml' / Path(n).name) for n in GGML]
+    if change_ggml:  # only the CPU and Metal members change
+        ggml[3].write_bytes(ggml[3].read_bytes() + b'baseline cpu')
+        ggml[4].write_bytes(ggml[4].read_bytes() + b'no embedded source')
+    pocket = image(new / 'libnative_pocket_resident.dylib', loader=True)
+    shaders = [kernels(new / 'k' / 'default.metallib'), kernels(new / 'k' / 'libnative_pocket_resident.metallib', b'MTLB2')]
+    out = tmp_path / 'candidate'
+    monkeypatch.setattr(rebuild.sys, 'argv', ['rebuild_native_checkpoint',
+        '--parent', str(parent), '--parent-sha256', rebuild.sha(parent / 'freeze.json'),
+        '--worker', str(runtime / 'bin/aii_voice_worker'), '--asr', str(runtime / 'lib/libaii_native_asr.dylib'),
+        '--session-library', str(runtime / 'lib/libaii_voice_runtime.dylib'), '--out', str(out), '--go', str(tmp_path),
+        '--tts', str(pocket), *[a for g in ggml for a in ('--ggml', str(g))],
+        *[a for k in shaders for a in ('--metallib', str(k))]])
+    rebuild.main()
+    return out, json.loads((out / 'freeze.json').read_text()), shaders
+
+
+def test_rebuild_installs_the_kernels_beside_the_image_that_reads_them(tmp_path, monkeypatch):
+    from scripts import rebuild_native_checkpoint as rebuild
+    out, frozen, shaders = darwin_rebuild(tmp_path, monkeypatch)
+    built = out / 'runtime'
+    assert (built / 'bin/default.metallib').read_bytes() == shaders[0].read_bytes()
+    assert (built / POCKET_KERNELS).read_bytes() == shaders[1].read_bytes()
+    assert frozen['metal_kernels'] == {'bin/default.metallib': rebuild.sha(shaders[0]), POCKET_KERNELS: rebuild.sha(shaders[1])}
+    assert frozen['ggml_replaced'] == sorted(GGML)
+    assert set(frozen['changed_images']) == {'lib/libggml-cpu.0.dylib', 'lib/libggml-metal.0.dylib', POCKET}
+    declared = json.loads((built / 'voice-runtime.json').read_text())['files']
+    assert {'bin/default.metallib', POCKET_KERNELS} <= set(declared)
+    assert all(frozen['bindings'][str(k.resolve())] == rebuild.sha(k) for k in shaders)
+
+
+def test_rebuild_refuses_a_ggml_set_that_changes_nothing(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match='ggml replacement leaves the parent bytes unchanged'):
+        darwin_rebuild(tmp_path, monkeypatch, change_ggml=False)
+    assert not (tmp_path / 'candidate/freeze.json').exists()

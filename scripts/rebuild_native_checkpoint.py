@@ -133,32 +133,104 @@ NEMO_LIBRARIES = {
 NEMO_IMAGE = re.compile(r'(?:lib)?nemo_speech_asr(?:_c)?(?:\..*)?')
 
 
-def nemo_libraries(profile, sources):
-    """Replace the parent's declared NeMo library set whole, by exact file name.
+# NeMo's ggml is one set, built together from one checkout and options
+# (macOS: the Apple-silicon baseline CPU and precompiled Metal kernels).
+GGML_LIBRARIES = {
+    'darwin': ('lib/libggml.0.dylib', 'lib/libggml-base.0.dylib', 'lib/libggml-blas.0.dylib',
+               'lib/libggml-cpu.0.dylib', 'lib/libggml-metal.0.dylib'),
+}
+GGML_IMAGE = re.compile(r'libggml(?:-[a-z]+)?\.0\.dylib')
 
-    Every file of the set is named explicitly; a partial set, a name outside
+# Metal kernels compiled at build time. A contained engine cannot write Metal's
+# per-user shader cache, and Metal uses that cache only when it can write it,
+# so a library that embeds its shader source compiles it again on every start
+# (30-40 s on a busy GPU). Each image built with GGML_METAL_EMBED_LIBRARY=OFF
+# reads its own kernels: NeMo's stock ggml from beside the executable, the
+# Pocket library (metal-library-beside.patch) from beside itself, by its name.
+METAL_KERNELS = {
+    'lib/libggml-metal.0.dylib': ('bin/default.metallib', None),
+    'lib/libnative_pocket_resident.dylib': ('lib/libnative_pocket_resident.metallib',
+                                            b'the image that carries ggml-metal could not be located'),
+}
+EMBEDDED_METAL_SOURCE = b'kernel void kernel_'
+
+
+def metal_kernels(profile, replacements, metallibs):
+    """The compiled kernels each replaced Metal image reads, as {runtime name: source}.
+
+    A library and its kernels are built together: an image without shader
+    source requires its metallib, and a metallib is accepted only beside the
+    image that reads it, replaced in the same rebuild.
+    """
+    targets = {Path(kernels).name: (image, kernels) for image, (kernels, _) in METAL_KERNELS.items()}
+    given = {}
+    for source in map(Path, metallibs or ()):
+        if source.name not in targets:
+            raise ValueError('no Metal image reads ' + source.name + '; expected ' + ', '.join(sorted(targets)))
+        image, kernels = targets[source.name]
+        if kernels in given:
+            raise ValueError('metallib named twice: ' + source.name)
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('replacement must be an explicit regular file: ' + source.name)
+        if source.read_bytes()[:4] != b'MTLB':
+            raise ValueError(source.name + ' is not a compiled Metal library')
+        given[kernels] = source.resolve()
+    selected = {}
+    for image, (kernels, loader) in METAL_KERNELS.items():
+        source = given.get(kernels)
+        if image not in replacements:
+            if source is not None:
+                raise ValueError(kernels + ' is replaced only together with ' + image)
+            continue
+        data = Path(replacements[image]).read_bytes()
+        if EMBEDDED_METAL_SOURCE in data:
+            if source is not None or kernels in profile['files']:
+                raise ValueError(image + ' embeds its shader source and never reads ' + kernels)
+            continue
+        if source is None:
+            raise ValueError(image + ' carries no shader source; its ' + kernels + ' is required')
+        if loader is not None and loader not in data:
+            raise ValueError(image + ' does not load ' + kernels + '; metal-library-beside.patch required')
+        selected[kernels] = source
+    return selected
+
+
+def nemo_libraries(profile, sources):
+    """Replace the parent's declared NeMo library set whole, by exact file name."""
+    return library_set(profile, sources, NEMO_LIBRARIES, NEMO_IMAGE, 'NeMo')
+
+
+def ggml_libraries(profile, sources):
+    """Replace the parent's declared ggml library set whole, by exact file name."""
+    return library_set(profile, sources, GGML_LIBRARIES, GGML_IMAGE, 'ggml')
+
+
+def library_set(profile, sources, libraries, image, label):
+    """Every file of the set is named explicitly; a partial set, a name outside
     the platform's set or a set the parent does not declare exactly is refused.
     """
     if not sources:
         return {}
-    expected = {Path(name).name: name for name in NEMO_LIBRARIES[profile['platform']]}
+    if profile['platform'] not in libraries:
+        raise ValueError(label + ' library set replacement is declared for ' + ', '.join(sorted(libraries)) + ' only')
+    expected = {Path(name).name: name for name in libraries[profile['platform']]}
     selected = {}
     for source in map(Path, sources):
         if source.is_symlink() or not source.is_file():
             raise ValueError('replacement must be an explicit regular library file')
         name = expected.get(source.name)
         if name is None:
-            raise ValueError('unknown NeMo library file: ' + source.name
+            raise ValueError('unknown ' + label + ' library file: ' + source.name
                              + '; expected ' + ', '.join(sorted(expected)))
         if name in selected:
-            raise ValueError('NeMo library named twice: ' + source.name)
+            raise ValueError(label + ' library named twice: ' + source.name)
         selected[name] = source.resolve()
     if set(selected) != set(expected.values()):
-        raise ValueError('NeMo library set is replaced whole; missing '
+        raise ValueError(label + ' library set is replaced whole; missing '
                          + ', '.join(sorted(set(expected.values()) - set(selected))))
-    declared = {name for name in profile['files'] if NEMO_IMAGE.fullmatch(Path(name).name)}
+    declared = {name for name in profile['files'] if image.fullmatch(Path(name).name)}
     if declared != set(selected):
-        raise ValueError('parent does not declare exactly this NeMo library set: ' + ', '.join(sorted(declared)))
+        raise ValueError('parent does not declare exactly this ' + label + ' library set: ' + ', '.join(sorted(declared)))
     for name in selected:
         safe_relative(name)
     return selected
@@ -351,6 +423,12 @@ def main():
     for name in ('uid-frontend', 'uid', 'tts', 'endpoint'):
         parser.add_argument('--'+name, type=Path,
                             help='Explicit replacement for an existing declared native library; fresh qualification required')
+    parser.add_argument('--ggml', type=Path, action='append', metavar='FILE',
+                        help='macOS: explicit replacement for the declared ggml library set; repeat to name '
+                             'every file of its set; fresh qualification required')
+    parser.add_argument('--metallib', type=Path, action='append', metavar='FILE',
+                        help='macOS: compiled Metal kernels of a replaced image built without shader source '
+                             '(default.metallib for ggml, libnative_pocket_resident.metallib for --tts)')
     parser.add_argument('--nemo', type=Path, action='append', metavar='FILE',
                         help='Explicit replacement for the declared NeMo diarizer/ASR library; repeat to name '
                              'every file of its set; fresh qualification required')
@@ -390,6 +468,11 @@ def main():
                                           uid=args.uid, tts=args.tts, endpoint=args.endpoint))
     nemo = nemo_libraries(profile, args.nemo)
     replacements.update(nemo)
+    ggml = ggml_libraries(profile, args.ggml)
+    replacements.update(ggml)
+    metal = metal_kernels(profile, replacements, args.metallib)
+    for path in metal.values():
+        bindings[str(path)] = sha(path)
     for path in replacements.values():
         bindings[str(path)] = sha(path)
     bindings[str(Path(__file__).resolve())] = sha(Path(__file__))
@@ -412,6 +495,10 @@ def main():
             allowed = [expected] if name.startswith('bin/') else ['$ORIGIN', '$ORIGIN/../lib']
             if len(paths) != 1 or paths[0] not in allowed:
                 raise ValueError('explicit relocatable rpath required: ' + str(paths))
+    for name, source in metal.items():
+        target = runtime / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     if 'resources/settings.json' not in profile['files']:
         raise ValueError('parent lacks runtime settings declaration')
     write_current_settings(runtime / worker_name, runtime, out)
@@ -439,16 +526,19 @@ def main():
     updated['qualified'] = False
     delta = {n for n in set(profile['files']) | set(updated['files'])
              if profile['files'].get(n) != updated['files'].get(n)}
-    allowed = set(replacements) | {'resources/settings.json'} | added_notices
+    allowed = set(replacements) | {'resources/settings.json'} | added_notices | set(metal)
     if args.hearing_graphs is not None:
         allowed.add('native-profile.json')
     if args.uid_model is not None:
         allowed.update(('native-profile.json', 'resources/uid-policy.json'))
-    # The NeMo option exists to change that library: a replacement whose
+    # The set options exist to change those libraries: a replacement whose
     # bytes equal the parent's names the wrong build and is never recorded.
+    # A rebuilt ggml set may leave members its options do not reach unchanged.
     if not set(nemo) <= delta:
         raise ValueError('NeMo replacement leaves the parent bytes unchanged: '
                          + ', '.join(sorted(set(nemo) - delta)))
+    if ggml and not set(ggml) & delta:
+        raise ValueError('ggml replacement leaves the parent bytes unchanged')
     if not delta or not delta <= allowed:
         raise ValueError('unexpected runtime delta')
     (runtime / 'voice-runtime.json').write_text(json.dumps(updated, indent=2) + '\n')
@@ -472,6 +562,10 @@ def main():
                   bindings=bindings)
     if nemo:
         result['nemo_replaced'] = sorted(nemo)
+    if ggml:
+        result['ggml_replaced'] = sorted(ggml)
+    if metal:
+        result['metal_kernels'] = {name: sha(runtime / name) for name in sorted(metal)}
     for name, source in replacements.items():
         if name != worker_name:
             result.setdefault('library_hashes', {})[Path(name).name] = sha(runtime / name)

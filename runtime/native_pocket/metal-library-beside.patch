@@ -1,0 +1,102 @@
+--- a/external/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/external/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -67,11 +67,7 @@
+ }
+ 
+ #if !GGML_METAL_EMBED_LIBRARY
+-// Here to assist with NSBundle Path Hack
+-@interface GGMLMetalClass : NSObject
+-@end
+-@implementation GGMLMetalClass
+-@end
++#include <dlfcn.h>
+ #endif
+ 
+ //
+@@ -171,43 +167,15 @@
+         src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
+ #else
+ 
+-#ifdef SWIFT_PACKAGE
+-        NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
+-#else
+-        NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
+-#endif
+-
+-        NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
+-        if (path_lib == nil) {
+-            // Try to find the resource in the directory where the current binary located.
+-            NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
+-            NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+-
+-            NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
+-            if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+-                GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+-
+-                NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
+-                if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
+-                    // Optionally, if this is a symlink, try to resolve it.
+-                    path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
+-                    if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
+-                        // It is a relative path, adding the binary directory as directory prefix.
+-                        path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
+-                    }
+-                    if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+-                        // Link to the resource could not be resolved.
+-                        path_lib_default = nil;
+-                    } else {
+-                        GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
+-                    }
+-                }
+-            } else {
+-                // The resource couldn't be found in the binary's directory.
+-                path_lib_default = nil;
+-            }
+-
+-            path_lib = path_lib_default;
++        // AII: a process may hold more than one ggml, each with its own kernels, so a
++        // precompiled library is found beside the image that carries this code and is
++        // named after it (libX.dylib -> libX.metallib), never as a shared default.metallib.
++        // This build carries no shader source to fall back to.
++        NSString * path_lib = nil;
++        Dl_info image;
++        if (dladdr((const void *) &ggml_metal_library_init, &image) && image.dli_fname) {
++            path_lib = [[[NSString stringWithUTF8String:image.dli_fname] stringByDeletingPathExtension]
++                        stringByAppendingPathExtension:@"metallib"];
+         }
+ 
+         if (path_lib != nil) {
+@@ -221,31 +189,8 @@
+                 return nil;
+             }
+         } else {
+-            GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
+-
+-            NSString * path_source;
+-            NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
+-
+-            GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
+-
+-            if (path_resource) {
+-                path_source = [path_resource stringByAppendingPathComponent:@"ggml-metal.metal"];
+-            } else {
+-                path_source = [bundle pathForResource:@"ggml-metal" ofType:@"metal"];
+-            }
+-
+-            if (path_source == nil) {
+-                GGML_LOG_WARN("%s: error: could not use bundle path to find ggml-metal.metal, falling back to trying cwd\n", __func__);
+-                path_source = @"ggml-metal.metal";
+-            }
+-
+-            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
+-
+-            src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&error];
+-            if (error) {
+-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+-                return nil;
+-            }
++            GGML_LOG_ERROR("%s: the image that carries ggml-metal could not be located\n", __func__);
++            return nil;
+         }
+ #endif
+ 

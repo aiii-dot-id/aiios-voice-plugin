@@ -35,6 +35,7 @@ TESTS = (
     "test_speaker_attribution_contract", "test_reused_release_assets",
     "test_plugin_sdk_pin",
     "test_native_rebuild_libraries",
+    "test_native_metal_library_beside",
 )
 
 

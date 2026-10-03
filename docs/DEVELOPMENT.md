@@ -141,6 +141,41 @@ signing ceremony signs. The parent stays unchanged, every new image is bound,
 and execution/signing/installation claims are reset. A changed binary never
 inherits its parent's qualification.
 
+macOS ships Metal kernels compiled at build time. The host's sandbox denies
+writes, and Metal keeps its shader cache only when it can write it, so a
+library that embeds shader source compiles it on every contained start (20 s
+idle, 30-110 s in the field, against 5 s precompiled). `--ggml`, repeated,
+replaces NeMo's ggml set whole (`lib/libggml.0.dylib`, `-base`, `-blas`, `-cpu`,
+`-metal`); at least one member must change. `--metallib`, repeated, supplies
+the kernels of each replaced image built with `GGML_METAL_EMBED_LIBRARY=OFF`:
+`default.metallib` (installed as `bin/default.metallib`, where stock ggml looks
+beside the executable) for `--ggml`, and `libnative_pocket_resident.metallib`
+(installed beside the library) for `--tts`. An image without shader source
+and without its kernels, kernels beside an image that embeds source or is not
+replaced, and a Pocket library without `metal-library-beside.patch` are
+refused.
+
+Build both ggml copies for the Apple-silicon baseline (`GGML_NATIVE=OFF`; a
+build tuned for the build host's M3 carries M2-only int8/bf16 instructions), and
+compile each metallib from its ggml source directory with the macros every
+Apple-silicon GPU uses at runtime, so no build path enters it:
+
+```sh
+cd <ggml>/src/ggml-metal
+xcrun -sdk macosx metal -O3 -DGGML_METAL_HAS_BF16=1 -I .. -c ggml-metal.metal -o default.air
+xcrun -sdk macosx metallib default.air -o default.metallib
+```
+
+The tensor API is absent from these kernels; the worker disables it before
+loading a model (`worker_environment.h`), or ggml on an M5-class GPU would tile
+its matrix work for kernels the library does not contain. The Pocket build
+(`runtime/native_pocket/portable`) pins its Apple options and compiles its own
+metallib; its engine source is audio.cpp
+`3174e6b26f11a0e39b4f150961dce98f43ba860d` with `capacity-history.patch` and
+`metal-library-beside.patch` applied. The worker holds both ggml copies, whose
+kernels differ, so the patch makes Pocket's copy read the library named after
+its own image instead of a shared `default.metallib`.
+
 ## Go carrier
 
 Use Go 1.27.0 and the exact SDK revision/archive hash in
