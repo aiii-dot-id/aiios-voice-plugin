@@ -1547,8 +1547,8 @@ class Worker {
     put(held, "event", string(event));
     put(held, "session_id", string(sid_));
     put(held, "received", number(input_received_));
-    put(held, "held_ms", number(double(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - pending_since_).count())));
-    put(held, "queued_frames", number(double(queued)));
+    put(held, "held_ms", number(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - pending_since_).count())));
+    put(held, "queued_frames", number(uint64_t(queued)));
     std::cerr << "AII_VOICE_BACKPRESSURE " << encode(held) << '\n';
   }
   void fill_declared_gap(Frame &f) {
