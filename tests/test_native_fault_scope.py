@@ -74,6 +74,12 @@ def test_a_new_session_never_adopts_the_ended_streams_frames(tmp_path):
     try:
         w.open("old")
         seq_old, pos_old = speech(w, 1, 2048)
+        # The old stream must have begun in its own session; a session ended
+        # before any frame was read cannot say which stream was its.
+        deadline = time.monotonic() + 5
+        while w.status("old")["input"]["received_end_sample"] < pos_old:
+            assert time.monotonic() < deadline, "the old session never received its audio"
+            time.sleep(.01)
         w.call("close", session_id="old", mode="abort")
         w.event("session_end", "old")
         w.open("new")
