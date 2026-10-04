@@ -207,7 +207,8 @@ class Worker {
   std::unordered_set<uint32_t> declared_streams_;
   uint64_t foreign_frames_ = 0;
   // The current failure was one session's own (fail_session): reported in
-  // its events, and not the process's exit.
+  // its events, and not the process's exit. An engine failure that follows
+  // it (fail_engine) ends the containment: the exit reports the engine.
   bool failure_contained_ = false;
   // When the frame now pending was taken, and whether its hold was declared.
   // Input held longer than kHeldInputReport is back-pressure that reaches
@@ -305,7 +306,7 @@ class Worker {
     } catch (const Refused &e) {
       refuse(id, e.what());
     } catch (const std::exception &e) {
-      fail(e.what());
+      fail_engine(e.what());
       refuse(id, e.what());
     }
   }
@@ -489,26 +490,42 @@ class Worker {
   // A failure that belongs to one session — its own contract refused, or its
   // host did not answer in time — ends that session; the engine is healthy,
   // so the process's exit does not report it (the session already did).
-  // Engine and transport failures use fail() and do fail the exit.
+  // The first cause stands: a later fault of the same session adds nothing.
   void fail_session(const std::string &reason) {
-    const bool first = failure_.empty();
-    fail(reason);
-    if (first)
-      failure_contained_ = true;
-  }
-  void fail(const std::string &reason) {
     if (!failure_.empty())
       return;
-    failure_ = reason;
-    // Persist the first cause before cleanup or carrier EOF can hide it.
-    // JSON escaping prevents log injection; no PCM, transcript or profile
-    // document belongs in this lifecycle diagnostic.
+    fail(reason);
+    failure_contained_ = true;
+  }
+  // An engine failure is the process's own, whatever a session reported
+  // before it: a native model or session error, a core error in a request
+  // or in settings, a broken control channel. After a session's contained
+  // failure it is still said, and the exit reports it. The first cause stays
+  // the session's, in its events and its status.
+  void fail_engine(const std::string &reason) {
+    if (!failure_.empty() && failure_contained_) {
+      failure_contained_ = false;
+      say_failure(reason);
+      return;
+    }
+    fail(reason);
+  }
+  // JSON escaping prevents log injection; no PCM, transcript or profile
+  // document belongs in this lifecycle diagnostic.
+  void say_failure(const std::string &reason) {
     auto diagnostic=object();
     put(diagnostic,"component",string("voice-worker"));
     put(diagnostic,"event",string("failure"));
     put(diagnostic,"session_id",string(sid_));
     put(diagnostic,"reason",string(reason.substr(0,1024)));
     std::cerr<<"AII_VOICE_FAILURE "<<encode(diagnostic)<<'\n';
+  }
+  void fail(const std::string &reason) {
+    if (!failure_.empty())
+      return;
+    failure_ = reason;
+    // Persist the first cause before cleanup or carrier EOF can hide it.
+    say_failure(reason);
     capture_cancelled_=true;
     uid_snapshot_.cancel();
     if (lifecycle_ == "closed")
@@ -1337,7 +1354,7 @@ class Worker {
     }
     core(aii_voice_status(session_, &snapshot_, &error_), error_);
     if (*snapshot_.error)
-      fail(snapshot_.error);
+      fail_engine(snapshot_.error);
     {
       std::optional<Ack> ack;
       {
@@ -1904,7 +1921,7 @@ public:
             quit_ = true;
             exit_deadline_ = Clock::now() + std::chrono::seconds(5);
           }
-          fail(error);
+          fail_engine(error);
         }
         if (audio_eof && !quit_ && lifecycle_ != "closed" &&
             lifecycle_ != "failed")
@@ -1923,7 +1940,7 @@ public:
             } catch (const Refused &e) {
               fail_session(e.what());
             } catch (const std::exception &e) {
-              fail(e.what());
+              fail_engine(e.what());
             }
           } else {
             const auto id = integer(field(j.get(), "id"));
@@ -1957,7 +1974,7 @@ public:
           quit_ = true;
           exit_deadline_ = Clock::now() + std::chrono::seconds(5);
         }
-        fail(e.what());
+        fail_engine(e.what());
       }
       // Never pay a scheduler tick per already-queued frame. On Windows a
       // nominal 1 ms sleep can consume an entire timer quantum, stranding a
@@ -2015,7 +2032,8 @@ public:
       t.join();
     std::lock_guard<std::mutex> l(mutex_);
     // The process reports its own health: a session failure it contained
-    // was already reported by that session and does not fail the exit.
+    // was already reported by that session and does not fail the exit. An
+    // engine failure after it ended the containment (fail_engine).
     return (failure_.empty() || failure_contained_) && transport_fault_.empty() ? 0 : 1;
   }
 };

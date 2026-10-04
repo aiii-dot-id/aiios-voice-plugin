@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 namespace aii::voice::wire {
@@ -86,7 +87,7 @@ struct Tts : aii::voice::Synthesizer {
   std::vector<float> next() override {
     if (text == "Stall.")
       for (;;) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    if (text == "Hold.")
+    if (text == "Hold." || text == "Break.")
       while (!cancelled)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (cancelled)
@@ -96,7 +97,15 @@ struct Tts : aii::voice::Synthesizer {
                            : std::vector<float>{};
     return count++ ? std::vector<float>{} : std::vector<float>(960, .25f);
   }
-  void reset() override {}
+  // Engine-fault seam: "Break." holds like "Hold." and then cannot be
+  // restored after its cancel, once. That is an engine failure which arrives
+  // while a session is ending, whatever ended the session.
+  void reset() override {
+    if (text != "Break.")
+      return;
+    text.clear();
+    throw std::runtime_error("fixture synthesizer reset failed");
+  }
   void cancel(uint64_t) noexcept override { cancelled = true; }
 };
 struct Uid : aii::voice::SpeakerIdentifier {

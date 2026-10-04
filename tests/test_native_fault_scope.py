@@ -5,7 +5,9 @@ malformed input frame in one session cost an engine restart (about 100 s on an
 Apple Silicon desktop) and counted toward the supervisor's five-in-ten-minutes
 deactivation. A contract fault in the input path (Refused) now fails only its
 session, as a refused settings reply already did; the process stays ready for
-the next session. Core failures and transport faults still end the process.
+the next session. Core failures and transport faults still end the process,
+and an engine failure that follows a contained session failure is still said
+and still fails the exit.
 A session opened after a failed or aborted one never adopts frames of the
 stream that ended. Production worker, deterministic models, not a soak.
 """
@@ -326,3 +328,45 @@ def test_without_a_declared_stream_a_speaker_only_session_refuses_the_unread_aud
         assert foreign_lines(w) == []
     finally:
         assert w.close() == 0
+
+
+def engine_failure_pending(w, sid):
+    """A reply whose synthesizer cannot be restored once it is cancelled: an engine failure waiting for the cancel."""
+    w.open(sid)
+    w.call("synthesize", session_id=sid, synthesis_id="reply", text="Break.")
+    w.event("synthesis_start", sid)
+
+
+def test_an_engine_failure_after_a_contained_session_failure_fails_the_exit(tmp_path):
+    # The session's own fault is contained. The engine failure that follows it
+    # in the same session is not that session's: it is said, and the exit
+    # reports it.
+    w = worker(tmp_path, "engine-after-contained")
+    code = None
+    try:
+        engine_failure_pending(w, "s")
+        seq, _ = speech(w, 1, 2048)
+        w.input.write(frame(GAP, 1, seq + 1, 1024))  # a gap that runs backwards: the session's contract fault
+        failure = w.event("failure", "s")
+        assert "audio gap runs backwards" in failure["reason"], failure
+        reasons = [f["reason"] for f in failures(w)]
+        assert len(reasons) == 2 and "audio gap runs backwards" in reasons[0] and reasons[1] == "fixture synthesizer reset failed", reasons
+    finally:
+        code = w.close()
+    assert code == 1, "an engine failure after a contained session failure left the exit reporting success"
+
+
+def test_the_same_engine_failure_alone_fails_the_exit(tmp_path):
+    # Control half: without a session fault before it, the engine failure is
+    # the first cause and fails the exit, before this change and after it.
+    w = worker(tmp_path, "engine-alone")
+    code = None
+    try:
+        engine_failure_pending(w, "s")
+        w.call("cancel_synthesis", session_id="s")
+        failure = w.event("failure", "s")
+        assert failure["reason"] == "fixture synthesizer reset failed", failure
+        assert [f["reason"] for f in failures(w)] == ["fixture synthesizer reset failed"]
+    finally:
+        code = w.close()
+    assert code == 1
