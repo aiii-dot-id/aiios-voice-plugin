@@ -60,7 +60,9 @@ def test_nonprogress_cannot_keep_drain_alive(tmp_path, traffic):
                 "rendered_samples": 0, "terminal": False}})
             row = w.replies.get(timeout=2)
             assert row["id"] == w.counter
-            assert ("error" in row) == (traffic == "foreign")
+            if traffic == "duplicate" and row.get("error") == "session not ready":
+                break  # the drain failed before its event was read; the event must still follow
+            assert ("error" in row) == (traffic == "foreign"), row
             time.sleep(.25)
         failure = w.event("failure", "drain")
         assert "no progress" in failure["reason"]
