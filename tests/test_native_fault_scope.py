@@ -249,3 +249,80 @@ def test_a_stream_number_serves_one_session(tmp_path):
         w.event("session_end", "third")
     finally:
         assert w.close() == 0
+
+
+def open_speaker_only(w, sid):
+    """A session with no input direction: audio.input is null and it carries no input handle."""
+    result, _ = w.call("open", session_id=sid, output_handle="playback",
+                       audio={"format": "s16le", "input": None, "output": {"rate": 48000, "channels": 2}})
+    assert result["audio"] == {"input": None, "output": {"rate": 24000, "channels": 1}}
+    w.configure(w.settings.get(timeout=2), 768)
+    w.event("session_ready", sid)
+
+
+def aborted_then_speaker_only(w, declare):
+    """Capture is aborted and a speaker-only session opens; the aborted session's unread audio arrives after it."""
+    w.open("old", stream=11 if declare else None)
+    w.call("close", session_id="old", mode="abort")
+    w.event("session_end", "old")
+    open_speaker_only(w, "new")
+    speech(w, 11, 2048)  # two frames the aborted session never read: they start at sample 0
+
+
+def foreign_frames(w, sid, want):
+    until = time.monotonic() + 5
+    while time.monotonic() < until and w.status(sid)["input"]["foreign_frames"] < want:
+        time.sleep(.01)
+    return w.status(sid)["input"]["foreign_frames"]
+
+
+def test_a_speaker_only_session_drops_an_aborted_sessions_declared_audio(tmp_path):
+    # A speaker-only session has no input stream to declare. The aborted
+    # session declared its own, and each number serves one session, so its
+    # frames are that session's wherever they arrive.
+    w = worker(tmp_path, "speaker-only")
+    try:
+        aborted_then_speaker_only(w, declare=True)
+        assert foreign_frames(w, "new", 2) == 2
+        status = w.status("new")
+        assert (status["input"]["stream"], status["input"]["state"]) == (None, "absent"), status
+        assert foreign_lines(w) == [{"component": "voice-worker", "event": "foreign_input",
+                                     "session_id": "new", "stream": 11, "declared": None}]
+        assert not any(e["type"] == "failure" for e in w.events), w.events
+        assert failures(w) == []
+        w.call("close", session_id="new", mode="abort")
+        w.event("session_end", "new")
+    finally:
+        assert w.close() == 0
+
+
+def test_a_speaker_only_session_still_refuses_audio_no_session_declared(tmp_path):
+    # Control half: a stream no earlier session declared is not an earlier
+    # session's audio. A host that writes it to a session with no input
+    # direction is refused, as before.
+    w = worker(tmp_path, "speaker-only-undeclared-stream")
+    try:
+        w.open("old", stream=11)
+        w.call("close", session_id="old", mode="abort")
+        w.event("session_end", "old")
+        open_speaker_only(w, "new")
+        speech(w, 99, 1024)
+        failure = w.event("failure", "new")
+        assert "no input direction" in failure["reason"], failure
+        assert foreign_lines(w) == []
+        assert w.p.poll() is None, "the engine process ended with its session"
+    finally:
+        assert w.close() == 0
+
+
+def test_without_a_declared_stream_a_speaker_only_session_refuses_the_unread_audio(tmp_path):
+    # Control half: a host that declares no stream leaves the engine nothing
+    # to tell the aborted session's frames by. The older behaviour stands.
+    w = worker(tmp_path, "speaker-only-no-declaration")
+    try:
+        aborted_then_speaker_only(w, declare=False)
+        failure = w.event("failure", "new")
+        assert "no input direction" in failure["reason"], failure
+        assert foreign_lines(w) == []
+    finally:
+        assert w.close() == 0

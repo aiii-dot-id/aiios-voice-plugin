@@ -200,7 +200,9 @@ class Worker {
   std::deque<uint32_t> retired_streams_;
   // The AUD1 stream an open declared for its input (audio.input.stream).
   // Frames on any other stream are an earlier session's unread audio: they
-  // are dropped and counted, never adopted. Each number serves one session.
+  // are dropped and counted, never adopted. Each number serves one session,
+  // so a frame on a number an earlier session declared is dropped by every
+  // later session, including one that declares none.
   std::optional<uint32_t> declared_stream_;
   std::unordered_set<uint32_t> declared_streams_;
   uint64_t foreign_frames_ = 0;
@@ -1674,14 +1676,21 @@ class Worker {
       }
       report_held("input_backpressure", queued);
     }
-    if (declared_stream_ && input_pending_->stream != *declared_stream_) {
+    // A frame is another session's when this session declared a stream and
+    // the frame is on a different one, or when an earlier session declared
+    // the frame's stream: each number serves one session. The second half
+    // reaches a session that declares none. A speaker-only session has no
+    // input to declare, so an aborted session's unread audio is dropped there
+    // too, and is not refused as that session's own contract fault.
+    const bool own = declared_stream_ && input_pending_->stream == *declared_stream_;
+    if (!own && (declared_stream_ || declared_streams_.count(input_pending_->stream))) {
       if (foreign_frames_++ == 0) {
         auto foreign = object();
         put(foreign, "component", string("voice-worker"));
         put(foreign, "event", string("foreign_input"));
         put(foreign, "session_id", string(sid_));
         put(foreign, "stream", number(uint64_t(input_pending_->stream)));
-        put(foreign, "declared", number(uint64_t(*declared_stream_)));
+        put(foreign, "declared", declared_stream_ ? number(uint64_t(*declared_stream_)) : null());
         std::cerr << "AII_VOICE_FOREIGN_INPUT " << encode(foreign) << '\n';
       }
       input_pending_.reset();
