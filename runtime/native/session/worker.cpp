@@ -198,6 +198,12 @@ class Worker {
   // host numbers them all alike), so a frame is stale only when it also
   // cannot be the new session's first: that one starts at sample 0.
   std::deque<uint32_t> retired_streams_;
+  // The AUD1 stream an open declared for its input (audio.input.stream).
+  // Frames on any other stream are an earlier session's unread audio: they
+  // are dropped and counted, never adopted. Each number serves one session.
+  std::optional<uint32_t> declared_stream_;
+  std::unordered_set<uint32_t> declared_streams_;
+  uint64_t foreign_frames_ = 0;
   // The current failure was one session's own (fail_session): reported in
   // its events, and not the process's exit.
   bool failure_contained_ = false;
@@ -558,6 +564,8 @@ class Worker {
     put(input, "admitted_end_sample",
         snapshot_.cutoff_set ? number(snapshot_.cutoff) : null());
     put(input, "received_end_sample", number(input_received_));
+    put(input, "stream", declared_stream_ ? number(uint64_t(*declared_stream_)) : null());
+    put(input, "foreign_frames", number(foreign_frames_));
     put(input, "processed_end_sample", number(snapshot_.recognized));
     put(r, "input", std::move(input));
     auto rec = object();
@@ -721,6 +729,11 @@ class Worker {
     require(input_enabled || (!field(a,"input_handle") && !capture),
             "absent input cannot carry an input handle or enrollment capture");
     const auto handle=input_enabled ? str(field(a,"input_handle")) : std::string{};
+    std::optional<uint32_t> declared;
+    if(const auto* stream=input_enabled ? field(source,"stream") : nullptr) {
+      declared=uint32_t(integer(stream,UINT32_MAX));
+      require(!declared_streams_.count(*declared),"input stream number already served an earlier session");
+    }
     for (const char *name : {"input", "output"}) {
       if(!input_enabled && std::string(name)=="input") continue;
       const auto *f = field(audio, name);
@@ -757,6 +770,8 @@ class Worker {
     input_handle_ = handle;
     input_enabled_ = input_enabled;
     used_sessions_.insert(identity_digest(id));++session_epoch_;
+    declared_stream_=declared;foreign_frames_=0;
+    if(declared)declared_streams_.insert(*declared);
     settled_delivered_=settled_rendered_=0;current_name_.clear();
     sequence_ = 0;
     failure_.clear();
@@ -1659,7 +1674,22 @@ class Worker {
       }
       report_held("input_backpressure", queued);
     }
-    if (!input_started_ && input_pending_->start != 0 &&
+    if (declared_stream_ && input_pending_->stream != *declared_stream_) {
+      if (foreign_frames_++ == 0) {
+        auto foreign = object();
+        put(foreign, "component", string("voice-worker"));
+        put(foreign, "event", string("foreign_input"));
+        put(foreign, "session_id", string(sid_));
+        put(foreign, "stream", number(uint64_t(input_pending_->stream)));
+        put(foreign, "declared", number(uint64_t(*declared_stream_)));
+        std::cerr << "AII_VOICE_FOREIGN_INPUT " << encode(foreign) << '\n';
+      }
+      input_pending_.reset();
+      return;
+    }
+    // An open that declares no stream: a frame that cannot be its first, on a
+    // stream an earlier session began, is stale.
+    if (!declared_stream_ && !input_started_ && input_pending_->start != 0 &&
         std::find(retired_streams_.begin(), retired_streams_.end(), input_pending_->stream) != retired_streams_.end()) {
       input_pending_.reset();
       return;

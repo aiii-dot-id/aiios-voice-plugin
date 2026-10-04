@@ -183,3 +183,69 @@ def test_an_unanswered_settings_request_fails_its_session_not_the_engines_exit(t
         assert w.p.poll() is None
     finally:
         assert w.close() == 0, "a host's unanswered settings request failed the engine's exit"
+
+
+def foreign_lines(w):
+    log = (w.out / "stderr.log").read_text()
+    return [json.loads(line.removeprefix("AII_VOICE_FOREIGN_INPUT ")) for line in log.splitlines() if line.startswith("AII_VOICE_FOREIGN_INPUT ")]
+
+
+def aborted_then_reopened(w, declare):
+    """An aborted session's audio the engine never read arrives after the next open."""
+    w.open("old", stream=11 if declare else None)
+    w.call("close", session_id="old", mode="abort")
+    w.event("session_end", "old")
+    w.open("new", stream=12 if declare else None)
+    speech(w, 11, 2048)  # the aborted session's unread frames: they start at sample 0
+    return speech(w, 12, 3072)
+
+
+def test_a_declared_stream_drops_an_aborted_sessions_unread_audio(tmp_path):
+    w = worker(tmp_path, "declared")
+    try:
+        seq, pos = aborted_then_reopened(w, declare=True)
+        finish(w, "new", 12, seq, pos)
+        final = w.event("transcript_final", "new")
+        assert (final["start_sample"], final["end_sample"]) == (0, 3072), final
+        status = w.status("new")["input"]
+        assert (status["stream"], status["foreign_frames"]) == (12, 2), status
+        assert foreign_lines(w) == [{"component": "voice-worker", "event": "foreign_input",
+                                     "session_id": "new", "stream": 11, "declared": 12}]
+        assert not any(e["type"] == "failure" for e in w.events), w.events
+        w.call("close", session_id="new", mode="abort")
+        w.event("session_end", "new")
+    finally:
+        assert w.close() == 0
+
+
+def test_without_a_declared_stream_the_unread_audio_is_adopted(tmp_path):
+    # Control half: the same order with no declaration is the race the field closes.
+    w = worker(tmp_path, "undeclared")
+    try:
+        aborted_then_reopened(w, declare=False)
+        failure = w.event("failure", "new")
+        assert "audio stream/sequence differs" in failure["reason"] or "clock differs" in failure["reason"], failure
+        assert w.status("new")["input"]["stream"] is None
+        assert foreign_lines(w) == []
+    finally:
+        assert w.close() == 0
+
+
+def test_a_stream_number_serves_one_session(tmp_path):
+    w = worker(tmp_path, "reuse")
+    try:
+        w.open("first", stream=7)
+        w.call("close", session_id="first", mode="abort")
+        w.event("session_end", "first")
+        w.counter += 1
+        w.send({"id": w.counter, "operation": "speech.session.open", "arguments": {
+            "session_id": "second", "input_handle": "capture", "output_handle": "playback",
+            "audio": {"format": "s16le", "input": {"rate": 48000, "channels": 1, "stream": 7},
+                      "output": {"rate": 48000, "channels": 2}}}})
+        row = w.replies.get(timeout=2)
+        assert row["id"] == w.counter and row.get("error") == "input stream number already served an earlier session", row
+        w.open("third", stream=8)  # a fresh number opens; the refusal left no session behind
+        w.call("close", session_id="third", mode="abort")
+        w.event("session_end", "third")
+    finally:
+        assert w.close() == 0

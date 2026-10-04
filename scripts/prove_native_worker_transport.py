@@ -72,8 +72,9 @@ class Worker:
                 raise RuntimeError('control EOF before '+kind)
             time.sleep(.002)
         raise TimeoutError(kind)
-    def open(self,sid,settings=True):
-        r,_=self.call('open',session_id=sid,input_handle='capture',output_handle='playback',audio={'format':'s16le','input':{'rate':48000,'channels':1},'output':{'rate':48000,'channels':2}})
+    def open(self,sid,settings=True,stream=None):
+        source={'rate':48000,'channels':1,**({} if stream is None else {'stream':stream})}
+        r,_=self.call('open',session_id=sid,input_handle='capture',output_handle='playback',audio={'format':'s16le','input':source,'output':{'rate':48000,'channels':2}})
         assert r['audio']=={'input':{'rate':16000,'channels':1},'output':{'rate':24000,'channels':1}}
         q=self.settings.get(timeout=2)
         if settings:self.configure(q,768);self.event('session_ready',sid)
