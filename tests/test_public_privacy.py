@@ -70,6 +70,26 @@ def test_commit_identity_is_checked(tmp_path):
                for row in audit_repository(tmp_path)[0])
 
 
+def test_a_distribution_version_in_a_notice_inventory_is_not_an_address():
+    # A package version can have four parts and then reads as an address. In a
+    # notice inventory's own distribution member, a package name followed by
+    # its version and nothing else, the four parts are the version.
+    cudnn = '.'.join(('9', '10', '2', '21')); curand = '.'.join(('10', '4', '1', '81'))
+    address = [(1, 'non-example-network-address')]
+    for line in ('      "distribution": "nvidia-cudnn-cu12 ' + cudnn + '",',
+                 '"distribution": "libcurand-13-1 ' + curand + '"'):
+        assert scan_text(line, attribution_notice=True) == [], line
+        # Control half: outside a notice the same line names an address.
+        assert scan_text(line) == address, line
+    # Control halves, in a notice: the four parts are still an address wherever
+    # the line is anything but one package and its version.
+    assert scan_text('"homepage": "http://' + curand + '/"', attribution_notice=True) == address
+    assert scan_text('"distribution": "' + curand + '"', attribution_notice=True) == address
+    assert scan_text('"distribution": "mirror ' + curand + ' port 80"', attribution_notice=True) == address
+    assert scan_text('"distribution": "mirror ' + curand + ' ' + cudnn + '"', attribution_notice=True) == address * 2
+    assert scan_text('"distribution": "nvidia-cudnn-cu12 ' + cudnn + '", "host": "' + curand + '"', attribution_notice=True) == address * 2
+
+
 def test_listed_terms_are_refused_by_number_and_never_echoed(tmp_path):
     listed = tmp_path / 'terms.txt'
     listed.write_text('# kept outside the tree\nword:Quillon\nsub:corridor-9\nallow:other/file:Quillon\n\nword:aiii\n')

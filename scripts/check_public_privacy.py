@@ -37,6 +37,11 @@ EMAIL = re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b')
 IPV4 = re.compile(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])')
 DOCUMENTATION_NETS = tuple(ipaddress.ip_network(n) for n in
                            ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'))
+# A package version can have four parts and then reads as an address. In a
+# notice inventory's own distribution member, one package name followed by its
+# version and nothing else, the four parts are that package's version. Anywhere
+# else on such a line, and on every other line, they are still an address.
+DISTRIBUTION_VERSION = re.compile(r'^\s*"distribution":\s*"[A-Za-z][A-Za-z0-9._+-]*\s(\d{1,3}(?:\.\d{1,3}){3})",?\s*$')
 PRIVATE_SUFFIXES = {'.pem', '.key', '.p12', '.pfx', '.sqlite', '.db', '.wav', '.mp3',
                     '.m4a', '.npy', '.npz', '.mobileprovision'}
 
@@ -73,7 +78,9 @@ def scan_text(text, *, attribution_notice=False, terms=()):
             if pattern.search(line): findings.append((number, category))
         if not attribution_notice and any(not public_email(m.group()) for m in EMAIL.finditer(line)):
             findings.append((number, 'unapproved-email'))
+        version = DISTRIBUTION_VERSION.match(line) if attribution_notice else None
         for match in IPV4.finditer(line):
+            if version and match.span() == version.span(1): continue
             try: address = ipaddress.ip_address(match.group())
             except ValueError: continue
             if not address.is_loopback and not any(address in net for net in DOCUMENTATION_NETS):
