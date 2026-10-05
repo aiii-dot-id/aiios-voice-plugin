@@ -46,6 +46,15 @@ bool main_loop_sees_audio_deadline() {
   static const bool main_loop = fixture_setting("AII_FIXTURE_AUDIO_DEADLINE") != "writer";
   return main_loop;
 }
+// Order seam: AII_FIXTURE_HOLD_AFTER_EVENT_POLL_MS holds each pass of a
+// draining session that long between its poll for the core's events and its
+// read of the core's status. A scheduler can put the core's last events and
+// its retirement in that place; the seam makes it the usual one.
+void after_event_poll(bool draining) {
+  static const auto hold = fixture_setting("AII_FIXTURE_HOLD_AFTER_EVENT_POLL_MS");
+  if (draining && !hold.empty())
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::stoi(hold)));
+}
 } // namespace aii::voice::wire
 namespace {
 struct Asr : aii::voice::Recognizer {

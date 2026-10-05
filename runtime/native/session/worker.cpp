@@ -48,8 +48,9 @@ using Clock = std::chrono::steady_clock;
 #endif
 #ifdef AII_AUDIO_ACK_TEST_HOOK
 // Fixture target only (worker_test_models.cpp): publication-order and
-// audio-deadline detection-order seams.
-namespace aii::voice::wire { void before_audio_ack(bool end, bool failed); bool main_loop_sees_audio_deadline(); }
+// audio-deadline detection-order seams, and the place between a pass's poll
+// for the core's events and its read of the core's status.
+namespace aii::voice::wire { void before_audio_ack(bool end, bool failed); bool main_loop_sees_audio_deadline(); void after_event_poll(bool draining); }
 #endif
 namespace {
 // The worker's own deadline has passed: end now. On Windows that never waits
@@ -224,6 +225,10 @@ class Worker {
        quit_ = false;
   Clock::time_point opening_deadline_, closing_deadline_, exit_deadline_;
   uint64_t drain_recognized_ = 0;
+  // The sequence of the last event taken from the core. The core numbers its
+  // events from one; the session ends only when the core has retired AND the
+  // last event it numbered has been taken (pump).
+  uint64_t core_taken_ = 0;
   std::optional<Frame> input_pending_;
   std::optional<Output> active_output_;
   AudioScratch<> audio_scratch_;
@@ -810,6 +815,7 @@ class Worker {
     gap_open_ = false;
     gap_target_ = 0;
     input_received_ = input_final_sequence_ = 0;
+    core_taken_ = 0;
     snapshot_ = {};
     capture_=std::move(capture);capture_result_=null();capture_cancelled_=false;
     effective_ = object();
@@ -1391,6 +1397,7 @@ class Worker {
                                  " bytes; the worker's event buffer holds " +
                                  std::to_string(sizeof text));
       core(rc, error_);
+      core_taken_ = e.sequence;
       if (abort_ || !failure_.empty())
         continue;
       auto data = object();
@@ -1465,6 +1472,9 @@ class Worker {
         enrollment_finals_[public_sequence]=e.sequence;
       }
     }
+#ifdef AII_AUDIO_ACK_TEST_HOOK
+    after_event_poll(lifecycle_ == "draining");
+#endif
     for (auto &item : generations_) {
       auto &g = *item.second;
       aii_voice_generation state{};
@@ -1537,7 +1547,17 @@ class Worker {
       else if (!snapshot_.retired || pending_audio_)
         abandon(72);
     }
-    if (snapshot_.retired && !pending_audio_)
+    // THE SESSION ENDS AFTER THE CORE'S LAST EVENT, NEVER AHEAD OF IT. The
+    // poll above ran before this status was read, and the core's owners can
+    // write the tail's final, input_finished and a speaker observation and
+    // then retire in between: ending on "retired" alone released the session
+    // with those events untaken, and the host heard a clean session_end
+    // without them. The snapshot's sequence is the last event the core
+    // numbered, read under the same lock as "retired"; when it is the one
+    // last taken, nothing is left and nothing more can come. An aborted or
+    // failed session publishes none of them, and ends as before.
+    if (snapshot_.retired && !pending_audio_ &&
+        (abort_ || !failure_.empty() || snapshot_.sequence == core_taken_))
       terminal();
   }
   void terminal() {
