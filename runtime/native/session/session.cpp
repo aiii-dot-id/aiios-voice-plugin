@@ -701,6 +701,10 @@ void Session::finish_input(uint64_t end) {
   // Three different refusals, each saying which and with the numbers: one
   // sentence for all of them left a page's toast unable to tell a late finish
   // on a stopping session from a cutoff the engine had already passed.
+  // The cutoff already admitted, named again, changes nothing and is not a
+  // late finish: the audio lane's END frame repeats what the control fixed,
+  // and a drain can have released the session before that frame is read.
+  if(p_->stopping && p_->cutoff_set && end==p_->cutoff) return;
   require(!p_->stopping,"finish refused: the session is stopping");
   require(end>=p_->received,("finish refused: cutoff "+std::to_string(end)+" is behind the "+std::to_string(p_->received)+" samples already received").c_str());
   require(end<=p_->input_limit,("finish refused: cutoff "+std::to_string(end)+" is beyond the input limit "+std::to_string(p_->input_limit)).c_str());

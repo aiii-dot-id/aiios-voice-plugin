@@ -367,6 +367,21 @@ void missing_tail_is_failure() {
   check(s.status().error=="input tail missing at admitted cutoff" && !s.status().input_finished,"missing tail was silently completed");
   Event event;while(s.event(event))check(event.kind!="input_finished","missing tail minted successful input completion");
 }
+void admitted_cutoff_repeats_after_the_drain_released() {
+  // The control fixed the cutoff and a drain released the session; the audio
+  // lane's END frame names the same cutoff afterwards. It changes nothing and
+  // is not refused. A different cutoff is still a late finish.
+  Asr a;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,200});
+  std::vector<float> pcm(1024,.5f);
+  check(s.feed(0,pcm.data(),pcm.size()),"audio not admitted");
+  s.finish_input(1024);until([&]{return s.status().input_finished;});
+  s.close(false);check(s.wait_closed(1000),"drain did not retire");
+  check(s.status().stopping && s.status().error.empty(),"drain did not release cleanly");
+  s.finish_input(1024);
+  check(s.status().error.empty() && s.status().cutoff==1024,"a repeated cutoff changed a released session");
+  try{s.finish_input(2048);check(false,"a different cutoff was admitted after release");}
+  catch(const std::invalid_argument& x){check(std::string(x.what())=="finish refused: the session is stopping","a late different cutoff has the wrong refusal");}
+}
 void backpressured_tail_is_not_missing(bool deliver) {
   Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,200});
   std::vector<float> pcm(32768,.5f);
@@ -437,6 +452,8 @@ int main() {
     missing_tail_is_failure();std::cout<<"missing input tail faults rather than completing PASS\n";
     backpressured_tail_is_not_missing(true);backpressured_tail_is_not_missing(false);
     abort_bypasses_backpressured_tail();
+    admitted_cutoff_repeats_after_the_drain_released();
+    std::cout<<"an admitted cutoff repeated after the drain released is not a late finish PASS\n";
     std::cout<<"backpressure suspends only the missing-tail wait; deadline resumes on capacity PASS\n";
     bounded_read_keeps_custody();std::cout<<"capacity refusal keeps event/audio custody under control fences PASS\n";
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
