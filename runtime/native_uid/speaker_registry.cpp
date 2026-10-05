@@ -285,7 +285,7 @@ RegistryChange associate_speaker(const std::string& raw,const PolicyDocument& p,
   auto r=read_registry(raw,p);require(r.revision==expected,"stale speaker registry revision");uuid(id);text(label);text(external_id);
   const auto found=std::find_if(r.buckets.begin(),r.buckets.end(),[&](const auto& b){return b.uuid==id;});
   require(found!=r.buckets.end(),"speaker UUID not found");
-  if((found->associations.empty()&&label.empty()&&external_id.empty())||
+  if((found->associations.empty()&&!found->enrollment&&label.empty()&&external_id.empty())||
      (!found->associations.empty()&&found->associations.back().label==label&&found->associations.back().external_id==external_id))
     return prepared(raw,r,p,id,"unchanged","association_already_current");
   advance(r);found->associations.push_back({r.revision,label,external_id});

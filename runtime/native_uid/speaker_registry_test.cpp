@@ -46,6 +46,8 @@ int main(int argc,char** argv){try{
     invalid=loaded;invalid.buckets.push_back({b,2,{},{},loaded.buckets[0].enrollment});invalid.revision=2;
     refuses([&]{write_registry(invalid,p);});
     const auto anonymous=admitted(empty,p,0,b,sample('1',0));
+    check(associate_speaker(anonymous.document,p,1,b,"","").document==anonymous.document,
+      "first empty anonymous association stopped being a no-op");
     const auto anonymous_registry=read_registry(anonymous.document,p);
     auto exact=Speaker{"new-name","Context label",anonymous_registry.profiles.speakers[0].samples};
     const auto named=bind_enrolled_speaker(anonymous.document,p,1,c,exact,b);

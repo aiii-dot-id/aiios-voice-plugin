@@ -98,6 +98,9 @@ different original evidence refuses; it cannot hand the old UUID to a new person
 An absent enrollment leaves its UUID metadata readable but does not provide an
 active voiceprint. Names assigned with `speaker.associate` take precedence over
 the legacy label, including clearing a label to `unknown`.
+The first clear of an enrollment-bound UUID records one revision even when the
+enrollment is absent or unnamed; the label remains `unknown` if enrollment
+returns, and restoring a name requires an explicit `speaker.associate`.
 
 Simultaneous tracks share a canonical-UUID exclusion check across both named
 and anonymous paths. A second track cannot claim the same UUID in the same

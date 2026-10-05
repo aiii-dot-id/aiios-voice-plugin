@@ -431,6 +431,56 @@ void registry_contract(){
     check(str(field(observed.get(),"speaker_uuid"))==source,"confirmed undo did not restore source UUID");
   }
 }
+void inherited_label_clear_contract() {
+  const auto p=policy();Vector v(256);v[0]=1;
+  for(const std::string fault:{"none","conflict","unsynced","readback"}) {
+    Host host;host.profile=write_snapshot({p.policy,1,{{"legacy-id","Inherited name",{{hash("enrolled-origin"),v}}}}},p);
+    const auto enrollment=*host.profile;
+    aii_voice_capture sample{};sample.samples=64000;sample.embedding[0]=1;
+    std::snprintf(sample.embedding_binding,sizeof sample.embedding_binding,"%s",p.policy.embedding_binding.c_str());
+    std::snprintf(sample.pcm_sha256,sizeof sample.pcm_sha256,"%s",hash("fresh-speech").c_str());
+    SpeakerRegistryStore store(host.bridge,p);
+    const auto observed=store.observe(&sample,1,1);
+    const auto id=str(field(observed.get(),"speaker_uuid"));
+    check(str(field(observed.get(),"display_label"))=="Inherited name","fixture did not inherit enrollment label");
+    const auto prior=*host.archives.at("speaker_registry");
+    const auto before=host.publications.size();
+    if(fault=="conflict")host.fail_publish="speaker_registry";
+    if(fault=="unsynced")host.unsynced="speaker_registry";
+    if(fault=="readback")host.corrupt_readback="speaker_registry";
+    if(fault!="none") {
+      refused([&]{store.associate(1,id,"","");},fault=="conflict"?"not published":fault=="unsynced"?"durability":"unresolved");
+      check(*host.profile==enrollment,"failed clear changed enrollment");
+      if(fault=="conflict")check(*host.archives.at("speaker_registry")==prior,"conflict changed registry");
+      continue;
+    }
+    const auto cleared=store.associate(1,id,"","");
+    check(str(field(cleared.get(),"registry_revision"))=="2"&&host.publications.size()==before+1,
+      "first inherited-label clear did not publish revision 2");
+    const auto bytes=*host.archives.at("speaker_registry");
+    const auto registry=read_registry(bytes,p),old=read_registry(prior,p);
+    const auto& bucket=registry.buckets.at(0);
+    check(registry.revision==2&&bucket.uuid==id&&bucket.associations.size()==1&&
+      bucket.associations.back().label.empty()&&bucket.associations.back().external_id.empty(),
+      "inherited clear did not persist explicit empty metadata");
+    check(*host.profile==enrollment&&write_snapshot(registry.profiles,p)==write_snapshot(old.profiles,p)&&
+      bucket.enrollment->id==old.buckets.at(0).enrollment->id&&
+      bucket.enrollment->evidence==old.buckets.at(0).enrollment->evidence,
+      "metadata clear changed enrollment or acoustic evidence");
+    host.bridge.cancel();host.bridge.begin("restart-cleared-enrollment");
+    SpeakerRegistryStore fresh(host.bridge,p);
+    const auto listing=fresh.list();const auto* row=field(listing.get(),"speakers")->child;
+    check(str(field(row,"speaker_uuid"))==id&&str(field(row,"display_label"))=="unknown"&&
+      flag(field(row,"matching_ready")),"reloaded listing lost clear or recognition readiness");
+    const auto speech=fresh.observe(&sample,2,1);
+    check(str(field(speech.get(),"speaker_uuid"))==id&&str(field(speech.get(),"display_label"))=="unknown",
+      "reloaded observation inherited cleared enrollment label");
+    const auto again=fresh.associate(2,id,"","");
+    check(str(field(again.get(),"registry_revision"))=="2"&&host.publications.size()==before+1&&
+      *host.archives.at("speaker_registry")==bytes,"repeated clear changed stored bytes or revision");
+    refused([&]{fresh.associate(1,id,"","");},"stale");
+  }
+}
 void enrolled_uuid_contract() {
   const auto p=policy();Vector v(256);v[0]=1;
   for(const auto* fault:{"none","conflict","unsynced","readback"}) {
@@ -955,7 +1005,7 @@ int main(int argc,char** argv){try{
   if(argc==6&&std::string(argv[1])=="--observation-panel")real_observation_panel(argv);
   else if(argc==3)process_step(argv[1],argv[2]);
   else{
-  check(argc==1,"unexpected arguments");enrolled_uuid_contract();legacy_singleton_competition_contract();joint_gallery_margin_contract();complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();earlier_model_contract();earlier_registry_contract();earlier_registry_failure_contract();registry_contract();registry_management_does_not_discard_live_observation();registry_policy_transition_contract();
+  check(argc==1,"unexpected arguments");inherited_label_clear_contract();enrolled_uuid_contract();legacy_singleton_competition_contract();joint_gallery_margin_contract();complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();earlier_model_contract();earlier_registry_contract();earlier_registry_failure_contract();registry_contract();registry_management_does_not_discard_live_observation();registry_policy_transition_contract();
   std::cout<<"guided enrollment publication: closed-mic confirmation, profile-first durable readback, explicit restart reconciliation, no duplicated identity, cleanup uncertainty and fail-closed reads PASS\n";
   }
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
