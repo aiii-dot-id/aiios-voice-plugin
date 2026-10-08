@@ -810,7 +810,7 @@ def main():
     # Signature/readiness status belongs in evidence, not descriptive metadata
     # that would remain falsely "unsigned" after the exact package is signed.
     cfg['title']='AII Voice'
-    cfg['description']='On-device English speech for macOS, Windows and Ubuntu: twenty selectable voices, speaker-separated recognition, adjustable VAD, interruption/recovery and durable anonymous speaker UUIDs with later naming. Speaker attribution is a model estimate, not authentication or authority.'
+    cfg['description']='On-device speech for macOS, Windows and Ubuntu: English recognition that separates speakers, with a correction list the identity can teach; twenty selectable voices in seven speaking languages; adjustable VAD, interruption/recovery and durable anonymous speaker UUIDs with later naming. Speaker attribution is a model estimate, not authentication or authority.'
     cfg['runtimes']=[]
     bound={};profiles={};census={}
     settings = None

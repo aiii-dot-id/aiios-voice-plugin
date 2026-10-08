@@ -8,16 +8,18 @@ browser owns microphone and playback; AII OS owns the session, containment,
 downloads, integrity checking and permissions. The engine runs locally, not
 in a cloud speech service. Initial acquisition requires internet access.
 
-The desktop beta contains English STT and TTS, twenty selectable voices, active
-VAD and conversational pause handling, interruption/recovery, guided speaker
-enrollment and UID. Meeting input and output-only speech are native session
+The desktop beta contains English STT with a correction list the identity can
+teach, TTS in seven languages (English, French, German, Spanish, Italian,
+Portuguese, Dutch; the models of a language other than English are downloaded
+when it is chosen), twenty selectable voices, active VAD and conversational
+pause handling, interruption/recovery, guided speaker enrollment and UID. Meeting input and output-only speech are native session
 capabilities; their use in the UI depends on matching host routing. A package's
 signed minimum host version must name the first *published* host that carries
 the host features it needs. A development build's version number alone is not
 evidence that a public installer contains those features.
 
 This is a desktop beta, not a claim of universally human-level quality,
-multilingual support, biometric authentication or a mobile release.
+multilingual recognition, biometric authentication or a mobile release.
 
 ## Install
 

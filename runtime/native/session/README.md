@@ -181,10 +181,11 @@ and the frozen 4-second recovery after interruption. All render receipts are
 simulated; this is not a new installed or physical-audio qualification.
 
 The historical proof above predates native UID publication, guided enrollment,
-the current settings map and ten-preset catalogue. Those are now composed in
+the current settings map and the preset catalogue (twenty voices now). Those are now composed in
 source, but their qualification remains bound to each tested artifact. Current
-native language support is English; an older multilingual experiment does not
-expand the shipping declaration. Prior Windows containment evidence cannot
+native recognition is English, and speech is synthesized in the seven languages
+the settings declare; an older multilingual experiment does not expand the
+shipping declaration. Prior Windows containment evidence cannot
 automatically qualify a replacement runtime.
 
 Per-platform accelerator placement, complete native-model numerical panels,
