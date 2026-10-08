@@ -130,6 +130,50 @@ def model_notice_bindings(models, files):
             raise ValueError('UID replacement record is not included in its model notice group')
 
 
+def conditional_models(models, files):
+    """Names of the models that only some values of a setting need.
+
+    Such a model belongs to no component set: every platform acquires it
+    while the setting holds one of its values. Its condition must name an
+    enum setting this package declares and values that setting has, which
+    is what the host that reads the package requires of it.
+    """
+    named = {m['name'] for m in models if 'when' in m}
+    if not named:
+        return named
+    try:
+        settings = unique(json.loads(files['settings.json']), 'key')
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError('a conditional model needs the package settings') from error
+    for model in models:
+        if 'when' not in model:
+            continue
+        when = model['when']
+        if (not isinstance(when, dict) or set(when) != {'setting', 'values'}
+                or not isinstance(when['setting'], str)
+                or not isinstance(when['values'], list) or not when['values']
+                or any(not isinstance(v, str) or not v for v in when['values'])
+                or len(set(when['values'])) != len(when['values'])):
+            raise ValueError('invalid model condition: ' + model['path'])
+        setting = settings.get(when['setting'])
+        if (not isinstance(setting, dict) or setting.get('type') != 'enum'
+                or not isinstance(setting.get('values'), list)
+                or not set(when['values']) <= set(setting['values'])):
+            raise ValueError('model condition names no declared setting value: ' + model['path'])
+    return named
+
+
+def conditional_downloads(models):
+    """What each value of a setting adds to a download, beyond a component set's own models."""
+    result = {}
+    for model in models:
+        for value in model.get('when', {}).get('values', ()):
+            row = result.setdefault(model['when']['setting'] + '=' + value, dict(files=0, bytes=0))
+            row['files'] += 1
+            row['bytes'] += model['size']
+    return result
+
+
 def dependencies(manifest, files):
     models = json.loads(files['models.json'])
     runtimes = json.loads(files['runtime.json'])['runtimes']
@@ -149,16 +193,21 @@ def dependencies(manifest, files):
                 or set(preference) != set(variants)):
             raise ValueError('multi-set publication requires complete variant_preference')
     targets = {}; used = set()
+    conditional = conditional_models(models, files)
     for vid, variant in variants.items():
         selected = profiles[vid]['models']
         if not selected or len(selected) != len(set(selected)) or not set(selected) <= set(model_by_name):
             raise ValueError('invalid platform model selection')
+        if conditional & set(selected):
+            # A set names what its platform always needs; a conditional
+            # model is the same on every platform and is in none.
+            raise ValueError('a component set names a model that only some values of a setting need')
         used.update(selected)
         targets[vid] = dict(
             platform=variant['platform'], variant_id=vid, runtime=runtime_by_id[vid],
             models=[model_by_name[n] for n in selected],
             accelerator=profiles[vid], carrier_sha256=variant['artifact_hash'])
-    if used != set(model_by_name):
+    if used | conditional != set(model_by_name):
         raise ValueError('undeployed model in package union')
     for row in models + runtimes:
         if (type(row['size']) is not int or row['size'] <= 0
@@ -257,6 +306,8 @@ def audit_staged(root):
     if (plan['variants'] != platform_plan(targets, setup)
             or plan.get('variant_preference') != manifest.get('variant_preference')):
         raise ValueError('component plan/setup differs from actual package')
+    if plan.get('conditional_downloads', {}) != conditional_downloads(models):
+        raise ValueError('conditional downloads differ from actual package')
     return dict(passed=True, assets=len(expected),
                 total_asset_bytes=sum(r['size'] for r in plan['assets']),
                 candidate_sha256=plan['candidate_sha256'],
@@ -308,6 +359,7 @@ def stage(candidate, generated, upstream, out):
                 candidate_receipt_sha256=sha(candidate / 'result.json'),
                 upstream_evidence_sha256=sha(upstream), assets=published_rows,
                 upstream=external, variants=targets, variant_preference=manifest.get('variant_preference'),
+                conditional_downloads=conditional_downloads(models),
                 distribution_review_complete=index['distribution_review_complete'],
                 distribution_open_items=index['open_items'],
                 signed=False, published=False, catalog_generated=False,

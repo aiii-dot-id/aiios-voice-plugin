@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scripts.stage_desktop_publication import dependencies, platform_plan
+from scripts.stage_desktop_publication import conditional_downloads, dependencies, platform_plan
 
 
 def fixture():
@@ -164,3 +164,72 @@ def test_readback_refuses_separator_weights_under_nvidia_hearing_terms(path):
         dependencies(manifest, files)
     data['index']['models'][0]['notice_group'] = 'speaker'
     assert len(dependencies(manifest, payloads(data))[0]) == 1
+
+
+def with_language(data, values=('fr',)):
+    """The fixture with one more model, needed only for some values of an enum setting."""
+    pack = dict(name='language-fr', path='tts/languages/french/model.safetensors', sha256='e' * 64, size=9,
+                url='https://github.com/example/release/french.safetensors',
+                when=dict(setting='tts_language', values=list(values)))
+    data['index']['models'].append(dict(path=pack['path'], sha256=pack['sha256'], bytes=pack['size'], notice_group='speaker'))
+    files = payloads(data)
+    files['models.json'] = json.dumps([data['models'], pack]).encode()
+    files['settings.json'] = json.dumps([dict(key='tts_language', type='enum', default='en', values=['en', 'fr', 'de']),
+                                         dict(key='turn_pause_ms', type='integer', default=768),
+                                         dict(key='tts_code', type='string', default='fr', values=['fr'])]).encode()
+    return pack, files
+
+
+def test_a_model_only_some_settings_need_belongs_to_no_component_set():
+    manifest, data = fixture()
+    pack, files = with_language(data, ('fr', 'de'))
+    models, _, targets = dependencies(manifest, files)
+    assert [m['name'] for m in models] == ['speaker', 'language-fr']
+    assert all([m['name'] for m in target['models']] == ['speaker'] for target in targets.values())
+    assert conditional_downloads(models) == {'tts_language=fr': dict(files=1, bytes=9), 'tts_language=de': dict(files=1, bytes=9)}
+    assert conditional_downloads([data['models']]) == {}
+
+
+def test_an_unconditional_model_no_set_names_is_still_refused():
+    manifest, data = fixture()
+    pack, files = with_language(data)
+    del pack['when']
+    files['models.json'] = json.dumps([data['models'], pack]).encode()
+    with pytest.raises(ValueError, match='undeployed model'):
+        dependencies(manifest, files)
+
+
+def test_a_component_set_cannot_name_a_conditional_model():
+    manifest, data = fixture()
+    data['profiles']['linux']['models'] = ['speaker', 'language-fr']
+    _, files = with_language(data)
+    with pytest.raises(ValueError, match='only some values of a setting'):
+        dependencies(manifest, files)
+
+
+@pytest.mark.parametrize('damage', ['no-settings', 'malformed-settings', 'undeclared-setting', 'not-an-enum', 'values-but-not-an-enum', 'enum-without-values',
+    'value-not-declared', 'no-values', 'empty-value', 'repeated-value', 'extra-member', 'not-an-object', 'values-not-a-list'])
+def test_a_model_condition_is_held_to_the_package_settings(damage):
+    manifest, data = fixture()
+    pack, files = with_language(data)
+    when = pack['when']
+    if damage == 'no-settings': del files['settings.json']
+    if damage == 'malformed-settings': files['settings.json'] = b'{'
+    if damage == 'undeclared-setting': when['setting'] = 'tts_dialect'
+    if damage == 'not-an-enum': when['setting'] = 'turn_pause_ms'
+    if damage == 'values-but-not-an-enum': when['setting'] = 'tts_code'
+    if damage == 'enum-without-values':
+        files['settings.json'] = json.dumps([dict(key='tts_language', type='enum', default='en')]).encode()
+    if damage == 'value-not-declared': when['values'] = ['fr', 'xx']
+    if damage == 'no-values': when['values'] = []
+    if damage == 'empty-value':
+        # refused even where the setting itself lists an empty value
+        when['values'] = ['']
+        files['settings.json'] = json.dumps([dict(key='tts_language', type='enum', default='en', values=['en', 'fr', ''])]).encode()
+    if damage == 'repeated-value': when['values'] = ['fr', 'fr']
+    if damage == 'extra-member': when['platform'] = 'linux'
+    if damage == 'not-an-object': pack['when'] = 5
+    if damage == 'values-not-a-list': when['values'] = 'fr'
+    files['models.json'] = json.dumps([data['models'], pack]).encode()
+    with pytest.raises(ValueError, match='condition|conditional'):
+        dependencies(manifest, files)

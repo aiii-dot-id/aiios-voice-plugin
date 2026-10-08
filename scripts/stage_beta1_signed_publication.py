@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 from scripts.repackage_native_schemas import read_package
-from scripts.stage_desktop_publication import dependencies,upstream_rows,platform_plan,clean_url,release_name,release_checksums,release_assets,REPOSITORY
+from scripts.stage_desktop_publication import dependencies,upstream_rows,platform_plan,conditional_downloads,clean_url,release_name,release_checksums,release_assets,REPOSITORY
 from scripts.release_files import copy_asset,emit,put,sha
 from scripts.verify_publication_catalog import check_catalog
 from scripts.prove_reused_release_assets import reuse_rows
@@ -81,6 +81,7 @@ def main():
     plan=dict(schema='aiii-voice-signed-desktop-publication-handoff',utc=datetime.now(timezone.utc).isoformat(),
         repository=REPOSITORY,release_tag='v'+manifest['version'],signed_package_sha256=h,
         assets=rows,upstream=external,reused_assets=reused,variants=platform_plan(targets,setup),
+        conditional_downloads=conditional_downloads(models),
         variant_preference=manifest.get('variant_preference'),
         host_verification_sha256=sha(a.host_verification),catalog_entry_sha256=sha(out/'catalog-entry.json'),sdk_tool_sha256=sdk_sha,
         upstream_evidence_sha256=sha(a.upstream),reused_evidence_sha256=sha(a.reused),distribution_review_complete=index['distribution_review_complete'],
