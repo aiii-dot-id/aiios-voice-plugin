@@ -4,6 +4,8 @@ Never mutates the input or a live registry. UUIDs, embeddings, paths and labels
 are excluded from its result. Checks both original profiles, an ambiguous
 midpoint, and undo through the production codec and matching functions.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import base64
 import hashlib

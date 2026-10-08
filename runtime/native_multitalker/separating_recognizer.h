@@ -16,8 +16,11 @@ struct SourceSeparator {
 };
 // Separation is best effort. One separator call may use audio_percent of the
 // separated audio's duration (5 x), clamped to [minimum, maximum]; this is a
-// latency bound below the 30 s model-call watchdog, not a model deadline.
+// latency bound inside the model-call watchdog's time, not a model deadline.
 // Expiry cancels only the separator; the turn keeps its unresolved records.
+// The two bounds here serve a caller that states none, a test or a probe: a
+// session states its own as it opens (bound_separation), which a worker takes
+// from its limits table (separation_min_ms, separation_max_ms).
 struct SeparationBudget {
   static constexpr uint32_t default_audio_percent=500;
   static constexpr std::chrono::milliseconds default_minimum{4000},default_maximum{25000};
@@ -36,6 +39,7 @@ class SeparatingRecognizer final:public aii::voice::Recognizer {
       SeparationBudget budget={});
   std::string execution_info() const override;
   void open() override;
+  void bound_separation(uint32_t minimum_ms,uint32_t maximum_ms,uint32_t model_call_ms) override;
   void begin() override;
   std::string push(const float*,size_t) override;
   std::string finish() override;
@@ -54,7 +58,13 @@ class SeparatingRecognizer final:public aii::voice::Recognizer {
  private:
   std::unique_ptr<aii::voice::Recognizer> live_,source_;
   std::unique_ptr<SourceSeparator> separator_;
+  // What the budget was built with. Its two bounds are restated by each
+  // session that states them, and read by execution_info() from any thread.
   const SeparationBudget budget_;
+  std::atomic<int64_t> minimum_ms_,maximum_ms_;
+  SeparationBudget in_force() const {
+    return {budget_.audio_percent,std::chrono::milliseconds(minimum_ms_.load()),std::chrono::milliseconds(maximum_ms_.load())};
+  }
   std::atomic<bool> cancelled_{false};
   // Read concurrently by execution_info(); written only by the inference owner.
   std::array<std::atomic<uint64_t>,size_t(SeparationOutcome::count)> outcomes_{};

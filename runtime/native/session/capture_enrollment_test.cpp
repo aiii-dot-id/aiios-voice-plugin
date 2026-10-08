@@ -3,6 +3,7 @@
 #include "speaker_registry_store.h"
 #include "attribution.h"
 #include "../vendor/picosha2/picosha2.h"
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <filesystem>
@@ -50,6 +51,10 @@ struct Host {
   std::map<std::string,std::string> staged;
   std::vector<std::string> publications;
   std::string fail_publish,unsynced,lost_receipt,bad_read,denied_read,corrupt_readback;
+  // The host's storage does not answer in time (the carrier's HOST_STORAGE_NO_ANSWER): at a read, at a
+  // stage, or at the publish, where the file either was changed all the same or was not.
+  std::string late_read,late_stage,late_publish;
+  bool late_publish_lands=false;
   std::filesystem::path disk;
   unsigned reads=0;
   std::mutex gate_mutex;
@@ -86,7 +91,8 @@ struct Host {
     const auto* action=field(q,"action");
     if(!action){
       ++reads;
-      if(denied_read==key)error("read denied","FS_IO_FAILED");
+      if(late_read==key)error("no answer in time",kHostStorageNoAnswer);
+      else if(denied_read==key)error("read denied","FS_IO_FAILED");
       else if(!current)error("absent","FS_NOT_FOUND");
       else {
         const auto offset=integer(field(q,"offset"));check(offset<=current->size(),"out of bound read");
@@ -97,13 +103,19 @@ struct Host {
         if(flag(field(q,"digest")))put(v,"sha256",string(bad_read==key?std::string(64,'0'):hash(*current)));
         put(reply,"value",std::move(v));
       }
+    }else if(str(action)=="stage"&&late_stage==key){
+      error("no answer in time",kHostStorageNoAnswer);
     }else if(str(action)=="stage"){
       const auto chunk=decode_base64(str(field(q,"data_b64"),100000),65536);
       if(!flag(field(q,"append")))staged[key].clear();staged[key]+=chunk;
       auto v=object();put(v,"bytes",number(chunk.size()));put(v,"size",number(staged[key].size()));put(reply,"value",std::move(v));
     }else{
       check(str(action)=="publish","unknown action");publications.push_back(key);
-      if(faulted(fail_publish))error("generation changed","FS_GENERATION_MISMATCH");
+      if(late_publish==key) {
+        if(late_publish_lands)current=staged.at(key);
+        error("no answer in time",kHostStorageNoAnswer);
+      }
+      else if(faulted(fail_publish))error("generation changed","FS_GENERATION_MISMATCH");
       else {
         if(current)check(str(field(q,"expected_sha256"),64)==hash(*current),"profile/capture CAS base ignored");
         else check(flag(field(q,"expected_absent")),"absent file not guarded");
@@ -282,6 +294,143 @@ void registry_management_does_not_discard_live_observation() {
   if(management_error)std::rethrow_exception(management_error);
   if(observation_error)std::rethrow_exception(observation_error);
   check(reason=="speaker_profile_pending","management collision discarded the live observation");
+}
+// WHAT LATE STORAGE LEFT UNDONE IS KEPT AND DONE WHEN STORAGE ANSWERS AGAIN.
+// The answer for a final cannot wait and says the storage was late; what the
+// speaker files would have learned from the utterance can. It used to be
+// lost with the answer.
+void late_storage_is_kept_and_finished(){
+  const auto p=policy();
+  const auto recording=[&](const char* name){
+    aii_voice_capture s{};s.samples=64000;
+    std::snprintf(s.embedding_binding,sizeof s.embedding_binding,"%s",p.policy.embedding_binding.c_str());
+    std::snprintf(s.pcm_sha256,sizeof s.pcm_sha256,"%s",hash(name).c_str());s.embedding[0]=1;return s;
+  };
+  const auto late=[](const std::function<void()>& f){
+    try{f();}catch(const StorageLate&){return true;}catch(const std::exception&){}
+    return false;
+  };
+  const auto profile_of_two=[&](Host& h){
+    if(!h.archives.count("speaker_registry")||!h.archives.at("speaker_registry"))return false;
+    const auto stored=read_registry(*h.archives.at("speaker_registry"),p);
+    return stored.profiles.speakers.size()==1&&stored.profiles.speakers[0].samples.size()==2;
+  };
+  auto first=recording("late-first"),second=recording("late-second"),third=recording("late-third");
+  {
+    // The reads were late: the recording is kept and observed again, behind the next answer.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    h.late_read="speaker_registry";
+    check(late([&]{(void)store.observe(&first,1,1);}),"a late read of the speaker files was not raised as late");
+    check(store.kept_observations()==1&&store.kept_publications()==0&&h.publications.empty(),"the recording whose reads were late was not kept");
+    char output[8192]{};size_t written=99;
+    auto beside=recording("late-beside");
+    check(SpeakerRegistryStore::callback_at(&store,1,9,&beside,output,sizeof output,&written)==AII_VOICE_BUSY&&written==0,
+      "the session was not told the storage was late");
+    check(store.kept_observations()==2,"a second late observation was not kept beside the first");
+    h.late_read.clear();
+    const auto answer=store.observe(&second,1,2);
+    check(str(field(answer.get(),"reason"))=="speaker_profile_pending"&&!field(answer.get(),"speaker_uuid"),
+      "the next utterance was not answered as its own observation");
+    check(store.kept_observations()==0&&h.publications.size()==1&&profile_of_two(h),
+      "the kept recording was not observed again when storage answered: the two recordings are a profile");
+    check(field(store.observe(&third,1,3).get(),"speaker_uuid"),"the voice is not known from the profile the kept recording completed");
+  }
+  {
+    // The publication was late at a stage: nothing was published. The change is kept, read back, and published.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    check(str(field(store.observe(&first,1,1).get(),"reason"))=="speaker_profile_pending","fixture: a first hearing is pending");
+    h.late_stage="speaker_registry";
+    check(late([&]{(void)store.observe(&second,1,2);}),"a late stage was not raised as late");
+    check(store.kept_publications()==1&&store.kept_observations()==0&&h.publications.empty(),"the change whose publication was late was not kept, or its recording was kept instead");
+    h.late_stage.clear();
+    // An observation with no recording writes nothing itself; behind it the kept change is published.
+    (void)store.observe(nullptr,1,4);
+    check(store.kept_publications()==0&&profile_of_two(h),"the kept change was not published when storage answered");
+    check(field(store.observe(&third,1,5).get(),"speaker_uuid"),"the voice is not known from the profile the kept change stored");
+  }
+  for(const bool landed:{true,false}) {
+    // Late at the publish itself: the outcome is unknown. Read back first: done if it had landed, published if it had not.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    (void)store.observe(&first,1,1);
+    h.late_publish="speaker_registry";h.late_publish_lands=landed;
+    check(late([&]{(void)store.observe(&second,1,2);}),"a late publish was not raised as late");
+    check(store.kept_publications()==1&&h.publications.size()==1,"the change whose outcome is unknown was not kept");
+    h.late_publish.clear();
+    (void)store.observe(nullptr,1,3);
+    check(store.kept_publications()==0&&profile_of_two(h),"the profile is not stored after the readback");
+    check(h.publications.size()==(landed?1u:2u),landed?"a publication that had landed was published again":"a publication that had not landed was not published");
+  }
+  {
+    // Still late when it is tried again: kept as it is, for the next time.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    (void)store.observe(&first,1,1);
+    h.late_stage="speaker_registry";
+    check(late([&]{(void)store.observe(&second,1,2);})&&store.kept_publications()==1,"fixture: a kept change");
+    (void)store.observe(nullptr,1,3); // its own storage is reads only, and they answer; the kept publication is late again
+    check(store.kept_publications()==1&&h.publications.empty(),"a change that was late a second time was dropped, or published blind");
+    h.late_stage.clear();
+    (void)store.observe(nullptr,1,4);
+    check(store.kept_publications()==0&&profile_of_two(h),"a change kept through two latenesses was not published at the third");
+  }
+  {
+    // The file has become something else since: a change made from the older file is not applied.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    (void)store.observe(&first,1,1);
+    h.late_stage="speaker_registry";
+    check(late([&]{(void)store.observe(&second,1,2);})&&store.kept_publications()==1,"fixture: a kept change");
+    h.late_stage.clear();
+    {
+      // Another owner of the file writes a profile of its own meanwhile.
+      Host other;SpeakerRegistryStore writer(other.bridge,p);
+      auto a=recording("other-a"),b=recording("other-b");a.embedding[0]=0;a.embedding[1]=1;b.embedding[0]=0;b.embedding[1]=1;
+      (void)writer.observe(&a,7,1);check(field(writer.observe(&b,7,2).get(),"speaker_uuid"),"fixture: the other writer's profile");
+      h.archives["speaker_registry"]=other.archives.at("speaker_registry");
+    }
+    const auto moved=*h.archives.at("speaker_registry");
+    (void)store.observe(nullptr,1,3);
+    check(store.kept_publications()==0&&h.publications.empty()&&*h.archives.at("speaker_registry")==moved,
+      "a change made from an older file was published over the file as it now is");
+  }
+  {
+    // A confirmed change by the operator that was late is refused, and never done later here.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    (void)store.observe(&first,1,1);
+    const auto uuid=str(field(store.observe(&second,1,2).get(),"speaker_uuid"));
+    check(!uuid.empty()&&h.publications.size()==1,"fixture: a stored profile");
+    const auto before=*h.archives.at("speaker_registry");
+    const auto revision=read_registry(before,p).revision;
+    h.late_stage="speaker_registry";
+    check(late([&]{(void)store.forget(revision,uuid);}),"a confirmed change that was late was not refused as late");
+    check(store.kept_publications()==0,"an operator's confirmed change was kept to be done later");
+    h.late_stage.clear();
+    (void)store.observe(nullptr,1,3);
+    check(h.publications.size()==1&&*h.archives.at("speaker_registry")==before,"an operator's confirmed change was done later without them");
+  }
+  {
+    // What is kept is bounded: the oldest goes first.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    h.late_read="speaker_registry";
+    for(uint64_t i=1;i<=6;++i){auto r=recording(("bounded-"+std::to_string(i)).c_str());check(late([&]{(void)store.observe(&r,1,i);}),"fixture: late");}
+    check(store.kept_observations()==4,"more recordings were kept than the bound");
+  }
+  {
+    // Finishing what was kept changes nothing about the utterance being observed now: two tracks of one
+    // utterance still cannot both be given one speaker.
+    Host h;SpeakerRegistryStore store(h.bridge,p);
+    (void)store.observe(&first,1,1);
+    const auto uuid=str(field(store.observe(&second,1,2).get(),"speaker_uuid"));
+    check(!uuid.empty(),"fixture: a stored profile");
+    auto stray=recording("stray");stray.embedding[0]=0;stray.embedding[1]=1; // another voice, heard while storage was late
+    h.late_read="speaker_registry";
+    check(late([&]{(void)store.observe(&stray,1,3);})&&store.kept_observations()==1,"fixture: a kept recording");
+    h.late_read.clear();
+    const auto track=store.observe(&third,1,4);
+    check(str(field(track.get(),"speaker_uuid"))==uuid&&store.kept_observations()==0,"fixture: the first track is the known voice, and the kept recording was finished behind it");
+    auto fourth=recording("late-fourth");
+    const auto sibling=store.observe(&fourth,1,4);
+    check(!field(sibling.get(),"speaker_uuid")&&str(field(sibling.get(),"reason"))=="same_speaker_on_multiple_tracks",
+      "finishing a kept recording let a second track of the same utterance claim the same speaker");
+  }
 }
 void registry_contract(){
   Host host;const auto p=policy();SpeakerRegistryStore store(host.bridge,p);
@@ -605,7 +754,7 @@ void legacy_singleton_competition_contract() {
     "restart asserted or replaced a legacy singleton without corroboration");
   // Exercise the consumer used by the real worker, not only the producer.
   // A valid unresolved legacy match must not terminate the session.
-  Attributions attributions;attributions.begin("legacy-session");
+  Attributions attributions(15000);attributions.begin("legacy-session");
   const FinalKey final{"legacy-session","track-0",1,0,64000};
   attributions.add(1,final,0,true);
   const auto observation=attributions.resolve(1,final,clone(legacy_result.get()));
@@ -1005,7 +1154,7 @@ int main(int argc,char** argv){try{
   if(argc==6&&std::string(argv[1])=="--observation-panel")real_observation_panel(argv);
   else if(argc==3)process_step(argv[1],argv[2]);
   else{
-  check(argc==1,"unexpected arguments");inherited_label_clear_contract();enrolled_uuid_contract();legacy_singleton_competition_contract();joint_gallery_margin_contract();complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();earlier_model_contract();earlier_registry_contract();earlier_registry_failure_contract();registry_contract();registry_management_does_not_discard_live_observation();registry_policy_transition_contract();
+  check(argc==1,"unexpected arguments");inherited_label_clear_contract();enrolled_uuid_contract();legacy_singleton_competition_contract();joint_gallery_margin_contract();complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();earlier_model_contract();earlier_registry_contract();earlier_registry_failure_contract();late_storage_is_kept_and_finished();registry_contract();registry_management_does_not_discard_live_observation();registry_policy_transition_contract();
   std::cout<<"guided enrollment publication: closed-mic confirmation, profile-first durable readback, explicit restart reconciliation, no duplicated identity, cleanup uncertainty and fail-closed reads PASS\n";
   }
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

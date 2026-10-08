@@ -2,9 +2,10 @@
 pytest==8.3.5
 pytest-asyncio==0.26.0
 numpy==2.2.6
-# Recorded-speech qualification resamples the bound WAV; never shipped.
-scipy==1.15.3
-# Integrity/package helpers import these even for native runtime validation.
+# Recorded-speech qualification resamples the bound WAV; never shipped. The wheel of
+# 1.15.3 does not load its signal module on macOS 27; this one does.
+scipy==1.17.1
+# pytest's own dependency, pinned. No script here imports it since the Python packer went.
 packaging==25.0
 # Declarative consumer contract validation only; never a shipped dependency.
 jsonschema==4.23.0

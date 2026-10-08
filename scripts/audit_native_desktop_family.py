@@ -3,6 +3,8 @@
 Integrity and preserved checkpoint composition only: no signature, installed
 physical audio, multilingual, mobile or human-level qualification is implied.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import hashlib
 import json

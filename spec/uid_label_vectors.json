@@ -1,87 +1,105 @@
-[
-  {
-    "name": "ascii128",
-    "utf8_hex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
-    "accepted": true
-  },
-  {
-    "name": "ascii129",
-    "utf8_hex": "616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
-    "accepted": false
-  },
-  {
-    "name": "accent128",
-    "utf8_hex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9",
-    "accepted": true
-  },
-  {
-    "name": "accent129",
-    "utf8_hex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9",
-    "accepted": false
-  },
-  {
-    "name": "emoji128",
-    "utf8_hex": "f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6",
-    "accepted": true
-  },
-  {
-    "name": "emoji129",
-    "utf8_hex": "f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6",
-    "accepted": false
-  },
-  {
-    "name": "combining128",
-    "utf8_hex": "61cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc81",
-    "accepted": true
-  },
-  {
-    "name": "combining130",
-    "utf8_hex": "61cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc81",
-    "accepted": false
-  },
-  {
-    "name": "space",
-    "utf8_hex": "20",
-    "accepted": true
-  },
-  {
-    "name": "newline",
-    "utf8_hex": "610a62",
-    "accepted": false
-  },
-  {
-    "name": "nul",
-    "utf8_hex": "610062",
-    "accepted": false
-  },
-  {
-    "name": "empty",
-    "utf8_hex": "",
-    "accepted": false
-  },
-  {
-    "name": "overlong",
-    "utf8_hex": "c0af",
-    "accepted": false
-  },
-  {
-    "name": "surrogate",
-    "utf8_hex": "eda080",
-    "accepted": false
-  },
-  {
-    "name": "truncated",
-    "utf8_hex": "f09f8e",
-    "accepted": false
-  },
-  {
-    "name": "literal_escape",
-    "utf8_hex": "5c7530303030",
-    "accepted": true
-  },
-  {
-    "name": "ordinary_name",
-    "utf8_hex": "4a616d6573",
-    "accepted": true
-  }
-]
+{
+  "about": "A speaker's label as it may be given: the name an operator reads and confirms, in any script. The worker (runtime/native_uid/identity.cpp), the carrier (plugin/native/enrollment.go) and the input schemas of speaker.enroll and speaker.associate are held to this file. labels are whole labels as UTF-8 in hexadecimal, and whether speaker.enroll takes them as a label of 1 to 128 characters. refused_code_points is the Unicode general categories Cc, Cf, Zl and Zp, whole, as inclusive hexadecimal ranges in ascending order (Unicode 16.0.0; 15.0.0 and 17.0.0 list the same); it is the table of spec/correction_vectors.json. A label holds none of them, except one of joiners standing between two characters that are neither a space (spaces: category Zs) nor a joiner. A label already stored is read as it was stored; this is what a new one may be.",
+  "labels": [
+    {"name": "ascii128", "utf8_hex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161", "accepted": true},
+    {"name": "ascii129", "utf8_hex": "616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161", "accepted": false},
+    {"name": "accent128", "utf8_hex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9", "accepted": true},
+    {"name": "accent129", "utf8_hex": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9", "accepted": false},
+    {"name": "emoji128", "utf8_hex": "f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6", "accepted": true},
+    {"name": "emoji129", "utf8_hex": "f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6f09f8eb6", "accepted": false},
+    {"name": "combining128", "utf8_hex": "61cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc81", "accepted": true},
+    {"name": "combining130", "utf8_hex": "61cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc8161cc81", "accepted": false},
+    {"name": "space", "utf8_hex": "20", "accepted": true},
+    {"name": "newline", "utf8_hex": "610a62", "accepted": false},
+    {"name": "nul", "utf8_hex": "610062", "accepted": false},
+    {"name": "empty", "utf8_hex": "", "accepted": false},
+    {"name": "overlong", "utf8_hex": "c0af", "accepted": false},
+    {"name": "surrogate", "utf8_hex": "eda080", "accepted": false},
+    {"name": "truncated", "utf8_hex": "f09f8e", "accepted": false},
+    {"name": "literal_escape", "utf8_hex": "5c7530303030", "accepted": true},
+    {"name": "ordinary_name", "utf8_hex": "4a616d6573", "accepted": true},
+    {"name": "persian_word_with_non_joiner", "utf8_hex": "d985db8ce2808cd8aed988d8a7d987d985", "accepted": true},
+    {"name": "sinhala_word_with_joiner", "utf8_hex": "e0b781e0b78ae2808de0b6bbe0b793", "accepted": true},
+    {"name": "emoji_joined", "utf8_hex": "f09f91a9e2808df09f9a80", "accepted": true},
+    {"name": "emoji_joined_after_variation_selector", "utf8_hex": "f09f8fb3efb88fe2808df09f8c88", "accepted": true},
+    {"name": "emoji_joined_after_skin_tone", "utf8_hex": "f09f91a9f09f8fbde2808df09f9a80", "accepted": true},
+    {"name": "joiners_between_three_letters", "utf8_hex": "61e2808d62e2808c63", "accepted": true},
+    {"name": "joined_words_and_a_space", "utf8_hex": "61e2808d622063e2808c64", "accepted": true},
+    {"name": "arabic_word", "utf8_hex": "d8b3d984d8a7d985", "accepted": true},
+    {"name": "hebrew_word", "utf8_hex": "d7a9d79cd795d79d", "accepted": true},
+    {"name": "cjk_word", "utf8_hex": "e69db1e4baac", "accepted": true},
+    {"name": "no_break_space_inside", "utf8_hex": "61c2a062", "accepted": true},
+    {"name": "joiners128", "utf8_hex": "61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d6162", "accepted": true},
+    {"name": "joiners130", "utf8_hex": "61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d61e2808d6162", "accepted": false},
+    {"name": "delete", "utf8_hex": "617f62", "accepted": false},
+    {"name": "next_line_control", "utf8_hex": "61c28562", "accepted": false},
+    {"name": "line_separator", "utf8_hex": "61e280a862", "accepted": false},
+    {"name": "paragraph_separator", "utf8_hex": "61e280a962", "accepted": false},
+    {"name": "soft_hyphen", "utf8_hex": "61c2ad62", "accepted": false},
+    {"name": "arabic_letter_mark", "utf8_hex": "61d89c62", "accepted": false},
+    {"name": "zero_width_space", "utf8_hex": "61e2808b62", "accepted": false},
+    {"name": "left_to_right_mark", "utf8_hex": "61e2808e62", "accepted": false},
+    {"name": "right_to_left_mark_first", "utf8_hex": "e2808f6162", "accepted": false},
+    {"name": "left_to_right_embedding", "utf8_hex": "61e280aa62", "accepted": false},
+    {"name": "right_to_left_override", "utf8_hex": "e280ae6162", "accepted": false},
+    {"name": "pop_directional_formatting_last", "utf8_hex": "6162e280ac", "accepted": false},
+    {"name": "word_joiner", "utf8_hex": "61e281a062", "accepted": false},
+    {"name": "left_to_right_isolate", "utf8_hex": "61e281a662", "accepted": false},
+    {"name": "pop_directional_isolate", "utf8_hex": "61e281a962", "accepted": false},
+    {"name": "byte_order_mark_first", "utf8_hex": "efbbbf6162", "accepted": false},
+    {"name": "language_tag", "utf8_hex": "61f3a0808162", "accepted": false},
+    {"name": "tag_letters", "utf8_hex": "f09f8fb4f3a081a7f3a081a2f3a081bf", "accepted": false},
+    {"name": "joiner_alone", "utf8_hex": "e2808d", "accepted": false},
+    {"name": "joiner_first", "utf8_hex": "e2808d6162", "accepted": false},
+    {"name": "joiner_last", "utf8_hex": "6162e2808d", "accepted": false},
+    {"name": "non_joiner_first", "utf8_hex": "e2808c6162", "accepted": false},
+    {"name": "non_joiner_last", "utf8_hex": "6162e2808c", "accepted": false},
+    {"name": "joiner_doubled", "utf8_hex": "61e2808de2808d62", "accepted": false},
+    {"name": "joiner_then_non_joiner", "utf8_hex": "61e2808de2808c62", "accepted": false},
+    {"name": "joiner_after_space", "utf8_hex": "6120e2808d62", "accepted": false},
+    {"name": "joiner_before_space", "utf8_hex": "61e2808d2062", "accepted": false},
+    {"name": "non_joiner_after_no_break_space", "utf8_hex": "61c2a0e2808c62", "accepted": false},
+    {"name": "joiner_before_ideographic_space", "utf8_hex": "61e2808de3808062", "accepted": false},
+    {"name": "joiner_beside_a_refused_character", "utf8_hex": "61e2808be2808d62", "accepted": false},
+    {"name": "overlong_line_feed", "utf8_hex": "e0808a", "accepted": false},
+    {"name": "beyond_unicode", "utf8_hex": "f4908080", "accepted": false},
+    {"name": "lone_continuation", "utf8_hex": "6180", "accepted": false}
+  ],
+  "refused_code_points": [
+    {"first": "0000", "last": "001F", "category": "Cc"},
+    {"first": "007F", "last": "009F", "category": "Cc"},
+    {"first": "00AD", "last": "00AD", "category": "Cf"},
+    {"first": "0600", "last": "0605", "category": "Cf"},
+    {"first": "061C", "last": "061C", "category": "Cf"},
+    {"first": "06DD", "last": "06DD", "category": "Cf"},
+    {"first": "070F", "last": "070F", "category": "Cf"},
+    {"first": "0890", "last": "0891", "category": "Cf"},
+    {"first": "08E2", "last": "08E2", "category": "Cf"},
+    {"first": "180E", "last": "180E", "category": "Cf"},
+    {"first": "200B", "last": "200F", "category": "Cf"},
+    {"first": "2028", "last": "2028", "category": "Zl"},
+    {"first": "2029", "last": "2029", "category": "Zp"},
+    {"first": "202A", "last": "202E", "category": "Cf"},
+    {"first": "2060", "last": "2064", "category": "Cf"},
+    {"first": "2066", "last": "206F", "category": "Cf"},
+    {"first": "FEFF", "last": "FEFF", "category": "Cf"},
+    {"first": "FFF9", "last": "FFFB", "category": "Cf"},
+    {"first": "110BD", "last": "110BD", "category": "Cf"},
+    {"first": "110CD", "last": "110CD", "category": "Cf"},
+    {"first": "13430", "last": "1343F", "category": "Cf"},
+    {"first": "1BCA0", "last": "1BCA3", "category": "Cf"},
+    {"first": "1D173", "last": "1D17A", "category": "Cf"},
+    {"first": "E0001", "last": "E0001", "category": "Cf"},
+    {"first": "E0020", "last": "E007F", "category": "Cf"}
+  ],
+  "joiners": ["200C", "200D"],
+  "spaces": [
+    {"first": "0020", "last": "0020"},
+    {"first": "00A0", "last": "00A0"},
+    {"first": "1680", "last": "1680"},
+    {"first": "2000", "last": "200A"},
+    {"first": "202F", "last": "202F"},
+    {"first": "205F", "last": "205F"},
+    {"first": "3000", "last": "3000"}
+  ]
+}

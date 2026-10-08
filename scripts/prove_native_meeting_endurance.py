@@ -4,6 +4,8 @@ No microphone, AII OS browser, speaker authentication, or installed-product clai
 The engine is not asked to synthesize. Its zero capture limit must preserve
 recognition and speaker observations throughout the explicitly requested run.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import json
 import os

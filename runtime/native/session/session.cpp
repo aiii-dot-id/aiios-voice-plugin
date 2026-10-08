@@ -65,28 +65,49 @@ struct Session::Impl {
   std::deque<std::shared_ptr<Query>> queries;
   std::map<uint64_t,std::shared_ptr<Job>> jobs;
   std::shared_ptr<Job> current;
+  // The voice in force and the one asked for the next reply (session.h).
+  SpeechState speech;
+  std::optional<SpeechSettings> next_speech;
+  bool speech_pending=false;
+  std::chrono::steady_clock::time_point speech_deadline{};
   std::deque<SpeakerJob> speaker_jobs;
   bool speaker_busy=false;
   enum Model { VadWork, RecognitionWork, EndpointWork, SynthesisWork, SpeakerWork };
   using Clock=std::chrono::steady_clock;
   std::array<std::optional<Clock::time_point>,5> model_deadlines{};
+  uint64_t model_calls_ended=0;
 
   // Each model has one inference owner. Only the call itself holds a deadline;
   // status polling, unrelated model activity and queue waits cannot renew it.
-  template<class F> auto model_call(Model model,F f) -> decltype(f()) {
-    struct Lease {
-      Impl& owner;Model model;
-      ~Lease() {
-        {std::lock_guard<std::mutex> lock(owner.mutex);owner.model_deadlines[model].reset();}
-        owner.changed.notify_all();
+  // The watchdog's hold on one model call: taken with its deadline, given
+  // back when the call returns, or sooner by release() when the model's part
+  // of a longer call is over.
+  struct ModelLease {
+    Impl& owner;Model model;bool held=true;
+    ModelLease(Impl& o,Model m):owner(o),model(m) {
+      {
+        std::lock_guard<std::mutex> lock(owner.mutex);
+        owner.model_deadlines[model]=Clock::now()+std::chrono::milliseconds(owner.settings.model_call_timeout_ms);
       }
-    } lease{*this,model};
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      model_deadlines[model]=Clock::now()+std::chrono::milliseconds(settings.model_call_timeout_ms);
+      owner.changed.notify_all();
     }
-    changed.notify_all();
+    ModelLease(const ModelLease&)=delete;ModelLease& operator=(const ModelLease&)=delete;
+    void release() {
+      if(!held)return;
+      held=false;
+      {std::lock_guard<std::mutex> lock(owner.mutex);owner.model_deadlines[model].reset();++owner.model_calls_ended;}
+      owner.changed.notify_all();
+    }
+    ~ModelLease() {release();}
+  };
+  template<class F> auto model_call(Model model,F f) -> decltype(f()) {
+    ModelLease lease(*this,model);
     return f();
+  }
+  // What the session says when one of its three waits passes: the wait's own
+  // words, then its number and the member of the limits table that states it.
+  static std::string passed(const std::string& what,uint32_t milliseconds,const char* member) {
+    return what+": "+std::to_string(milliseconds)+" ms, the time the limits table gives it ("+member+")";
   }
   void model_watch_loop() {
     static constexpr const char* names[]={"VAD","recognition","endpoint","synthesis","speaker identification"};
@@ -99,7 +120,7 @@ struct Session::Impl {
       const auto deadline=*model_deadlines[earliest];
       if(Clock::now()<deadline){changed.wait_until(lock,deadline);continue;}
       // Claim the fault and fence output under the same lock as completion.
-      if(error.empty())error=std::string(names[earliest])+" model call exceeded progress deadline";
+      if(error.empty())error=passed(std::string(names[earliest])+" model call exceeded progress deadline",settings.model_call_timeout_ms,"model_call_ms");
       stopping=true;
       for(auto& item:jobs){item.second->fenced=true;item.second->audio.clear();item.second->queued=0;}
       queued_output=0;
@@ -114,7 +135,7 @@ struct Session::Impl {
       require(bool(model_deadlines[RecognitionWork]),"recognition progress outside inference");
       const auto now=Clock::now();
       if(now>=*model_deadlines[RecognitionWork])
-        throw std::runtime_error("recognition model call exceeded progress deadline");
+        throw std::runtime_error(passed("recognition model call exceeded progress deadline",settings.model_call_timeout_ms,"model_call_ms"));
       model_deadlines[RecognitionWork]=now+std::chrono::milliseconds(settings.model_call_timeout_ms);
     }
     changed.notify_all();
@@ -135,8 +156,16 @@ struct Session::Impl {
        input_limit(s.capture_limit_minutes ? capture_samples(s.capture_limit_minutes) : input_clock_max) {
     require(playback_reserve<=output_bound,"playback reserve exceeds bounded output queue");
     require(s.pause_ms>=320 && s.pause_ms<=5000,"pause must be 320..5000 ms");
-    require(s.input_tail_timeout_ms>=1 && s.input_tail_timeout_ms<=30000,"tail deadline must be 1..30000 ms");
-    require(s.model_call_timeout_ms>=1 && s.model_call_timeout_ms<=30000,"model deadline must be 1..30000 ms");
+    // A range of what may be stated, not a wait: each was held under 30
+    // seconds, which a table could not state past.
+    require(s.input_tail_timeout_ms>=1 && s.input_tail_timeout_ms<=session_wait_ceiling_ms,"tail deadline must be 1..600000 ms");
+    require(s.model_call_timeout_ms>=1 && s.model_call_timeout_ms<=session_wait_ceiling_ms,"model deadline must be 1..600000 ms");
+    require(s.output_take_timeout_ms>=1 && s.output_take_timeout_ms<=session_wait_ceiling_ms,"output deadline must be 1..600000 ms");
+    require(s.endpoint_decision_timeout_ms>=1 && s.endpoint_decision_timeout_ms<=session_wait_ceiling_ms,"endpoint decision wait must be 1..600000 ms");
+    require(s.endpoint_retire_timeout_ms>=1 && s.endpoint_retire_timeout_ms<=session_wait_ceiling_ms,"endpoint retirement wait must be 1..600000 ms");
+    require((!s.separation_minimum_ms && !s.separation_maximum_ms) ||
+            (s.separation_minimum_ms>=1 && s.separation_minimum_ms<=s.separation_maximum_ms && s.separation_maximum_ms<=session_wait_ceiling_ms),
+            "separation budget bounds must be 1..600000 ms, the minimum the lesser, or neither stated");
     require(std::isfinite(s.speech_threshold) && s.speech_threshold>0 && s.speech_threshold<1,
             "speech threshold must be finite and inside (0,1)");
     require(speech_language(s.speech.tts_language),"unsupported speaking language");
@@ -144,7 +173,12 @@ struct Session::Impl {
     require(std::isfinite(s.speech.temperature) && s.speech.temperature>=0 && s.speech.temperature<=1,"temperature must be finite and inside [0,1]");
     require(!s.speech.voice.empty() && s.speech.voice.size()<=64,"bounded preset name required");
     tts.configure(s.speech);
-    if(hearing) { hearing->recognizer.open(); hearing->endpoint.open(); }
+    speech.speech=s.speech;
+    if(hearing) {
+      if(s.separation_maximum_ms)
+        hearing->recognizer.bound_separation(s.separation_minimum_ms,s.separation_maximum_ms,s.model_call_timeout_ms);
+      hearing->recognizer.open(); hearing->endpoint.open();
+    }
     tts.open(); if(speaker) speaker->open();
     try {
       launch([this]{model_watch_loop();});
@@ -263,12 +297,12 @@ struct Session::Impl {
           resume_tail_clock_locked();
           if(cutoff_set && !backpressured_tail_count) {
             if(changed.wait_until(lock,tail_deadline)==std::cv_status::timeout && !finished && input.empty() && !backpressured_tail_count)
-              throw std::runtime_error("input tail missing at admitted cutoff");
+              throw std::runtime_error(passed("input tail missing at admitted cutoff",settings.input_tail_timeout_ms,"input_tail_ms"));
           } else changed.wait(lock);
         }
         resume_tail_clock_locked();
         if(cutoff_set && !finished && !backpressured_tail_count && std::chrono::steady_clock::now()>=tail_deadline)
-          throw std::runtime_error("input tail missing at admitted cutoff");
+          throw std::runtime_error(passed("input tail missing at admitted cutoff",settings.input_tail_timeout_ms,"input_tail_ms"));
         if(stopping) return;
         if(input.empty()) break;
         packet=std::move(input.front()); input.pop_front();
@@ -348,10 +382,23 @@ struct Session::Impl {
     using Gate=aii::endpoint::PauseGate;
     Gate gate([this](uint64_t id,std::vector<float> p){return query(id,std::move(p));},
               [this](const Gate::Event& e){
-      emit(Event{0,0,0,e.query_position,e.resolution_position,
+      // A verdict that did not come in time is said with the wait it had.
+      if(e.kind==Gate::Event::Kind::Late)
+        emit(Event{0,0,0,e.query_position,e.resolution_position,"pause_late",
+                   passed("endpoint verdict late, the turn ends by silence alone",settings.endpoint_decision_timeout_ms,"endpoint_decision_ms")});
+      else emit(Event{0,0,0,e.query_position,e.resolution_position,
                  e.kind==Gate::Event::Kind::Query?"pause_query":"pause_resolved",std::to_string(e.probability)});
     },endpoint_trace_owner);
     gate.configure_pause(settings.pause_ms);
+    gate.configure_waits(std::chrono::milliseconds(settings.endpoint_decision_timeout_ms),
+                         std::chrono::milliseconds(settings.endpoint_retire_timeout_ms));
+    // The gate says a query did not retire; which limit that was is this owner's to say.
+    const auto close_gate=[&] {
+      try { gate.close(); }
+      catch(const Gate::Unretired&) {
+        throw std::runtime_error(passed("semantic endpoint did not retire",settings.endpoint_retire_timeout_ms,"endpoint_retire_ms"));
+      }
+    };
     std::deque<Block> preroll, provisional;
     uint64_t position=0,valid_position=0,silence=0,turn=0,start=0;
     bool active=false, boundary=false;
@@ -493,7 +540,7 @@ struct Session::Impl {
             lock.unlock();
             for(const auto& b:provisional) push(b);
             const char* reason=settings.capture_limit_minutes && cutoff==input_limit ? "capture_limit" : "finish_input";
-            provisional.clear(); complete(reason); gate.close();
+            provisional.clear(); complete(reason); close_gate();
             lock.lock(); input_done=true;
             emit_locked(Event{0,0,0,received,recognized,"input_finished",reason});
             maybe_close_locked(); changed.notify_all(); break;
@@ -564,9 +611,25 @@ struct Session::Impl {
       }
       std::string result;
       try {
-        result=model_call(SpeakerWork,[&]{return job.final.track.empty()?speaker->identify(job.final.sequence,job.pcm):
-          speaker->identify_track_at(job.final.sequence,job.final.turn,job.pcm);});
+        // THE WATCHDOG COVERS THE MODEL'S PART ONLY. An identification is an
+        // inference and then, for an identifier with a registry, reads and
+        // publications through the host. The whole call used to sit inside
+        // the model's deadline: storage that was slow enough, each step
+        // still inside its own limit, ran the model's deadline out, and the
+        // watchdog's answer to that is to stop the session. The identifier
+        // now says when its inference
+        // is over; what follows is bounded by the storage's own limits.
+        ModelLease lease(*this,SpeakerWork);
+        struct Unhook {SpeakerIdentifier& s;~Unhook(){s.model_part_done=nullptr;}} unhook{*speaker};
+        speaker->model_part_done=[&lease]{lease.release();};
+        result=job.final.track.empty()?speaker->identify(job.final.sequence,job.pcm):
+          speaker->identify_track_at(job.final.sequence,job.final.turn,job.pcm);
         if(result.empty() || result.size()>8192) throw std::runtime_error("invalid speaker observation size");
+      } catch(const SpeakerStorageLate&) {
+        // COULD NOT READ IN TIME IS NOT COULD NOT READ. The storage was late;
+        // nothing says the enrollment is missing or unreadable, and the next
+        // final reads again.
+        result="{\"outcome\":\"unavailable\",\"reason\":\"speaker_storage_late\",\"used_for_permissions\":false}";
       } catch(const EnrollmentUnavailable&) {
         result="{\"outcome\":\"unavailable\",\"reason\":\"enrollment_unavailable\",\"used_for_permissions\":false}";
       } catch(const std::exception&) {
@@ -587,6 +650,30 @@ struct Session::Impl {
       changed.notify_all();
     }
   }
+  // Before a reply's first segment, on the synthesis owner: wait, bounded,
+  // for settings the composition is still asking its host for, then take
+  // the voice asked for. A change the backend refuses here (a preset removed
+  // since it was checked) leaves the voice in force and says why; it never
+  // costs the reply. Nothing is taken inside a reply.
+  void take_speech(const Job& job) {
+    std::optional<SpeechSettings> next;
+    {
+      std::unique_lock<std::mutex> lock(mutex);
+      if(speech_pending)
+        changed.wait_until(lock,speech_deadline,[&]{return !speech_pending || stopping || job.cancelled;});
+      speech_pending=false;
+      if(stopping || job.cancelled) return;
+      next.swap(next_speech);
+    }
+    if(!next) return;
+    std::string refused;
+    try { model_call(SynthesisWork,[&]{tts.configure(*next);}); }
+    catch(const std::invalid_argument& e) { refused=e.what(); }
+    std::lock_guard<std::mutex> lock(mutex);
+    if(refused.empty()) speech.speech=*next;
+    speech.refused=refused.substr(0,255);
+    ++speech.revision;
+  }
   void synthesis_loop() {
     for(;;) {
       std::shared_ptr<Job> job;
@@ -597,6 +684,7 @@ struct Session::Impl {
         job=current;
       }
       try {
+        take_speech(*job);
         for(const auto& part:job->segments) {
           { std::lock_guard<std::mutex> lock(mutex); if(stopping || job->cancelled) break; }
           const auto text=strip_text(part); if(text.empty())continue;
@@ -618,8 +706,11 @@ struct Session::Impl {
             if(job->generated>24000ULL*30*60)throw std::runtime_error("synthesis reply exceeded 30 minutes");
             if(stopping || job->cancelled)break;
             if(job->fenced)continue; // playback stopped; compute remains independently owned
-            if(!changed.wait_for(lock,std::chrono::seconds(15),[&]{return stopping || job->fenced || queued_output+pcm.size()<=output_bound;}))
-              throw std::runtime_error("audio consumer did not release bounded output within 15 seconds");
+            // The consumer is the composition that writes this audio on: its
+            // own write of it has a limit, which its table holds inside this
+            // one, so a stalled write is said by the one that sees it.
+            if(!changed.wait_for(lock,std::chrono::milliseconds(settings.output_take_timeout_ms),[&]{return stopping || job->fenced || queued_output+pcm.size()<=output_bound;}))
+              throw std::runtime_error(passed("audio consumer did not release bounded output",settings.output_take_timeout_ms,"output_take_ms"));
             if(stopping || job->cancelled) break;
             if(job->fenced)continue;
             job->audio.push_back(Audio{job->id,job->generated-pcm.size(),false,std::move(pcm)});
@@ -729,6 +820,36 @@ void Session::synthesize(uint64_t generation,const std::string& text) {
   p_->jobs.emplace(generation,j); p_->current=j; p_->last_generation=generation;
   p_->changed.notify_all();
 }
+void Session::speech_pending(uint32_t wait_milliseconds) {
+  require(wait_milliseconds>=1 && wait_milliseconds<=2000,"the wait for speech settings must be 1..2000 ms");
+  std::lock_guard<std::mutex> lock(p_->mutex);
+  p_->speech_pending=true;
+  p_->speech_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(wait_milliseconds);
+}
+void Session::speech(const SpeechSettings& next) {
+  require(std::isfinite(next.temperature) && next.temperature>=0 && next.temperature<=1,"temperature must be finite and inside [0,1]");
+  require(!next.voice.empty() && next.voice.size()<=64,"bounded preset name required");
+  {
+    std::lock_guard<std::mutex> lock(p_->mutex);
+    require(next.tts_language==p_->speech.speech.tts_language && next.stt_language==p_->speech.speech.stt_language,
+            "a language is changed by a new session, not within one");
+  }
+  p_->tts.check(next); // no model is touched; a reply may be being spoken
+  std::lock_guard<std::mutex> lock(p_->mutex);
+  const auto& now=p_->next_speech?*p_->next_speech:p_->speech.speech;
+  if(next.voice!=now.voice || next.temperature!=now.temperature || next.seed!=now.seed) p_->next_speech=next;
+  p_->speech_pending=false;
+  p_->changed.notify_all();
+}
+void Session::speech_unchanged() {
+  std::lock_guard<std::mutex> lock(p_->mutex);
+  p_->speech_pending=false;
+  p_->changed.notify_all();
+}
+SpeechState Session::speech_state() const {
+  std::lock_guard<std::mutex> lock(p_->mutex);
+  return p_->speech;
+}
 void Session::interrupt(uint64_t generation) { p_->interrupt(generation); }
 void Session::stop_playback(uint64_t generation) { p_->interrupt(generation,0,false); }
 void Session::cancel_synthesis(uint64_t generation) { p_->interrupt(generation,0,true); }
@@ -819,6 +940,8 @@ Snapshot Session::status() const {
     s.draining|=!j.receipt;
   }
   if(p_->current) {s.synthesis_segments=p_->current->segment_count;s.completed_segments=p_->current->completed_segments;}
+  for(const auto& deadline:p_->model_deadlines)s.model_call_in_flight|=bool(deadline);
+  s.model_calls_ended=p_->model_calls_ended;
   s.generation=p_->last_generation; return s;
 }
 GenerationSnapshot Session::generation(uint64_t id) const {

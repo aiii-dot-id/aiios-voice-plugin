@@ -154,11 +154,74 @@ void SpeakerRegistryStore::publish(const std::string& base,const aii::uid::Regis
   require(flag(field(receipt.get(),"durable"))&&flag(field(receipt.get(),"readback_verified")),
       "speaker registry durability unresolved");
 }
+void SpeakerRegistryStore::publish_observed(const std::string& base,const aii::uid::RegistryChange& change,bool absent) {
+  if(base==change.document)return;
+  try { publish(base,change,absent); }
+  catch(const StorageLate&) {
+    // Late at a stage (nothing was published) or at the publish (the outcome
+    // is unknown): either way the next attempt reads the file back first.
+    if(unpublished_.size()==kept_limit)unpublished_.pop_front();
+    unpublished_.push_back({base,change,absent});publication_kept_=true;
+    throw;
+  }
+}
+size_t SpeakerRegistryStore::kept_observations() { std::lock_guard<std::mutex> lock(mutex_);return unobserved_.size(); }
+size_t SpeakerRegistryStore::kept_publications() { std::lock_guard<std::mutex> lock(mutex_);return unpublished_.size(); }
+void SpeakerRegistryStore::finish_kept() {
+  // Publications first: an observation kept behind one may be about the same voice.
+  while(!unpublished_.empty()) {
+    const auto kept=unpublished_.front();
+    try {
+      bool absent=false;const auto raw=read(absent);
+      if(raw!=kept.change.document && raw==kept.base && absent==kept.absent)publish(kept.base,kept.change,kept.absent);
+      // Already what the change made it: it had landed. Something else: the
+      // file moved on, and a change made from an older file is not applied.
+    } catch(const StorageLate&) { return; } // still late: kept as it is
+      catch(const std::exception&) {}       // refused for another reason: it cannot be applied later either
+    unpublished_.pop_front();
+  }
+  while(!unobserved_.empty()) {
+    const auto kept=unobserved_.front();unobserved_.pop_front();
+    // The observation it was, and nothing of the utterance being observed
+    // now: which tracks of that one have been given a speaker stays as it is.
+    const auto track_session=track_session_,track_utterance=track_utterance_;
+    const auto assigned=assigned_tracks_;
+    const auto restore=[&]{track_session_=track_session;track_utterance_=track_utterance;assigned_tracks_=assigned;};
+    publication_kept_=false;
+    try { (void)observe_now(&kept.evidence,kept.session,kept.utterance); }
+    catch(const StorageLate&) {
+      restore();
+      if(!publication_kept_)unobserved_.push_front(kept); // its reads were late again
+      return;
+    }
+    catch(const std::exception&) {} // refused: observing it again would be refused again
+    restore();
+  }
+}
 Json SpeakerRegistryStore::observe(const aii_voice_capture* evidence,uint64_t session,uint64_t utterance) {
   // Identification runs on the speaker worker, not the control reader. A
   // concurrent management call must not permanently discard this utterance.
   // Management still uses try_to_lock so it cannot queue behind inference.
   std::unique_lock<std::mutex> lock(mutex_);
+  publication_kept_=false;
+  Json out=null();
+  try { out=observe_now(evidence,session,utterance); }
+  catch(const StorageLate&) {
+    // The answer for this final is that storage was late (the caller says
+    // so). What the files would have learned from it is kept: the change,
+    // where one had been made (publish_observed), else the recording.
+    if(evidence && !publication_kept_) {
+      if(unobserved_.size()==kept_limit)unobserved_.pop_front();
+      unobserved_.push_back({session,utterance,*evidence});
+    }
+    throw;
+  }
+  // This observation's own storage answered: what an earlier lateness left
+  // undone is done now, behind the answer and never ahead of it.
+  finish_kept();
+  return out;
+}
+Json SpeakerRegistryStore::observe_now(const aii_voice_capture* evidence,uint64_t session,uint64_t utterance) {
   admissions_.expire();
   if(session!=track_session_ || utterance!=track_utterance_) {
     track_session_=session;track_utterance_=utterance;assigned_tracks_.clear();
@@ -194,7 +257,7 @@ Json SpeakerRegistryStore::observe(const aii_voice_capture* evidence,uint64_t se
       require(now.policy.fingerprint==enrolled->policy.fingerprint &&
         aii::uid::write_snapshot(now,enrollment_policy)==aii::uid::write_snapshot(*enrolled,enrollment_policy),
         "enrollment changed during UUID binding");
-      publish(raw,change,absent);
+      publish_observed(raw,change,absent);
       if(session)assigned_tracks_.insert(change.uuid);
       auto out=enrolled_result(enrolled_match,*sample,evidence->samples,enrolled->policy);
       put(out,"speaker_uuid",string(change.uuid));put(out,"registry_revision",string(std::to_string(change.revision)));
@@ -264,7 +327,7 @@ Json SpeakerRegistryStore::observe(const aii_voice_capture* evidence,uint64_t se
     require(canonical(now)==canonical(*enrolled),
       "enrollment changed during anonymous profile admission");
   }
-  publish(raw,change,absent);
+  publish_observed(raw,change,absent);
   auto out=object();put(out,"outcome",string("unavailable"));put(out,"reason",string(change.reason));
   if(!change.uuid.empty()) {
     if(session&&!assigned_tracks_.insert(change.uuid).second)return unresolved("same_speaker_on_multiple_tracks");
@@ -368,6 +431,7 @@ aii_voice_result SpeakerRegistryStore::callback_at(void* context,uint64_t sessio
     *written=0;const auto result=encode(static_cast<SpeakerRegistryStore*>(context)->observe(evidence,session,utterance));
     if(result.empty()||result.size()>=capacity)return AII_VOICE_CAPACITY;
     std::memcpy(output,result.data(),result.size());*written=result.size();return AII_VOICE_OK;
-  }catch(...){return AII_VOICE_FAILED;}
+  }catch(const StorageLate&){return AII_VOICE_BUSY;} // late, not unavailable (c_api.h)
+  catch(...){return AII_VOICE_FAILED;}
 }
 }

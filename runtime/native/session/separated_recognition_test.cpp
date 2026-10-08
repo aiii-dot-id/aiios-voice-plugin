@@ -314,6 +314,7 @@ struct Composition {
   Separator* separator=new Separator;Source* source=new Source;
   aii::multitalker::SeparatingRecognizer asr;
   V v;E e;T t;Tracks tracks;std::vector<Event> events;uint32_t model_call_ms=30000;
+  uint32_t separation_min_ms=0,separation_max_ms=0; // zero: the session states none
   explicit Composition(aii::multitalker::SeparationBudget budget={})
       :asr(std::make_unique<Mixed>(),std::unique_ptr<Source>(source),std::unique_ptr<Separator>(separator),budget) {}
   // Speech is any block whose first sample exceeds VAD's 0.1. Every sample is
@@ -322,6 +323,7 @@ struct Composition {
     for(const auto& span:spans)for(size_t i=0;i<span.first*512;++i)
       pcm.push_back((span.second?.3f:0.f)+float(pcm.size()%1000)/16384);
     Settings settings{pause_ms,.5f};settings.model_call_timeout_ms=model_call_ms;
+    settings.separation_minimum_ms=separation_min_ms;settings.separation_maximum_ms=separation_max_ms;
     Session session(asr,v,e,t,settings,&tracks);
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
     for(size_t at=0;at<pcm.size();at+=512)for(;;) {
@@ -422,9 +424,29 @@ void separation_budget() {
   check(info.find(R"("budget_expired":1)")!=std::string::npos&&info.find(R"("replaced":1)")!=std::string::npos&&
     info.find(R"("last_separation_outcome":"replaced")")!=std::string::npos,"separation outcomes not reported");
 }
+// THE BUDGET'S BOUNDS ARE THE SESSION'S TO STATE. A recognizer built with the
+// header's four to twenty-five seconds runs by what the session that opens it
+// states: 300 ms here, inside a model call of two seconds. A separator that
+// never answers is given up 300 ms on, where the header's four seconds would
+// have left the watchdog to fail the session at two; the composition's report
+// shows the stated bounds; and a budget that does not end inside the session's
+// model call is refused as the session opens.
+void separation_budget_is_the_sessions() {
+  Composition c;c.separator->stalls=1;c.model_call_ms=2000;c.separation_min_ms=c.separation_max_ms=300;
+  std::vector<float> pcm;c.run({{15,false},{78,true},{100,false},{78,true}},320,pcm);
+  const auto info=c.asr.execution_info();
+  check(info.find(R"("separation_budget":{"audio_percent":500,"minimum_ms":300,"maximum_ms":300})")!=std::string::npos,
+    "the stated bounds are not the composition's");
+  check(info.find(R"("budget_expired":1)")!=std::string::npos&&info.find(R"("replaced":1)")!=std::string::npos,
+    "a separation was not given up at the stated budget");
+  Composition refused;refused.model_call_ms=2000;refused.separation_min_ms=300;refused.separation_max_ms=2000;
+  std::string said;std::vector<float> none;
+  try{refused.run({{15,false}},320,none);}catch(const std::exception& e){said=e.what();}
+  check(said=="source separation budget must be stated and end inside a model call's time","a budget as long as a model call was taken");
+}
 int main(){try{run(false);run(true);capture_origin(false);capture_origin(true);capture_across_pause();
   for(size_t silence:{15u,62u,94u,313u})leading_silence(silence,78);
-  leading_silence(94,172);separated_turns();separation_failure(false);separation_failure(true);separation_budget();selected_uid_queue(false);selected_uid_queue(true);for(int i=1;i<=6;++i)selected_region_contract(i);
+  leading_silence(94,172);separated_turns();separation_failure(false);separation_failure(true);separation_budget();separation_budget_is_the_sessions();selected_uid_queue(false);selected_uid_queue(true);for(int i=1;i<=6;++i)selected_region_contract(i);
   for(const auto* reason:{"speaker_overlap_without_isolated_evidence","speaker_activity_uncertain",
       "speaker_evidence_too_short","speaker_evidence_expired","speaker_activity_unavailable",
       "speaker_track_coverage_unverified","speaker_separation_failed"})

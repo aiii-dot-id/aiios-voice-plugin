@@ -216,6 +216,23 @@ int main(int argc,char** argv){try{
   refuses([&]{admitted(empty,p,1,a,sample('1',0));});
   refuses([&]{associate_speaker(first.document,p,1,b,"Label","");});
   refuses([&]{associate_speaker(first.document,p,1,a,"bad\nlabel","");});
+  // A label is judged as it is given: nothing an operator cannot read as
+  // written (a right-to-left override, a zero width space, a line separator,
+  // a control above ASCII, a joiner that joins nothing or stands by a space).
+  for(const char* unread:{"a\xe2\x80\xae" "b","a\xe2\x80\x8b" "b","a\xe2\x80\xa8" "b","a\xc2\x85" "b","ab\xe2\x80\x8d","a \xe2\x80\x8d" "b"})
+    refuses([&]{associate_speaker(first.document,p,1,a,unread,"");});
+  // A joiner inside a word is spelling.
+  check(read_registry(associate_speaker(first.document,p,1,a,"a\xe2\x80\x8c" "b","").document,p).buckets[0].associations.back().label=="a\xe2\x80\x8c" "b",
+    "a non-joiner inside a word was refused");
+  {
+    // A label stored before this rule is read as it was stored, and its speaker can be named again.
+    auto stored=read_registry(first.document,p);
+    stored.buckets[0].associations.push_back({2,"a\xe2\x80\xae" "b",""});stored.revision=2;
+    const auto kept=write_registry(stored,p);
+    check(read_registry(kept,p).buckets[0].associations.back().label=="a\xe2\x80\xae" "b","a stored label became unreadable");
+    check(read_registry(associate_speaker(kept,p,2,a,"Chosen label","").document,p).buckets[0].associations.size()==2,
+      "a speaker with an old label cannot be named again");
+  }
   refuses([&]{admitted(first.document,p,1,c,sample('z',0));});
   auto invalid=sample('3',0);invalid.embedding[0]=NAN;refuses([&]{admitted(first.document,p,1,c,invalid);});
   invalid=sample('3',0);invalid.embedding[0]=2;refuses([&]{admitted(first.document,p,1,c,invalid);});

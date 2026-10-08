@@ -18,18 +18,33 @@ import (
 )
 
 type workerMessage struct {
-	ID       uint64          `json:"id"`
-	Result   json.RawMessage `json:"result"`
-	Error    string          `json:"error"`
-	Event    json.RawMessage `json:"event"`
-	Ready    json.RawMessage `json:"ready"`
-	Settings *settingsQuery  `json:"settings_request,omitempty"`
-	Snapshot *snapshotQuery  `json:"snapshot_request,omitempty"`
+	ID       uint64           `json:"id"`
+	Result   json.RawMessage  `json:"result"`
+	Error    string           `json:"error"`
+	Event    json.RawMessage  `json:"event"`
+	Ready    json.RawMessage  `json:"ready"`
+	Settings *settingsRequest `json:"settings_request,omitempty"`
+	Snapshot *snapshotQuery   `json:"snapshot_request,omitempty"`
 }
 
 // Fixtures retain an explicitly unprofiled lane; every real worker must prove
 // loaded models and measured inference before the SDK advertises readiness.
-func readinessReport(raw json.RawMessage) (*aiiosdk.ReadyReport, error) {
+//
+// ONLY WHAT THE NATIVE WORKER REPORTS IS READINESS. It reports four models,
+// or five with speaker identification, under one of three backends, each
+// with its own accelerator word (native_c_api.cpp, warm). The carrier also
+// took three models under "metal", "cuda" or "directml" with no backend
+// named: the Python engines' reports, which no released engine writes and
+// whose profile the carrier now refuses at start (runtime.go). A worker that
+// was handed a recognizer from outside says "external_recognizer", which is
+// no measured placement, and is refused as it always was.
+//
+// warmProbe is the table's warm_probe_ms: what the warm inference of a
+// worker's start may take. The worker's library is handed the same member and
+// fails a start past it, so no report of a longer one comes from it; one that
+// does come is refused here with both numbers. It was 40 seconds typed here
+// and typed again in the library.
+func readinessReport(raw json.RawMessage, warmProbe time.Duration) (*aiiosdk.ReadyReport, error) {
 	var body struct {
 		Identity struct {
 			Backend string `json:"backend"`
@@ -50,11 +65,13 @@ func readinessReport(raw json.RawMessage) (*aiiosdk.ReadyReport, error) {
 		return nil, errors.New("worker omitted measured readiness")
 	}
 	r := body.Readiness
-	nativeCPU := r.Accelerator == "cpu" && body.Identity.Backend == "native-common-cpu"
-	nativeVulkan := (r.Models == 4 || r.Models == 5) && r.Accelerator == "cpu_vulkan" && body.Identity.Backend == "native-common-vulkan"
-	nativeMetal := (r.Models == 4 || r.Models == 5) && r.Accelerator == "cpu_metal" && body.Identity.Backend == "native-common-metal"
-	if r.Models < 3 || r.Models > 5 || (r.Models == 5 && !nativeCPU && !nativeVulkan && !nativeMetal) || r.ProbeMS <= 0 || r.ProbeMS > 40000 || (!nativeCPU && !nativeVulkan && !nativeMetal && r.Accelerator != "metal" && r.Accelerator != "cuda" && r.Accelerator != "directml") {
+	native := map[string]string{"native-common-cpu": "cpu", "native-common-vulkan": "cpu_vulkan", "native-common-metal": "cpu_metal"}
+	accelerator, known := native[body.Identity.Backend]
+	if !known || r.Accelerator != accelerator || (r.Models != 4 && r.Models != 5) || r.ProbeMS <= 0 {
 		return nil, errors.New("invalid worker warm-inference readiness")
+	}
+	if int64(r.ProbeMS) > warmProbe.Milliseconds() {
+		return nil, fmt.Errorf("invalid worker warm-inference readiness: the warm inference took %d ms, more than the %d ms the limits table gives it (warm_probe_ms)", r.ProbeMS, warmProbe.Milliseconds())
 	}
 	return &aiiosdk.ReadyReport{ModelsLoaded: r.Models, Accelerator: r.Accelerator, ProbeMS: r.ProbeMS}, nil
 }
@@ -80,10 +97,18 @@ type carrier struct {
 	dropped   int    // worker events read but never queued; guarded by mu
 	unread    error  // why the reader stopped before the worker's output ended; guarded by mu
 	id        uint64 // owned by SDK admission goroutine
-	settings  chan settingsQuery
+	settings  settingsLane
 	snapshots chan snapshotQuery
 	ctx       context.Context
 	cancel    context.CancelFunc
+	// limits is every time limit this carrier waits by (limits.go); set
+	// once before the worker starts and read-only after.
+	limits limits
+	// began is the instant the wait for the worker's readiness is counted
+	// from (awaitReady), and workerStarted how long after it the worker was
+	// started.
+	began         time.Time
+	workerStarted time.Duration
 
 	// vocabulary serializes confirmed changes to the correction list.
 	vocabulary sync.Mutex
@@ -108,8 +133,14 @@ func newCarrier(in io.WriteCloser, out io.ReadCloser, interrupt func()) *carrier
 		pending: make(map[uint64]*privatePending), stop: make(chan struct{}), interrupt: interrupt,
 		events: make(chan json.RawMessage, 64), ready: make(chan workerMessage, 1),
 		fault: make(chan error, 1), done: make(chan error, 1), readDone: make(chan struct{}),
-		settings: make(chan settingsQuery, 1), snapshots: make(chan snapshotQuery, 1), ctx: ctx, cancel: cancel}
+		settings: settingsLane{wake: make(chan struct{}, 1)}, snapshots: make(chan snapshotQuery, 1), ctx: ctx, cancel: cancel, limits: defaultLimits,
+		began: time.Now()} // run moves it back to this process's own start
 }
+
+// say writes to this carrier's log, now, a sentence that is also in the
+// reason it ends for: whoever stops waiting for this process before it has
+// ended has still been told.
+func say(err error) { fmt.Fprintln(os.Stderr, "aii-voice-t3:", err) }
 
 func (c *carrier) fail(err error) {
 	c.failOnce.Do(func() {
@@ -144,6 +175,12 @@ func (c *carrier) fail(err error) {
 func (c *carrier) startPrivate() {
 	c.startSettings()
 	c.startSnapshots()
+	c.startLane()
+}
+
+// startLane starts the one ordered writer to the worker and the one owner of
+// the controls' deadlines.
+func (c *carrier) startLane() {
 	c.workers.Add(2)
 	go func() {
 		defer c.workers.Done()
@@ -224,6 +261,10 @@ func (c *carrier) read() {
 				c.fail(errors.New("invalid private snapshot request"))
 				continue
 			}
+			if !m.Snapshot.workers() {
+				c.fail(errors.New("private snapshot request for a resource that is not the worker's"))
+				continue
+			}
 			select {
 			case c.snapshots <- *m.Snapshot: // its server answers nothing once the lane has failed
 			default:
@@ -234,11 +275,7 @@ func (c *carrier) read() {
 				c.fail(errors.New("invalid private settings request"))
 				continue
 			}
-			select {
-			case c.settings <- *m.Settings: // likewise
-			default:
-				c.fail(errors.New("private settings capacity exhausted"))
-			}
+			c.settings.offer(*m.Settings) // the newest is the one the worker waits for
 		} else if len(m.Ready) != 0 {
 			// A worker announces readiness once. The channel's capacity of one
 			// refused a second announcement only while the first still sat in
@@ -336,10 +373,16 @@ func (c *carrier) forward(settle <-chan struct{}, emit func(*aiiosdk.Session, an
 // and flushed, proven written, or the carrier says its delivery is unproven.
 // Handed on is not written, and this fault path exits the process: frames
 // the writer still held would be lost. A stalled host never holds retirement
-// open, and nothing undelivered is dropped in silence.
-func (c *carrier) handoff(settle chan<- struct{}, forwarded <-chan error, flush func(*aiiosdk.Session, context.Context) error, bound time.Duration) (err error) {
+// open, and nothing undelivered is dropped in silence. The bound is the
+// table's lane_flush_ms, and when it is what passed the carrier says so with
+// the number.
+func (c *carrier) handoff(settle chan<- struct{}, forwarded <-chan error, flush func(*aiiosdk.Session, context.Context) error) (err error) {
+	bound := c.limits.LaneFlush
 	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
+	late := func(what string) error {
+		return fmt.Errorf("worker event delivery unproven: %s in %d ms, the time the limits table gives the host's lane at this carrier's end (lane_flush_ms)", what, bound.Milliseconds())
+	}
 	defer func() { // a flush proves only what it was given
 		c.mu.Lock()
 		dropped, unread := c.dropped, c.unread
@@ -355,7 +398,7 @@ func (c *carrier) handoff(settle chan<- struct{}, forwarded <-chan error, flush 
 	case <-c.readDone: // the reader retired: the queue can only shrink, and unread says whether it saw the end
 	case <-ctx.Done():
 		close(settle)
-		return errors.New("worker event delivery unproven: the worker's output was still being read")
+		return late("the worker's output was still being read")
 	}
 	close(settle)
 	select {
@@ -364,7 +407,7 @@ func (c *carrier) handoff(settle chan<- struct{}, forwarded <-chan error, flush 
 			return fmt.Errorf("worker events not delivered: %w", err)
 		}
 	case <-ctx.Done():
-		return errors.New("worker event delivery unproven: the host lane did not take them in time")
+		return late("the host lane did not take them")
 	}
 	c.mu.Lock()
 	s := c.session
@@ -373,6 +416,9 @@ func (c *carrier) handoff(settle chan<- struct{}, forwarded <-chan error, flush 
 		return nil // no lane was ever used: nothing was handed on
 	}
 	if err := flush(s, ctx); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %w", late("the host lane did not confirm them written"), err)
+		}
 		return fmt.Errorf("worker event delivery unproven: %w", err)
 	}
 	return nil
@@ -419,10 +465,12 @@ func (c *carrier) enqueue(s *aiiosdk.Session, op string, args aiiosdk.Object, an
 	c.id++
 	id := c.id
 	request := privateRequest{ID: id, Operation: op, Arguments: append(json.RawMessage(nil), args...)}
-	p := &privatePending{answer: answer, deadline: time.Now().Add(2 * time.Second)}
-	if enrollmentOperation(op) || op == "recording.record" {
-		p.deadline = time.Now().Add(45 * time.Second)
-	} // bounded private publication and readback; never blocks admission
+	// A control that uses the private files is given what its storage may
+	// take by the table, computed and not typed beside it: at this limit
+	// the carrier fails itself, which it must never do over an operation
+	// that is still inside its own limits (it was 45 s beside reads of 10 s
+	// each).
+	p := &privatePending{answer: answer, deadline: time.Now().Add(c.controlWait(op))}
 	c.pending[id] = p // register BEFORE enqueue: reply may precede our return
 	select {
 	case c.writes <- request:
@@ -433,13 +481,88 @@ func (c *carrier) enqueue(s *aiiosdk.Session, op string, args aiiosdk.Object, an
 	}
 }
 
+// controlWait is how long the worker has to answer one control: what its
+// storage may take for an operation that uses the private files; for a
+// playback report, which the worker holds until the audio write it counts
+// has ended, that write's time and a control's (limits.playbackReport); and
+// the table's control limit for every other. Bounded private publication
+// and readback; never blocks admission.
+func (c *carrier) controlWait(op string) time.Duration {
+	if enrollmentOperation(op) || op == "recording.record" {
+		return c.limits.storageOperation()
+	}
+	if op == aiiosdk.OpSessionPlaybackReport {
+		return c.limits.playbackReport()
+	}
+	return c.limits.Control
+}
+
+// awaitReady waits for the worker to report ready until the table's ready_ms
+// have passed since c.began. In run that is startupBegan: the instant this
+// process initialised its package variables, before main and before anything
+// of the runtime is read, and the instant its start-up records count from.
+// The check of the runtime's files and the worker's spawn are therefore
+// inside the wait, as they are inside the allowance the host gives a start;
+// counted from the worker's start, as it was, a slow check came on top and
+// the host's allowance could pass first. Where that time is already spent
+// when the worker has been started there is nothing left to wait, and the
+// sentence is said at once. A worker that fails first, and a fault of the
+// lane, end the wait with their own error.
+//
+// The sentence is written to the log as the wait passes, and not only as the
+// reason this carrier ended: ending a worker that is still loading its
+// models takes worker_exit_ms and a kill (endWorker), and what its set
+// declared to the host for this start may pass in that time.
+func (c *carrier) awaitReady() (*aiiosdk.ReadyReport, error) {
+	if left := c.limits.Ready - time.Since(c.began); left > 0 {
+		select {
+		case m := <-c.ready:
+			return readinessReport(m.Ready, c.limits.WarmProbe)
+		case e := <-c.fault:
+			return nil, e
+		case <-time.After(left):
+		}
+	}
+	startupPhase("worker-readiness-not-reported", 0, 0)
+	err := fmt.Errorf("the worker did not report ready within %d ms of this carrier's start, the time the limits table gives it (ready_ms); the worker was started %d ms into it", c.limits.Ready.Milliseconds(), c.workerStarted.Milliseconds())
+	say(err)
+	return nil, err
+}
+
+// endWorker waits for the worker's process to end, its input closed. The
+// worker ends by itself inside retire_ms and says why when it cannot; this
+// carrier waits worker_exit_ms, which the table holds to that and the margin
+// at least (limits.valid), and only then kills the worker's processes and
+// waits worker_reap_ms to see them gone. A limit that passes is said with its
+// member and its number, at once and in the reason this carrier ended: at
+// once, because on Windows the kill ends the job this carrier is in, and
+// nothing it would have said after that is written.
+func (c *carrier) endWorker(kill func() error) error {
+	select {
+	case e := <-c.done:
+		return e
+	case <-time.After(c.limits.WorkerExit):
+	}
+	late := fmt.Errorf("worker required forced cleanup: it did not exit in %d ms after its input was closed, the time the limits table gives it (worker_exit_ms)", c.limits.WorkerExit.Milliseconds())
+	say(late)
+	killErr := kill()
+	select {
+	case e := <-c.done:
+		return errors.Join(killErr, e, late)
+	case <-time.After(c.limits.WorkerReap):
+	}
+	unseen := fmt.Errorf("worker reap unproven: its exit was not seen in %d ms after it was killed, the time the limits table gives that (worker_reap_ms)", c.limits.WorkerReap.Milliseconds())
+	say(unseen)
+	return errors.Join(killErr, late, unseen)
+}
+
 func run() (err error) {
 	p := declaredPlugin()
 	if os.Getenv(aiiosdk.DescribeEnv) == "1" {
 		return p.ServeSession(nil)
 	}
 	startupPhase("carrier-enter", 0, 0)
-	cmd, err := workerCommand(os.Args[1:])
+	cmd, waits, err := workerCommand(os.Args[1:])
 	if err != nil {
 		return err
 	}
@@ -459,11 +582,12 @@ func run() (err error) {
 		return err
 	}
 	c := newCarrier(in, out, func() { _ = os.Stdin.Close() })
-	c.cmd = cmd
+	c.cmd, c.limits, c.began = cmd, waits, startupBegan
 	startupPhase("worker-start-begin", 0, 0)
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	c.workerStarted = time.Since(c.began)
 	startupPhase("worker-started-awaiting-warm-inference", 0, 0)
 	// Drain stdout before Wait closes the pipe: the last terminal/admission
 	// bytes are not allowed to disappear because the worker exited promptly.
@@ -473,18 +597,7 @@ func run() (err error) {
 		c.fail(io.EOF)
 		c.workers.Wait() // private pipe close wakes writer; watchdog observes stop
 		_ = in.Close()
-		select {
-		case e := <-c.done:
-			err = errors.Join(err, e)
-		case <-time.After(5 * time.Second):
-			killErr := killWorker(cmd)
-			select {
-			case e := <-c.done:
-				err = errors.Join(err, killErr, e, errors.New("worker required forced cleanup"))
-			case <-time.After(5 * time.Second):
-				err = errors.Join(err, killErr, errors.New("worker reap unproven"))
-			}
-		}
+		err = errors.Join(err, c.endWorker(func() error { return killWorker(cmd) }))
 		if settleEvents != nil {
 			err = errors.Join(err, settleEvents()) // the worker has said all it will
 		}
@@ -492,19 +605,11 @@ func run() (err error) {
 	}()
 	c.startPrivate()
 	go c.read()
-	var ready *aiiosdk.ReadyReport
-	select {
-	case m := <-c.ready:
-		ready, err = readinessReport(m.Ready)
-		if err != nil {
-			return err
-		}
-		startupPhase("worker-readiness-validated", 0, 0)
-	case e := <-c.fault:
-		return e
-	case <-time.After(180 * time.Second):
-		return errors.New("worker startup timeout")
+	ready, err := c.awaitReady()
+	if err != nil {
+		return err
 	}
+	startupPhase("worker-readiness-validated", 0, 0)
 	settle, forwarded := make(chan struct{}), make(chan error, 1)
 	go func() { forwarded <- c.forward(settle, (*aiiosdk.Session).Emit) }()
 	// The SDK's Unix reader owns a separate poller-registered wrapper around fd 0.
@@ -524,7 +629,7 @@ func run() (err error) {
 		close(settle) // the lane has ended: the SDK takes no further event
 	case err = <-c.fault:
 		settleEvents = func() error {
-			return c.handoff(settle, forwarded, (*aiiosdk.Session).Flush, 2*time.Second)
+			return c.handoff(settle, forwarded, (*aiiosdk.Session).Flush)
 		}
 	}
 	select {

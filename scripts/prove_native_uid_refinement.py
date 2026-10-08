@@ -4,6 +4,8 @@ Private output contains recorded transcripts. No installed identity is accessed.
 First two recordings establish one profile; both later recordings must match it.
 This is a regression gate, not unknown-speaker or general accuracy qualification.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse,json,os,time
 from pathlib import Path
 from types import SimpleNamespace

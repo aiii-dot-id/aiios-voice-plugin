@@ -1,3 +1,6 @@
+// Derived from ggml, src/ggml-vulkan/ggml-vulkan.cpp. MIT License,
+// Copyright (c) 2023-2026 The ggml authors. The licence text, the changes
+// made here and what is not recorded are in the NOTICE beside this file.
 #include "ggml-vulkan.h"
 #include "scalar_tile_warp.h"
 #include "aii_matmul_f32_spv.h"

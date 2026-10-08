@@ -28,7 +28,8 @@ using Clock = std::chrono::steady_clock;
   } while (0)
 struct Pair {
   std::unique_ptr<Pipe> in, out;
-  Pair() {
+  // The limit of these tests' own writer; the pipe has none of its own.
+  explicit Pair(std::chrono::milliseconds write_limit = std::chrono::seconds(3)) {
     int a, b;
 #ifdef _WIN32
     HANDLE read, write;
@@ -43,7 +44,7 @@ struct Pair {
 #endif
     REQUIRE(a >= 0 && b >= 0);
     in = std::make_unique<Pipe>(a);
-    out = std::make_unique<Pipe>(b, true);
+    out = std::make_unique<Pipe>(b, write_limit, "test_write_ms");
   }
 };
 #ifdef _WIN32
@@ -120,27 +121,61 @@ int main(int argc, char **argv) {
 #endif
   const bool deadline = argc == 2 && std::strcmp(argv[1], "deadline") == 0;
   if (deadline) {
-    Pair p;
-    std::atomic<bool> stop{false}, done{false}, failed{false};
-    std::vector<char> huge(16 * 1024 * 1024, 'x');
-    const auto begin = Clock::now();
-    std::thread writer([&] {
-      try {
-        p.out->write(huge.data(), huge.size(), stop);
-      } catch (...) {
-        failed = true;
+    // A write that cannot move expires at the limit its owner gave the pipe,
+    // whatever that is. It was three seconds typed in the pipe.
+    for (const auto limit : {std::chrono::milliseconds(1500), std::chrono::milliseconds(400)}) {
+      Pair p(limit);
+      std::atomic<bool> stop{false}, done{false}, failed{false};
+      std::vector<char> huge(16 * 1024 * 1024, 'x');
+      std::string said;
+      const auto begin = Clock::now();
+      std::thread writer([&] {
+        try {
+          p.out->write(huge.data(), huge.size(), stop);
+        } catch (const std::exception &e) {
+          said = e.what();
+          failed = true;
+        }
+        done = true;
+      });
+      while (!done) {
+        if (p.out->expired())
+          p.out->interrupt();
+        if (Clock::now() - begin > limit + std::chrono::seconds(1))
+          std::_Exit(73);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
-      done = true;
-    });
-    while (!done) {
-      if (p.out->expired())
-        p.out->interrupt();
-      if (Clock::now() - begin > std::chrono::seconds(5))
-        std::_Exit(73);
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      writer.join();
+      REQUIRE(failed && Clock::now() - begin >= limit);
+      // What is said of it names the limit and the member its owner gave,
+      // and is the one sentence whichever thread sees the deadline: the
+      // owner reads it from the pipe, and where the writing thread is the one
+      // that sees it (not inside a blocked write) that thread says the same.
+      const std::string expiry = "native pipe write expired: " + std::to_string(limit.count()) +
+                                 " ms, the time the limits table gives it (test_write_ms)";
+      REQUIRE(p.out->expiry() == expiry);
+#ifndef _WIN32
+      REQUIRE(said == expiry);
+#endif
     }
-    writer.join();
-    REQUIRE(failed && Clock::now() - begin >= std::chrono::seconds(3));
+    // A limit that is not named is refused, before the descriptor is touched:
+    // an expiry could not say which limit it was.
+    for (const char *name : {"", static_cast<const char *>(nullptr)}) {
+      bool unnamed = false;
+      try {
+        Pipe out(-1, std::chrono::milliseconds(400), name);
+      } catch (const std::exception &e) {
+        unnamed = std::string(e.what()) == "a pipe's write limit must be named";
+      }
+      REQUIRE(unnamed);
+    }
+    bool refused = false;
+    try {
+      (void)Pair(std::chrono::milliseconds(0));
+    } catch (const std::exception &) {
+      refused = true;
+    }
+    REQUIRE(refused);
     std::puts(
         "full pipe: deadline faults and retires its actual write owner PASS");
     return 0;
@@ -210,10 +245,12 @@ int main(int argc, char **argv) {
     Pair p;
     std::atomic<bool> stop{false}, done{false}, failed{false};
     std::vector<char> huge(16 * 1024 * 1024, 'x');
+    std::string said;
     std::thread writer([&] {
       try {
         p.out->write(huge.data(), huge.size(), stop);
-      } catch (...) {
+      } catch (const std::exception &e) {
+        said = e.what();
         failed = true;
       }
       done = true;
@@ -230,6 +267,10 @@ int main(int argc, char **argv) {
     }
     writer.join();
     REQUIRE(failed);
+#ifndef _WIN32
+    // Stopped by its owner inside its time: not an expiry, and no limit is named.
+    REQUIRE(said == "native pipe write interrupted");
+#endif
   }
   std::puts("native pipe: exact EOF, truncation, blocked read/write "
             "interruption PASS");

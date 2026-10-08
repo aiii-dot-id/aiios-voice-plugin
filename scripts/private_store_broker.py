@@ -1,4 +1,6 @@
 """A disk-backed stand-in for the host's private-file operations, for proofs and tests."""
+from scripts._assertions import require_assertions
+require_assertions()
 import base64, hashlib, json, queue, re, struct, threading
 from pathlib import Path
 

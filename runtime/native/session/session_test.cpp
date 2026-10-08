@@ -359,12 +359,38 @@ void future_finish_and_drain() {
   }
   check(finals==1 && finished==1,"future Finish minted duplicate or absent evidence");
 }
+// AUDIO NOBODY TAKES FAILS THE SESSION AT ITS STATED TIME, AND SAYS THE TIME.
+// The synthesizer waits for room in the bounded output queue for the
+// session's output_take_timeout_ms: 150 ms here, where it was fifteen seconds
+// whatever its caller stated.
+void untaken_output_fails_at_its_stated_time() {
+  Asr a;Detector v;End e;Tts t;t.chunk_count=200;
+  Settings settings{768,.5f};settings.output_take_timeout_ms=150;
+  Session s(a,v,e,t,settings);
+  const auto began=std::chrono::steady_clock::now();
+  s.synthesize(1,"Flood.");
+  until([&]{return !s.status().error.empty();});
+  const auto after=std::chrono::steady_clock::now()-began;
+  check(s.status().error=="audio consumer did not release bounded output: 150 ms, the time the limits table gives it (output_take_ms)",
+        "audio that was never taken failed the session with another reason");
+  check(after>=150ms && after<4s,"audio that was never taken did not fail the session at its stated time");
+  s.close(true);check(s.wait_closed(2000),"a session whose output was never taken did not retire");
+  // A wait out of range is refused at the open, as the other two are.
+  for(const uint32_t bad:{0u,600001u}) {
+    auto wrong=settings;wrong.output_take_timeout_ms=bad;
+    refuses([&]{Session refused(a,v,e,t,wrong);},"an output wait out of range was taken");
+    wrong=settings;wrong.model_call_timeout_ms=bad;
+    refuses([&]{Session refused(a,v,e,t,wrong);},"a model call's time out of range was taken");
+    wrong=settings;wrong.input_tail_timeout_ms=bad;
+    refuses([&]{Session refused(a,v,e,t,wrong);},"an input tail's time out of range was taken");
+  }
+}
 void missing_tail_is_failure() {
   Asr a;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,20});
   s.finish_input(2048);std::vector<float> pcm(512,.5f);check(s.feed(0,pcm.data(),pcm.size()),"tail prefix refused");
   s.finish_input(2048);s.close(false);
   check(s.wait_closed(1000),"missing tail did not retire within its deadline");
-  check(s.status().error=="input tail missing at admitted cutoff" && !s.status().input_finished,"missing tail was silently completed");
+  check(s.status().error=="input tail missing at admitted cutoff: 20 ms, the time the limits table gives it (input_tail_ms)" && !s.status().input_finished,"missing tail was silently completed, or did not say the time it was given");
   Event event;while(s.event(event))check(event.kind!="input_finished","missing tail minted successful input completion");
 }
 void admitted_cutoff_repeats_after_the_drain_released() {
@@ -404,7 +430,7 @@ void backpressured_tail_is_not_missing(bool deliver) {
     check(a.samples==32769 && s.status().input_finished,"backpressure lost a tail sample");
   } else {
     s.close(false);check(s.wait_closed(1000),"missing tail deadline never resumed");
-    check(s.status().error=="input tail missing at admitted cutoff" && !s.status().input_finished,
+    check(s.status().error=="input tail missing at admitted cutoff: 200 ms, the time the limits table gives it (input_tail_ms)" && !s.status().input_finished,
           "capacity return waived a truly missing tail");
   }
 }
@@ -450,6 +476,7 @@ int main() {
     cancel_after_stop_and_receipt();std::cout<<"stop/receipt cannot disable later compute cancellation PASS\n";
     future_finish_and_drain();std::cout<<"future Finish and early drain preserve exact tail and opening words PASS\n";
     missing_tail_is_failure();std::cout<<"missing input tail faults rather than completing PASS\n";
+    untaken_output_fails_at_its_stated_time();std::cout<<"untaken output fails at its stated time and says it PASS\n";
     backpressured_tail_is_not_missing(true);backpressured_tail_is_not_missing(false);
     abort_bypasses_backpressured_tail();
     admitted_cutoff_repeats_after_the_drain_released();

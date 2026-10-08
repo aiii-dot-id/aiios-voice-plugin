@@ -18,8 +18,16 @@ input handles are not substitutes for absence. Omitted input format is invalid.
 The accepted result explicitly returns `audio.input: null` and the actual
 24 kHz mono output format. Duplex confirms its actual 16 kHz mono input too.
 The host-owned `spec/audio/vectors/session_topology.json` is copied byte for
-byte to `tests/vectors/session_topology.json`. The worker executes its twelve
-requests and confirms both real audio admissions. Control-only is expressly a
+byte to `tests/vectors/session_topology.json`; a test holds the copy to the
+file hash recorded beside it, and the pinned kit's copy to the same bytes.
+The worker executes its
+seventeen requests and confirms both real audio admissions. The opens the
+host itself builds, whole (its handles, its mode, the number of the input
+stream it declares in `audio.input.stream`, the page's capture report), are
+kept in `tests/vectors/host_session_opens.json` with where each comes from,
+and the worker is opened with each of them, alone and one after another in
+one engine process: frames on the declared stream are heard, frames on
+another are dropped and counted. Control-only is expressly a
 kit proof-engine mode; the native speech engine refuses it (no audio binding).
 
 Output-only status reports `input.state: absent`,
@@ -84,33 +92,47 @@ change recognition, attribution thresholds, replay bounds or model inputs.
 
 The semantic endpoint's 250 ms value is a scheduling target, not a fatal
 model-execution deadline. At the audio-clock commitment boundary the recognizer
-waits at most one second from query submission for a verdict. A later verdict
-is retained as stale evidence; the turn falls back to the configured acoustic
-silence maximum without guessing a semantic score or faulting the session.
-At most one unresolved stale query prevents new semantic submissions until it
-retires. Shutdown gives that owner a separate bounded retirement window;
-actual model errors still fault.
+waits for a verdict the time its session states, counted from query
+submission: the limits table's `endpoint_decision_ms`, one second by default.
+A later verdict is retained as stale evidence; the turn falls back to the
+configured acoustic silence maximum without guessing a semantic score or
+faulting the session, and the session numbers a `pause_late` event that says
+which limit passed. At most one unresolved stale query prevents new semantic
+submissions until it retires. Shutdown gives that owner a separate bounded
+retirement window, the table's `endpoint_retire_ms`, which a carrier holds
+over a model call's time so that the watchdog speaks first; actual model
+errors still fault.
 
 ## Settings and release inputs
 
 The compiled `OperatorSettings` declaration owns defaults, labels and scopes.
 `--describe-settings` requires neither models nor audio endpoints. The packaged
 declaration is copied from the built runtime and must agree across platforms;
-the assembler does not invent scopes. Settings are pinned for a session.
+the assembler does not invent scopes. Hearing settings and the speaking
+language are pinned for a session. The speaking voice, its variation and its
+seed are taken at the first segment of each reply and never change inside one.
 
-Current profile: ten TTS presets, English recognition and synthesis, adjustable
+Current profile: twenty TTS presets, English recognition, synthesis in seven
+languages (see [speaking languages](SPEAKING_LANGUAGES.md)), adjustable
 pause and VAD threshold, sampling temperature/seed, and listening duration.
 `capture_limit_minutes` defaults to 30; zero disables duration stopping. It
 counts audio including silence, not disconnected wall time. A finite limit
 finalizes at its engine-clock boundary and reports why. This is separate from
 VAD pause and the bounded guided enrollment recording.
 
-Release assembly requires `--inputs` containing exactly macos/linux/windows.
-Each row names `stage`, `stage_sha256` (the result.json digest), `carrier`,
-`carrier_sha256`, and the complete reviewed `accelerator` object. No historical
+Release assembly requires `--inputs` holding exactly `variants` and
+`variant_preference`: a map from each component set's variant ID to its
+binding, and every ID once in the release owner's order. All three desktops
+must be represented, and a desktop may have several sets. Each binding names
+`platform`, `arch`, `stage`, `stage_sha256` (the result.json digest), `carrier`,
+`carrier_sha256`, and the complete reviewed `accelerator` object; a GPU set
+also names its `reservation_evidence`
+(see [component selection](RUNTIME_COMPONENT_SELECTION.md)). No historical
 stage is a fallback. Startup allowances and memory reservations are explicit
-per-platform inputs; measured peaks are separate evidence. Host minimum is
-bound to the actual capability-bearing release, not a convenient version label.
+per-set inputs; measured peaks are separate evidence. Host minimum is
+bound to the actual capability-bearing release, not a convenient version label;
+assembly refuses one below 0.1.14, the first host that reads the extent every
+runtime declares.
 The host's 20260918-1843 exchange records the operator's release ruling: no 0.1.8
 release has gone out; this is 0.1.8. Its optional-input transport is on host
 `5b3363f0`; application routing follows the mode-owner landing. Qualify the

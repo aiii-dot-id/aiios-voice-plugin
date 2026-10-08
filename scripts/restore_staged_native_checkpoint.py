@@ -4,6 +4,8 @@ The stage is a byte-bound parent, not evidence that the rebuilt candidate ran.
 This is useful when release cleanup retained the exact stage and models but not
 the original temporary checkpoint directory. No previous carrier is inherited.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 
 import argparse
 import hashlib
@@ -13,7 +15,7 @@ import shutil
 import tarfile
 
 from scripts.native_checkpoint_binding import sha, verify_checkpoint
-from scripts.package_native_runtime import bind_carrier, safe_relative, verify
+from scripts.package_native_runtime import bind_carrier, refuse_interpreter_profile, safe_relative, verify
 from scripts.stage_qualified_runtime import check_archive
 
 
@@ -30,6 +32,9 @@ def restore(stage_path, archive, models_root, out, go):
     if hashlib.sha256(manifest).hexdigest() != stage['runtime_manifest_sha256']:
         raise ValueError('staged runtime manifest differs')
     profile = json.loads(manifest)
+    # Nothing is restored from a stage that describes an interpreter: refused
+    # here, before the archive is unpacked and before the output exists.
+    refuse_interpreter_profile(profile)
     rows = dict(profile['files'])
     for name in rows:
         safe_relative(name)

@@ -1,0 +1,57 @@
+Windows overrides of the speech synthesis engine
+
+The Windows build of the speaking library (CMakeLists.txt, one directory up)
+compiles these two files in place of the engine's own files of the same name
+(MIMI_OVERRIDE, ACOUSTIC_OVERRIDE). Both are modified copies of files of
+audio.cpp, Copyright 2026 ShugoAI LLC, at revision
+3174e6b26f11a0e39b4f150961dce98f43ba860d, under the Apache License, Version
+2.0, which is this repository's licence too (LICENSE, at its root). Each file
+in this directory is listed here with where it comes from and what was changed.
+The engine source the build is given (ENGINE_SOURCE) is not that revision's as
+it stands either: five more files of it are replaced, and ../../engine_overrides
+holds them with their own notice.
+
+acoustic_model.cpp
+  Upstream: src/models/pocket_tts/acoustic_model.cpp
+  Upstream sha256: 5cd1e0e79ecbd7a1bea21704946f0237c72fc3c2f021c1c4228024c96c4d46f6
+  As built sha256: 81a40bcb089e48dac1dc351f3ca189da282e6907270e390053a9af08a84481eb
+  Changed: one line. In AcousticModel::next_stream_step, a stream that
+  reaches its frame limit before a natural end is an error ("PocketTTS
+  reached its frame limit before natural EOS and tail completion") where
+  upstream returns no step. Nothing else differs.
+  This file does NOT carry the change capacity-history.patch makes to the
+  same upstream file (the cached step runtime reused only at exactly the
+  prompt capacity asked for): the reuse condition here is upstream's.
+
+mimi_decoder.cpp
+  Upstream: src/models/pocket_tts/mimi_decoder.cpp
+  Upstream sha256: d64e4f1b6102d5d3a35f32eed6805ea6a232b055cfca253108e0520723fc5fc4
+  As built sha256: 29d6fd43febf041ea8e6c202e29d5920680e05b9125c658af28c5960a3347fc5
+  Changed: in three places. In two, where the decoder builds a streaming
+  transformer block, four lines became three: the block is configured through
+  graph_common::pocket_transformer_config (../../engine_overrides/NOTICE), with
+  the values upstream writes there. In the third, seventeen lines are added:
+  after the decoder's transformer graph is built, the key and value tensors,
+  the prefix keys and values and the attention mask are marked as outputs of
+  the graph, so that the graph allocator does not reuse their storage at their
+  last use inside the graph: the owner copies them into the next step's state
+  after the graph has run. Nothing else differs.
+  The engine directory of the Windows build holds this file without the
+  seventeen lines (sha256
+  23070cfd247aedea5e1c84e157d0918266402ae3a320788f01e0092e85c7329a); the
+  engine's own library is compiled from that directory, and the speaking
+  library compiles the file here.
+
+"As built" is the file the Windows runtimes' library was built from, which
+is the file here without its four-line head comment; a test holds the two
+to that. "Upstream" is the file of the upstream repository at the revision
+above. Before this notice these two files were in no repository: they were
+taken from the directory that library was built in.
+
+Three more files of audio.cpp are adapted for the same library, for reading
+models by handle inside a contained Windows process: src/framework/assets/
+resource_bundle.cpp, src/framework/io/filesystem.cpp and src/framework/io/
+safetensors.cpp, with a header paths.h written for this project. They are
+not kept as files: scripts/stage_native_path_shim.py derives them from the
+three unmodified upstream files (tests/fixtures/native_path_upstream, with
+their licence), and its regression reverses the derivation byte for byte.

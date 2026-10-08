@@ -298,7 +298,8 @@ func TestFinalWorkerEventsReachHealthyHostBeforeTeardown(t *testing.T) {
 		return nil
 	}
 	handed := make(chan error, 1)
-	go func() { handed <- c.handoff(settle, forwarded, flush, 5*time.Second) }()
+	c.limits.LaneFlush = 5 * time.Second
+	go func() { handed <- c.handoff(settle, forwarded, flush) }()
 	<-settle         // teardown has begun
 	close(h.release) // and the host takes events again
 	select {
@@ -321,31 +322,41 @@ func TestFinalWorkerEventsReachHealthyHostBeforeTeardown(t *testing.T) {
 
 // Handed on is not written. When the flush cannot prove the final events
 // written — the lane ended, or the writer did not catch up within the bound —
-// teardown still ends within that bound and says delivery is unproven.
+// teardown still ends within that bound and says delivery is unproven. The
+// bound is the table's lane_flush_ms, stated here as 100 ms: where it is what
+// passed, the carrier says so with the number and the member.
+const laneFlushPassed = "in 100 ms, the time the limits table gives the host's lane at this carrier's end (lane_flush_ms)"
+
 func TestFinalWorkerEventsUnflushedAreUnproven(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		flush func(*aiiosdk.Session, context.Context) error
 		cause error
+		said  string
 	}{
 		{"lane ended", func(*aiiosdk.Session, context.Context) error {
 			return fmt.Errorf("%w: 32 accepted frame(s) not confirmed written", aiiosdk.ErrLaneEnded)
-		}, aiiosdk.ErrLaneEnded},
+		}, aiiosdk.ErrLaneEnded, ""},
 		{"writer behind", func(_ *aiiosdk.Session, ctx context.Context) error {
 			<-ctx.Done()
 			return fmt.Errorf("aiiosdk: flush outcome unknown: %w", ctx.Err())
-		}, context.DeadlineExceeded},
+		}, context.DeadlineExceeded, "the host lane did not confirm them written " + laneFlushPassed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, h, settle, forwarded, _ := finalEventsRead(t)
 			close(h.release)
+			c.limits.LaneFlush = 100 * time.Millisecond
 			began := time.Now()
-			err := c.handoff(settle, forwarded, tc.flush, 100*time.Millisecond)
-			if elapsed := time.Since(began); elapsed > 5*time.Second {
-				t.Fatalf("teardown waited %v for an unconfirmed flush", elapsed)
+			err := c.handoff(settle, forwarded, tc.flush)
+			if elapsed := time.Since(began); elapsed > 1500*time.Millisecond {
+				t.Fatalf("teardown waited %v for an unconfirmed flush under a table that gives the lane 100 ms", elapsed)
 			}
 			if err == nil || !strings.Contains(err.Error(), "unproven") || !errors.Is(err, tc.cause) {
 				t.Fatalf("unconfirmed final events were not reported: %v", err)
+			}
+			// A lane that ended is not a lane that was late: only the second names the limit.
+			if strings.Contains(err.Error(), "lane_flush_ms") != (tc.said != "") || !strings.Contains(err.Error(), tc.said) {
+				t.Fatalf("the report does not say what passed, or says a limit passed that did not: %v", err)
 			}
 		})
 	}
@@ -353,16 +364,17 @@ func TestFinalWorkerEventsUnflushedAreUnproven(t *testing.T) {
 
 func TestFinalWorkerEventsToStalledHostEndBoundedAndUnproven(t *testing.T) {
 	c, _, settle, forwarded, _ := finalEventsRead(t)
+	c.limits.LaneFlush = 100 * time.Millisecond
 	began := time.Now()
 	err := c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error {
 		t.Error("flushed events that were never handed on")
 		return nil
-	}, 100*time.Millisecond)
-	if elapsed := time.Since(began); elapsed > 5*time.Second {
-		t.Fatalf("teardown waited %v on a stalled host", elapsed)
+	})
+	if elapsed := time.Since(began); elapsed > 1500*time.Millisecond {
+		t.Fatalf("teardown waited %v on a stalled host under a table that gives the lane 100 ms", elapsed)
 	}
-	if err == nil || !strings.Contains(err.Error(), "unproven") {
-		t.Fatalf("undelivered final events were not reported: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "worker event delivery unproven: the host lane did not take them "+laneFlushPassed) {
+		t.Fatalf("undelivered final events were not reported with the limit that passed: %v", err)
 	}
 }
 
@@ -399,8 +411,9 @@ func TestDroppedFinalEventsMakeDeliveryUnproven(t *testing.T) {
 	awaitFault(t, c, "worker event queue full")
 	<-c.readDone
 	handed := make(chan error, 1)
+	c.limits.LaneFlush = 5 * time.Second
 	go func() {
-		handed <- c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error { return nil }, 5*time.Second)
+		handed <- c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error { return nil })
 	}()
 	<-settle
 	close(h.release)
@@ -449,6 +462,9 @@ func TestReaderDrainsTheWorkersTailAfterAFault(t *testing.T) {
 		{"unsolicited reply", "{\"id\":999,\"result\":{}}\n", "unsolicited worker reply"},
 		{"duplicate readiness", "{\"ready\":{}}\n{\"ready\":{}}\n", "duplicate worker readiness"},
 		{"invalid settings request", "{\"id\":3,\"settings_request\":{}}\n", "invalid private settings request"},
+		{"the correction list read by a worker", "{\"snapshot_request\":{\"id\":4,\"session_id\":\"s\",\"resource\":\"corrections\"}}\n", "a resource that is not the worker's"},
+		{"the correction list staged by a worker", "{\"snapshot_request\":{\"id\":4,\"session_id\":\"s\",\"resource\":\"corrections\",\"action\":\"stage\",\"upload\":\"" + strings.Repeat("a", 64) + "\",\"data_b64\":\"e30=\"}}\n", "a resource that is not the worker's"},
+		{"the correction list published by a worker", "{\"snapshot_request\":{\"id\":4,\"session_id\":\"s\",\"resource\":\"corrections\",\"action\":\"publish\",\"upload\":\"" + strings.Repeat("a", 64) + "\",\"sha256\":\"" + strings.Repeat("b", 64) + "\",\"expected_absent\":true}}\n", "a resource that is not the worker's"},
 		{"unclassifiable message", "{}\n", "unclassifiable worker message"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -494,7 +510,8 @@ func TestUnreadWorkerOutputMakesDeliveryUnproven(t *testing.T) {
 	}()
 	awaitFault(t, c, "token too long")
 	<-c.readDone
-	err := c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error { return nil }, 5*time.Second)
+	c.limits.LaneFlush = 5 * time.Second
+	err := c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "worker event delivery unproven: the worker's output was not read to its end") || !errors.Is(err, bufio.ErrTooLong) {
 		t.Fatalf("a tail the reader never reached was not reported: %v", err)
 	}

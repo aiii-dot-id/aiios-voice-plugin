@@ -3,6 +3,8 @@
 Recorded microphone input, simulated host and sink. This does not qualify an
 installed browser, persistent speaker UUIDs, enrolled identity, or live audio.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import json
 import queue

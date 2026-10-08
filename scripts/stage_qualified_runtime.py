@@ -3,6 +3,8 @@
 Carrier stays in the plugin, models remain declared data downloads. No model
 load, signing, upload, installation, source rebuild or invented URL is performed.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import hashlib
 import json
@@ -14,7 +16,8 @@ import subprocess
 import tarfile
 
 from scripts.build_plugin_carrier import verify_sdk, SDK_SOURCE
-from scripts.package_native_runtime import verify
+from scripts.package_native_runtime import refuse_interpreter_profile, verify
+from scripts.runtime_limits import profile_limits
 from scripts.rebind_signed_windows_runtime import SUBJECT, verify_authenticode
 from scripts.check_native_binary_privacy import audit_release_images, release_owned_image, third_party_images
 from scripts.windows_signing_targets import CARRIER, signing_targets
@@ -100,6 +103,30 @@ def composition_coordinates(profile, variant_id=None):
     return platform, arch, variant
 
 
+def directories(rows):
+    """How many directories the tree holds, its root not counted."""
+    found = set()
+    for name in rows:
+        parts = PurePosixPath(name).parts[:-1]
+        found.update(parts[:n] for n in range(1, len(parts) + 1))
+    return len(found)
+
+
+def files_budget(files, dirs):
+    """The least files budget under which the kit's packer and the host's reader take the tree.
+
+    Both count a tree's directories with its files and admit, beside the
+    files a budget names, a quarter as many members again. A budget of the
+    file count alone is refused for a tree with more directories than a
+    quarter of its files, which a packaged Core ML cache is. The budget is
+    the packer's limit; what the package declares stays the file count.
+    """
+    budget = max(files, (files + dirs) * 4 // 5)
+    while budget + budget // 4 < files + dirs:
+        budget += 1
+    return budget
+
+
 def runtime_pack_limits(rows, max_compressed_bytes):
     """Declare the actual closure and an explicit release-owner archive budget.
 
@@ -115,6 +142,7 @@ def runtime_pack_limits(rows, max_compressed_bytes):
     return {
         'installed_bytes': sum(r['bytes'] for r in rows.values()),
         'files': len(rows),
+        'files_budget': files_budget(len(rows), directories(rows)),
         'file_bytes': max(r['bytes'] for r in rows.values()),
         # Count the SDK archive root as well as every sealed member component.
         'depth': max(2, max(len(PurePosixPath(n).parts) + 1 for n in rows)),
@@ -169,6 +197,13 @@ def main():
     frozen=json.loads((cp/'freeze.json').read_text())
     assert frozen['runtime_manifest_sha256']==a.runtime_sha256
     runtime=cp/'runtime'; profile=verify(runtime,a.runtime_sha256)
+    # A checkpoint whose profile describes an interpreter is verified like any
+    # other and is not staged: no release archive is made of a Python engine.
+    refuse_interpreter_profile(profile)
+    # Staging is where a checkpoint becomes a release archive. A profile that
+    # states no time limits, or not every one, would ship whatever its carrier
+    # compiled, said nowhere in the package: refused before anything is built.
+    stated_limits=profile_limits(profile,released=True)
     windows=profile['platform']=='windows'
     platform,arch,variant=composition_coordinates(profile,a.variant_id); pin,_=verify_sdk()
     carrier=runtime/('aii-voice-t3.exe' if windows else 'aii-voice-t3');assert sha(carrier)==frozen['carrier_sha256']
@@ -200,7 +235,7 @@ def main():
     archive=out/(variant+'-runtime.tar.gz')
     limits=runtime_pack_limits(rows,a.max_compressed_bytes)
     declaration=json.loads(run('runtime-pack',[sdk,'runtime-pack','-dir',tree,'-o',archive,'-root','runtime',
-        '-max-installed-bytes',limits['installed_bytes'],'-max-files',limits['files'],
+        '-max-installed-bytes',limits['installed_bytes'],'-max-files',limits['files_budget'],
         '-max-file-bytes',limits['file_bytes'],'-max-compressed-bytes',limits['compressed_bytes'],
         '-max-depth',limits['depth']]))
     check_archive(archive,declaration,rows,windows=windows)
@@ -211,6 +246,8 @@ def main():
         runtime_manifest_sha256=a.runtime_sha256,carrier_sha256=frozen['carrier_sha256'],
         checkpoint_freeze_sha256=sha(cp/'freeze.json'),qualification_sha256=a.audit_sha256,
         archive_budget=limits,
+        # The time limits this runtime ships with, as its bound profile states them.
+        runtime_limits=stated_limits,
         models=frozen['models'],descriptors=descriptors,
         # The archive travels with its unmodified receipt across machines.
         qualification_scope=proof['scope'],runtime_archive=dict(path=archive.name,**declaration),

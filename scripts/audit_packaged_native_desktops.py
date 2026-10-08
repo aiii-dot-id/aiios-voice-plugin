@@ -1,4 +1,6 @@
 """Audit raw zero-argument desktop checkpoint evidence; no installation claim."""
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import io
 import json

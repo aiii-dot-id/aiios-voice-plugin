@@ -12,9 +12,11 @@ EXPORTS
     aii_voice_models_execution
     aii_voice_models_prefer
     aii_voice_models_warm
+    aii_voice_models_warm_within
     aii_voice_models_release
   aii_voice_open
   aii_voice_open_session
+  aii_voice_open_bounded
     aii_voice_open_configured
     aii_voice_open_with_capture_limit
     aii_voice_release
@@ -24,6 +26,10 @@ EXPORTS
     aii_voice_stop_playback
     aii_voice_cancel_synthesis
     aii_voice_release_generation
+    aii_voice_speech_pending
+    aii_voice_set_speech
+    aii_voice_speech_unchanged
+    aii_voice_speech
     aii_voice_playback
     aii_voice_close
     aii_voice_wait

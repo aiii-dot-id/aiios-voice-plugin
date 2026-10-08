@@ -74,16 +74,24 @@ func recordingInventory(value json.RawMessage) ([]recordingEntry, bool, error) {
 	return listing.Entries, listing.Truncated, nil
 }
 
+// abandonedStageAge is how old a staged upload must be before pruning takes
+// it for abandoned. It is an age read from a file's time, not a wait. It
+// stays over every publication the limits table can give, the worker's whole
+// publication and this carrier's own (limits.go): a table whose storage
+// control ends inside the host's allowance gives each less than that
+// allowance, so a publication still in flight never loses its stage.
+const abandonedStageAge = 2 * time.Minute
+
 // A pending upload belongs to the voice plugin only when its name exactly
 // matches one of the snapshot bridge's stage paths. Host mtime is checked on
-// the same machine. Two minutes exceeds the bridge's 30-second publication
-// deadline and keeps a concurrent pinned predecessor's active stage intact.
+// the same machine. abandonedStageAge keeps a publication in flight, and a
+// concurrent pinned predecessor's active stage, intact.
 func expiredVoiceStage(directory string, row recordingEntry, now time.Time) bool {
 	if row.Dir || row.Symlink || row.Size == nil || *row.Size < 0 || row.Modified == "" {
 		return false
 	}
 	stamp, err := time.Parse(time.RFC3339, row.Modified)
-	if err != nil || now.Sub(stamp) < 2*time.Minute {
+	if err != nil || now.Sub(stamp) < abandonedStageAge {
 		return false
 	}
 	if directory == "recordings" {
@@ -167,11 +175,24 @@ func (c *carrier) recordingStore(control *aiiosdk.Control) {
 	c.mu.Unlock()
 	go func() {
 		defer c.workers.Done()
-		ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
-		defer cancel()
-		result, err := c.recordingStoreCall(ctx, control.Session, control.Op, control.Args)
-		control.Answer(result, err)
+		control.Answer(c.ownStorageCall(func(ctx context.Context) (any, error) {
+			return c.recordingStoreCall(ctx, control.Session, control.Op, control.Args)
+		}))
 	}()
+}
+
+// ownStorageCall runs one of this carrier's own operations on the private
+// files inside the time the table gives it (limits.ownStorage), and says so,
+// with the number, when that time is what ended it.
+func (c *carrier) ownStorageCall(call func(context.Context) (any, error)) (any, error) {
+	bound := c.limits.ownStorage()
+	ctx, cancel := context.WithTimeout(c.ctx, bound)
+	defer cancel()
+	result, err := call(ctx)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("%w (the host's storage did not answer in the %d ms the limits table gives this operation: twice host_read_ms and twice host_write_ms)", err, bound.Milliseconds())
+	}
+	return result, err
 }
 
 func (c *carrier) recordingStoreCall(ctx context.Context, session privateStorageCaller, op string, args aiiosdk.Object) (any, error) {

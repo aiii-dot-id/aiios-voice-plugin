@@ -24,7 +24,15 @@ struct CleanEvidence {
 class Attributions {
  public:
   static constexpr size_t capacity = 128, pending_capacity = speaker_pending_capacity;
-  static constexpr uint64_t timeout_ms = 15000;
+  // How long a final waits for its speaker before the wait is declared over
+  // (speaker_match_timeout). Its owner states it and nothing is typed here:
+  // the worker's is its limits table's speaker_match_ms. It is a listener's
+  // wait and the outer of nothing: the match still running is not ended by
+  // it, and one that comes later is not used.
+  explicit Attributions(uint64_t milliseconds) : timeout_ms_(milliseconds) {
+    require(milliseconds>0,"the time a final waits for its speaker is required");
+  }
+  uint64_t timeout_ms() const {return timeout_ms_;}
   void begin(const std::string& session) {
     require(!session.empty() && session.size()<=128,"invalid attribution session");
     require(rows_.empty() || pending()==0,"unresolved attribution at session replacement");
@@ -109,7 +117,7 @@ class Attributions {
   std::vector<Json> expire(uint64_t now_ms) {
     return retire("speaker_match_timeout",[&](const Row& r) {
       require(now_ms>=r.admitted_ms,"attribution clock moved backwards");
-      return now_ms-r.admitted_ms>=timeout_ms;
+      return now_ms-r.admitted_ms>=timeout_ms_;
     });
   }
   std::vector<Json> end(const std::string& reason) {
@@ -136,6 +144,7 @@ class Attributions {
     FinalKey key;uint64_t admitted_ms;bool pending;std::string state,resolution;
     bool locally_retired=false,awaiting=false;
   };
+  uint64_t timeout_ms_;
   std::string session_;uint64_t last_sequence_=0;
   std::map<uint64_t,Row> rows_;std::deque<uint64_t> order_;
   static bool digest(const std::string& s) {

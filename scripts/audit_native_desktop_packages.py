@@ -3,6 +3,8 @@
 This is private artifact qualification, not signing, installed-host admission,
 worst-case memory, GPU memory, or human-level quality qualification.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import hashlib
 import json

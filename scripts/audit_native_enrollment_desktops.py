@@ -3,6 +3,8 @@
 It does not turn recorded-speech evidence into signed, installed or human-level
 qualification. Timing is host-observed warm synthesis, not an acoustic measure.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import hashlib
 import io

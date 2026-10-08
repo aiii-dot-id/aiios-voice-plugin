@@ -23,6 +23,9 @@ the host's version number alone when a capability landed after that release.
   prerequisites, updates and limits.
 - [Build and validate](docs/DEVELOPMENT.md): source-only tests and the pinned
   native carrier build.
+- [What changed in the source for 0.1.0-beta.11](docs/CHANGES_0.1.0-beta.11.md):
+  every change since the last release, by subject, with what was shown and
+  what was not.
 
 ## Source layout
 
@@ -34,6 +37,16 @@ the host's version number alone when a capability landed after that release.
 - `docs` — the session and speaker contracts, guided enrollment, settings,
   speaking languages and the correction list.
 - `scripts` — the carrier build and the package assembly.
+
+The engine that ships is native: the C++ worker and the Go carrier that
+starts it. The carrier starts only the native worker its bound runtime profile
+names, and refuses at its start a profile that describes an interpreter. The
+Python in this tree is tests and tooling: the test suite, the scripts that
+build, stage and assemble a release, and a Python engine
+(`runtime/plugin_engine` and the Python packages it imports) that is kept as a
+double of the native worker for the tests. Released packages hold no Python
+(since 0.1.0-beta.7, see `plugin/NATIVE_BUILD.md`), and no script here packs
+the double.
 
 Build the carrier against the pinned Plugin SDK revision named in
 `plugin/sdk-source.json` (see `plugin/NATIVE_BUILD.md`). Models and runtime

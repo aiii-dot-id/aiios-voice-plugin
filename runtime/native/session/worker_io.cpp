@@ -85,12 +85,33 @@ int audio_descriptor(const char *name, bool input) {
     throw std::runtime_error("audio handle adoption failed");
   return fd;
 }
-Pipe::Pipe(int fd, bool writing) : fd_(fd), writing_(writing) {
+namespace {
+// A limit of nothing would call every write expired at its first check.
+uint64_t write_limit_ns(std::chrono::milliseconds limit) {
+  if (limit <= std::chrono::milliseconds::zero())
+    throw std::runtime_error("a pipe's write limit must be more than nothing");
+  return uint64_t(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(limit).count());
+}
+// Both kinds of pipe are read and written without blocking in the kernel.
+void nonblocking(int fd) {
 #ifndef _WIN32
-  const int flags = fcntl(fd_, F_GETFL);
-  if (flags < 0 || fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0)
+  const int flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
     throw std::runtime_error("cannot make native pipe nonblocking");
+#else
+  (void)fd;
 #endif
+}
+} // namespace
+Pipe::Pipe(int fd) : fd_(fd), writing_(false), write_limit_ns_(0), limit_member_("") {
+  nonblocking(fd_);
+}
+Pipe::Pipe(int fd, std::chrono::milliseconds write_limit, const char *limit_member)
+    : fd_(fd), writing_(true), write_limit_ns_(write_limit_ns(write_limit)), limit_member_(limit_member) {
+  if (!limit_member || !*limit_member)
+    throw std::runtime_error("a pipe's write limit must be named");
+  nonblocking(fd_);
 }
 Pipe::~Pipe() {
 #ifdef _WIN32
@@ -206,8 +227,12 @@ void Pipe::write(const void *source, size_t n, const std::atomic<bool> &stop) {
       throw std::runtime_error(why);
     };
     while (done < n) {
-      if (stop || expired())
-        throw UnframedWrite("native pipe write interrupted/expired");
+      // Its deadline first: a write that has had its time is said as that,
+      // whatever else is stopping it.
+      if (expired())
+        throw UnframedWrite(expiry());
+      if (stop)
+        throw UnframedWrite("native pipe write interrupted");
 #ifdef _WIN32
       register_thread();
       DWORD count = 0;
@@ -249,6 +274,24 @@ void Pipe::interrupt() noexcept {
 }
 bool Pipe::expired() const {
   const auto start = started_.load();
-  return start && monotonic_ns() - start > 3000000000ULL;
+  return start && monotonic_ns() - start > write_limit_ns_;
+}
+std::string Pipe::expiry() const {
+  return "native pipe write expired: " + std::to_string(write_limit_ns_ / 1000000) +
+         " ms, the time the limits table gives it (" + limit_member_ + ")";
+}
+void log_line(const std::string &text) {
+  const std::string line = text + '\n';
+#ifdef _WIN32
+  (void)_write(2, line.data(), static_cast<unsigned>(line.size()));
+#else
+  for (size_t done = 0; done < line.size();) {
+    const auto count = ::write(2, line.data() + done, line.size() - done);
+    if (count > 0)
+      done += size_t(count);
+    else if (count == 0 || errno != EINTR)
+      return; // standard error takes no more, and there is nowhere else to say so
+  }
+#endif
 }
 } // namespace aii::voice::wire

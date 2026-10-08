@@ -20,7 +20,7 @@ CleanEvidence clean(const FinalKey& k) {
 }
 void transitions() {
   for(const char* result:{"known","unknown","unavailable"}) {
-    Attributions a;a.begin("session-a");FinalKey k{"session-a","track-a",101,16000,48000};
+    Attributions a(15000);a.begin("session-a");FinalKey k{"session-a","track-a",101,16000,48000};
     auto initial=a.add(3,k,10,true);
     require(str(field(initial.get(),"decision"))=="pending" &&
             integer(field(initial.get(),"revision"))==0 && a.pending()==1,
@@ -40,7 +40,7 @@ void transitions() {
   }
 }
 void hostile_bindings() {
-  Attributions a;a.begin("session-a");FinalKey k{"session-a","track-a",101,0,32000};
+  Attributions a(15000);a.begin("session-a");FinalKey k{"session-a","track-a",101,0,32000};
   a.add(7,k,10,true);auto c=clean(k);
   for(unsigned which=0;which<5;++which) {
     auto wrong=k;
@@ -69,7 +69,7 @@ void hostile_bindings() {
   require(a.pending()==1,"stale session mutated successor");
 }
 void mixture_and_overlap() {
-  Attributions a;a.begin("session-a");
+  Attributions a(15000);a.begin("session-a");
   FinalKey capture{"session-a","",1,0,32000};a.add(1,capture,1,true);
   auto mixed=a.resolve(1,capture,evidence());
   require(str(field(mixed.get(),"decision"))=="uncertain" &&
@@ -88,7 +88,7 @@ void mixture_and_overlap() {
           "concurrent unknown track borrowed known track's identity");
 }
 void enrolled_uuid_projection() {
-  Attributions a;a.begin("session-a");FinalKey k{"session-a","track-a",1,0,64000};
+  Attributions a(15000);a.begin("session-a");FinalKey k{"session-a","track-a",1,0,64000};
   a.add(1,k,1,true);auto detail=evidence();
   put(detail,"speaker_uuid",string("12345678-1234-4234-8234-123456789abc"));
   put(detail,"registry_revision",string("2"));put(detail,"continuity",string("matched"));
@@ -105,10 +105,15 @@ void enrolled_uuid_projection() {
   require(!field(out.get(),"speaker_uuid")&&str(field(out.get(),"decision"))=="uncertain","unverified mixture inherited known UUID");
 }
 void bounded_retirement() {
-  Attributions a;a.begin("session-a");FinalKey k{"session-a","track-a",1,0,32000};
-  a.add(1,k,100,true);require(a.expire(15099).empty(),"early attribution timeout");
-  auto retired=a.expire(15100);require(retired.size()==1 && a.pending()==0,"timeout did not settle once");
-  require(a.expire(15101).empty(),"timeout emitted twice");
+  // The time a final waits for its speaker is its owner's to state: 700 ms
+  // here, and the wait is over 700 ms after the final was admitted, not
+  // fifteen seconds after.
+  Attributions a(700);a.begin("session-a");FinalKey k{"session-a","track-a",1,0,32000};
+  require(a.timeout_ms()==700,"the stated time was not kept");
+  a.add(1,k,100,true);require(a.expire(799).empty(),"early attribution timeout");
+  auto retired=a.expire(800);require(retired.size()==1 && a.pending()==0,"timeout did not settle once");
+  require(a.expire(801).empty()&&a.expire(15100).empty(),"timeout emitted twice");
+  refused([]{(void)Attributions(0);}); // an owner that states no time is given none
   // Hundreds of later resolved finals cannot evict a timed-out model job's
   // reference while it can still return. Retained state stays bounded.
   for(uint64_t i=2;i<500;++i) {
@@ -125,7 +130,7 @@ void bounded_retirement() {
   require(a.end("session_failed").empty(),"failure duplicated amendments");
 }
 void anonymous_projection() {
-  Attributions a;a.begin("session");FinalKey key{"session","track-a",7,0,64000};a.add(1,key,0,true);
+  Attributions a(15000);a.begin("session");FinalKey key{"session","track-a",7,0,64000};a.add(1,key,0,true);
   auto detail=evidence("unavailable");put(detail,"speaker_uuid",string("12345678-1234-4234-8234-123456789abc"));
   put(detail,"registry_revision",string("3"));put(detail,"continuity",string("matched"));put(detail,"display_label",string("Chosen label"));
   auto match=parse(R"({"outcome":"known","reason":"accepted","candidate_count":1,"candidate_uuid":"12345678-1234-4234-8234-123456789abc","score":0.8,"threshold":0.56,"minimum_margin":0.105,"profile_revision":"2","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","embedding_binding":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidence_samples":64000})");
@@ -164,7 +169,7 @@ void anonymous_projection() {
     "pooled anonymous UUID escaped without separated evidence");
 }
 void queued_matcher_backpressure() {
-  Attributions a;a.begin("busy");
+  Attributions a(15000);a.begin("busy");
   // One matcher is running and its eight waiting slots are full. Every later
   // final still needs a pending row until its immediate unavailable arrives.
   for(uint64_t i=1;i<=speaker_queue_capacity+1;++i)
@@ -183,10 +188,10 @@ void vectors(const char* path) {
   const auto* cases=field(doc.get(),"cases");require(cJSON_IsArray(cases) && cJSON_GetArraySize(cases)==8,"attribution vector census");
   std::map<std::string,std::unique_ptr<Attributions>> groups;
   for(const auto* row=cases->child;row;row=row->next) {
-    Attributions local;const auto sid=str(field(row,"session_id"));Attributions* a=&local;
+    Attributions local(15000);const auto sid=str(field(row,"session_id"));Attributions* a=&local;
     if(const auto* group=field(row,"group")) {
       auto& shared=groups[str(group)];
-      if(!shared){shared=std::make_unique<Attributions>();shared->begin(sid);}
+      if(!shared){shared=std::make_unique<Attributions>(15000);shared->begin(sid);}
       a=shared.get();
     }else local.begin(sid);
     const auto* track=field(row,"track_id");require(cJSON_IsString(track),"vector track string required");

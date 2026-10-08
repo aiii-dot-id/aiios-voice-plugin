@@ -34,7 +34,9 @@ struct Owner final : aii::voice::ModelOwner {
         std::copy(sample->embedding.begin(),sample->embedding.end(),evidence.embedding);
       }
       char output[8192]{};size_t written=0;
-      if(callback(context,session,utterance,sample?&evidence:nullptr,output,sizeof output,&written)!=AII_VOICE_OK || !written || written>=sizeof output)
+      const auto status=callback(context,session,utterance,sample?&evidence:nullptr,output,sizeof output,&written);
+      if(status==AII_VOICE_BUSY)throw aii::voice::SpeakerStorageLate("the host's storage did not answer in time");
+      if(status!=AII_VOICE_OK || !written || written>=sizeof output)
         throw aii::voice::EnrollmentUnavailable("speaker registry publication unavailable");
       return std::string(output,written);
     });
@@ -51,7 +53,9 @@ struct Owner final : aii::voice::ModelOwner {
         std::copy(sample->embedding.begin(),sample->embedding.end(),evidence.embedding);
       }
       char output[8192]{};size_t written=0;
-      if(callback(context,sample?&evidence:nullptr,output,sizeof output,&written)!=AII_VOICE_OK || !written || written>=sizeof output)
+      const auto status=callback(context,sample?&evidence:nullptr,output,sizeof output,&written);
+      if(status==AII_VOICE_BUSY)throw aii::voice::SpeakerStorageLate("the host's storage did not answer in time");
+      if(status!=AII_VOICE_OK || !written || written>=sizeof output)
         throw aii::voice::EnrollmentUnavailable("speaker registry publication unavailable");
       return std::string(output,written);
     });
@@ -119,8 +123,9 @@ struct Owner final : aii::voice::ModelOwner {
 #ifdef AII_WITH_UID
     if(uid)uid->warm();
 #endif
+    // Measured here; what it may take is the caller's to state, and is held
+    // where every owner's warm returns (c_api.cpp, aii_voice_models_warm_within).
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
-    if(ms>40000)throw std::runtime_error("native warm inference exceeded 40 seconds");
     aii_voice_readiness result{};result.models_loaded=4;result.probe_ms=uint32_t(std::max<int64_t>(1,ms));
 #ifdef AII_WITH_UID
     if(uid)result.models_loaded=5;
@@ -193,6 +198,7 @@ aii_voice_result aii::voice::load_native_models(const aii_voice_paths* p,const c
         const auto status=reader(context,bytes.data(),bytes.size(),&written);
         if(status==AII_VOICE_AGAIN && !written)
           return aii::uid::Snapshot{policies.current().policy,0,{}};
+        if(status==AII_VOICE_BUSY)throw aii::voice::SpeakerStorageLate("the host's storage did not answer in time");
         if(status!=AII_VOICE_OK||!written||written>bytes.size())
           throw std::runtime_error("authoritative UID snapshot unavailable");
         bytes.resize(written);return policies.read(bytes);

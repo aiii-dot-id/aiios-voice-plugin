@@ -5,13 +5,14 @@ Current lifecycle, output-only, settings and release-input contract:
 The dated checkpoint measurements below are historical, not qualification of
 an executable subsequently rebuilt from this source.
 
-The same C++17 session state machine builds on desktop and mobile. It now
-joins real native recognition, VAD, semantic endpoint and synthesis on all three desktops,
-without an interpreter in the engine process. Its internal C interface is now
-implemented and exercised with those models. This is a private composition
-milestone, **not yet the complete shipping resident**. Its native private worker
-now connects to the existing Go carrier/Plugin SDK and passes real Mac CPU and
-Windows and Ubuntu CPU/Vulkan speech.
+The same C++17 session state machine builds on desktop and mobile. It joins
+real native recognition, VAD, semantic endpoint, synthesis and speaker
+identification on all three desktops, without an interpreter in the engine
+process, behind its internal C interface. Its worker, connected to the Go
+carrier and the Plugin SDK, is the resident engine of every released desktop
+set since 0.1.0-beta.7. Which sets a release carries, their accelerator
+placement and their qualification are recorded with that release; mobile is
+not a released target.
 
 ## Ownership
 
@@ -97,11 +98,16 @@ frees an executing model merely to pretend a stuck kernel retired.
 ## Current executable boundary
 
 - `session.h/.cpp`: transport-independent C++ API and bounded ownership.
-- `native_models.cpp`: existing native component adapters. Explicit qualified
-  native libraries form the portable link contract. Mac keeps its CPU archive
-  recipe; Windows and Ubuntu use CPU ASR/detectors and explicit Vulkan TTS,
-  never fallback. CPU remains the omitted-argument default; accelerated proof
-  launches name Vulkan explicitly.
+- `native_models.cpp`: the native component adapters. Explicit qualified
+  native libraries form the portable link contract; the retained Mac archive
+  recipe remains available. A worker built with `AII_MULTITALKER_ASR`, as the
+  released desktop sets are, takes its hearing composition from the sealed
+  profile: the diarizer's model and device, the encoder's CUDA device and
+  threads, and an optional Core ML or ONNX separator. Speech uses the backend
+  it is given (`cpu`, `vulkan` or `metal`). Placement therefore differs by
+  runtime set (see
+  [component selection](../../../docs/RUNTIME_COMPONENT_SELECTION.md)), never
+  by fallback. CPU remains the omitted-argument default.
 - `session_test.cpp`: model-free contracts, including blocked inference,
   backpressure, stale output, receipt-held drain and packet-invariant pause.
 - `probe.cpp`: recorded speech plus real native TTS, cancellation, complete
@@ -146,8 +152,11 @@ EOF is ordered after already-admitted requests, and final response writes keep
 their deadline watcher through retirement.
 
 That checkpoint used explicit model paths and a smaller settings surface.
-Current installed activation is zero-argument and runtime/model-bound; ten
-presets and the eight compiled settings are wired. Unsupported values still
+Current installed activation is zero-argument and runtime/model-bound; twenty
+presets and the eight compiled settings are wired. Of those settings the
+speaking voice, its variation and its seed are now taken at the first segment
+of each reply, never inside one; the speaking language and the hearing
+settings are still bound at session open. Unsupported values still
 refuse explicitly. A new signed package needs its own installed qualification.
 
 Load/open initialize on their own owner; they are not inference-free controls.
@@ -162,15 +171,32 @@ bound remains. This is rolling input storage, not a fabricated turn boundary.
 
 Synthesis accepts up to 8,000 UTF-8 characters, partitions losslessly at the
 existing 180-character default and retains one generation/clock/END for the
-whole reply. Every segment reuses the bound voice. Cancellation fences later
+whole reply. Every segment of a reply uses the voice the reply began with.
+Cancellation fences later
 segments. The output queue has one shared 120,000-sample budget across all
-generations, with a 15-second stalled-consumer deadline. A pathological single
-segment still faults at 60 seconds; a whole reply is bounded at 30 minutes.
+generations, with a stalled-consumer deadline that its caller states
+(`output_take_timeout_ms`; the worker states the limits table's
+`output_take_ms`, 15 seconds by default). A pathological single segment still
+faults at 60 seconds of audio; a whole reply is bounded at 30 minutes of it.
 
-The passing Mac CPU build includes the hash-bound `capacity-history.patch`
-overlay. Without it, a long prompt's larger cached graph changes the later
-short reply's PCM. The overlay chooses the current text's canonical CPU shape
-and reuses a graph only when that shape matches; model weights stay loaded.
+`capacity-history.patch` (`runtime/native_pocket`) chooses the current text's
+canonical CPU shape and reuses a graph only when that shape matches; model
+weights stay loaded. No shipped library is built with the whole of it: the
+Linux library holds one of its two changes (a prepared graph is reused only at
+exactly the capacity asked for) and not the other (the capacity chosen for a
+graph planned on the processor); the Windows and macOS libraries hold neither.
+A long prompt's larger cached graph therefore changes a later short reply's
+PCM, by how much depending on the system and on where the graph is planned.
+Measured as the difference between a short reply spoken after a long one and
+the same reply in a fresh session, in two voices: on the Linux Small-CPU set,
+where the engine plans on the processor, at most 4 units of 16-bit PCM, 85 dB
+below the speech; on the Windows Small-CPU set, which plans there too, at most
+45 units, 61 dB below the speech; through Vulkan on Linux, whose library holds
+a change of its own for a graph not planned on the processor
+(`runtime/native_pocket/engine_overrides_linux`), no difference; through
+Vulkan on Windows at most 24 units, 67 dB below the speech; through Metal at
+most 77 units, 58 dB below the speech. A reply that no longer reply precedes
+is the fresh session's sample for sample on each.
 Retained upstream sources and older checkpoint libraries are never edited.
 This is tested history independence for the retained cases, not a claim of
 bit-identical synthesis across accelerator implementations.

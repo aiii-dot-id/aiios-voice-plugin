@@ -1,85 +1,18 @@
+"""A runtime's bound inventory: no member path leaves the runtime, and a changed, added or linked file is refused.
+
+Four cases that were here went with what they tested: the packaged interpreter's bootstrap
+(its record of loaded modules) and the Python packer's dependency closure are removed.
+"""
 import json
-import types
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from plugin.runtime_bootstrap import module_files
 from scripts.package_native_runtime import (
-    dependency_closure,
     runtime_inventory,
     safe_relative,
     sha256,
     verify,
 )
-
-
-def test_synthetic_module_attribute_is_not_a_file(tmp_path):
-    module = types.ModuleType("synthetic")
-
-    def invented(name):
-        raise AssertionError("module attribute hook must not be called")
-
-    module.__getattr__ = invented
-    assert module_files(tmp_path, {"synthetic": module}) == {}
-    real = types.ModuleType("real")
-    real.__file__ = str(tmp_path / "real.py")
-    assert module_files(tmp_path, {"real": real}) == {"real": "real.py"}
-    real.__file__ = str(tmp_path.parent / "foreign.py")
-    with pytest.raises(ValueError):
-        module_files(tmp_path, {"real": real})
-
-
-@pytest.mark.parametrize(
-    "name,label", [("torch.ops", "_ops.py"), ("torch.classes", "_classes.py")]
-)
-def test_torch_facade_is_bound_to_its_real_packaged_implementation(
-    tmp_path, name, label
-):
-    package = tmp_path / "deps/torch"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text("")
-    (package / label).write_text("")
-    modules = {
-        "torch": SimpleNamespace(__file__=str(package / "__init__.py")),
-        "torch." + label.removesuffix(".py"): SimpleNamespace(
-            __file__=str(package / label)
-        ),
-        name: SimpleNamespace(__file__=label),
-    }
-    assert module_files(tmp_path, modules)[name] == str(Path("deps/torch") / label)
-    modules[name].__file__ = "other.py"
-    with pytest.raises(ValueError, match="facade source label"):
-        module_files(tmp_path, modules)
-    modules[name].__file__ = label
-    modules["torch." + label.removesuffix(".py")].__file__ = str(
-        package / "__init__.py"
-    )
-    with pytest.raises(ValueError, match="implementation differs"):
-        module_files(tmp_path, modules)
-    del modules["torch." + label.removesuffix(".py")]
-    with pytest.raises(ValueError, match="no implementation owner"):
-        module_files(tmp_path, modules)
-
-
-def test_dependency_closure_honors_markers_extras_and_constraints():
-    dist = {
-        "base": SimpleNamespace(
-            version="1", requires=["extra[feature]>=2", 'absent; python_version < "2"']
-        ),
-        "extra": SimpleNamespace(version="2", requires=['leaf; extra == "feature"']),
-        "leaf": SimpleNamespace(version="3", requires=[]),
-    }
-    assert set(dependency_closure(["base"], dist.__getitem__)) == {
-        "base",
-        "extra",
-        "leaf",
-    }
-    with pytest.raises(ValueError, match="conflicts"):
-        dependency_closure(["extra>=9"], dist.__getitem__)
-    with pytest.raises(KeyError):
-        dependency_closure(["missing"], dist.__getitem__)
 
 
 @pytest.mark.parametrize(

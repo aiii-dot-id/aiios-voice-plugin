@@ -16,7 +16,9 @@ import subprocess
 import sys
 
 from scripts.native_checkpoint_binding import sha, verify_checkpoint
-from scripts.package_native_runtime import bind_carrier, runtime_inventory, safe_relative, verify
+from scripts.package_native_runtime import (
+    bind_carrier, refuse_interpreter_profile, runtime_inventory, safe_relative, verify)
+from scripts.runtime_limits import limits_to_state, read_limits_file
 
 
 def relocate_macos(path, runtime):
@@ -503,6 +505,10 @@ def main():
     parser.add_argument('--uid-model', type=Path, help='Exact ECAPA graph; candidate only, no installed profile migration')
     parser.add_argument('--uid-policy', type=Path, help='Explicit model-bound calibration policy')
     parser.add_argument('--uid-policy-sha256', help='Exact policy bytes selected for this candidate')
+    parser.add_argument('--limits', type=Path, metavar='FILE',
+                        help='The time limits this set states in its profile: a JSON object of every member '
+                             '(plugin/native/limits.go). Omitted, what the parent states is carried unchanged, '
+                             'and a member it does not state is written at its default')
     args = parser.parse_args()
     if any((args.uid_model, args.uid_policy, args.uid_policy_sha256)):
         if not all((args.uid_model, args.uid_policy, args.uid_policy_sha256, args.uid)):
@@ -514,8 +520,17 @@ def main():
         parser.error('hearing execution requires explicit hearing model replacement')
     if args.voice_presets is not None and (args.hearing_graphs is not None or args.uid_model is not None):
         parser.error('add voice presets in a rebuild of their own: one model change at a time')
+    # A caller's table is held to the carrier's rules before the parent is
+    # read or anything is written.
+    limits_table, limits_sha256 = read_limits_file(args.limits) if args.limits is not None else (None, None)
     parent, out = args.parent.resolve(), args.out.resolve()
     frozen, profile, bindings = parent_bytes(parent, args.parent_sha256, args.parent_models_root)
+    # A parent that describes an interpreter is verified like any other, and
+    # is no parent: nothing is rebuilt from one and no output is made.
+    refuse_interpreter_profile(profile)
+    limits = limits_to_state(profile, limits_table)
+    if args.limits is not None:
+        bindings[str(args.limits.resolve())] = limits_sha256
     platform = profile['platform']
     suffix = {'darwin': '.dylib', 'linux': '.so', 'windows': '.dll'}[platform]
     worker_name = 'bin/aii_voice_worker' + ('.exe' if platform == 'windows' else '')
@@ -596,6 +611,9 @@ def main():
     updated = copy.deepcopy(profile)
     updated['files'] = runtime_inventory(runtime, target_platform=platform)
     updated['qualified'] = False
+    # The profile states every time limit its carrier and worker wait by:
+    # left out, a package would ship whatever its carrier compiled.
+    updated['limits'] = limits
     delta = {n for n in set(profile['files']) | set(updated['files'])
              if profile['files'].get(n) != updated['files'].get(n)}
     allowed = set(replacements) | {'resources/settings.json'} | added_notices | set(metal)
@@ -632,6 +650,8 @@ def main():
                   execution_profile_changed='native-profile.json' in delta,
                   settings_changed='resources/settings.json' in delta,
                   settings_sha256=sha(out / 'settings.json'),
+                  # True too where the parent stated none and this profile states the defaults.
+                  limits_changed=limits != profile.get('limits'),
                   bindings=bindings)
     if nemo:
         result['nemo_replaced'] = sorted(nemo)

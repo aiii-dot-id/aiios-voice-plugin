@@ -16,6 +16,9 @@ struct FakeEndpoint : aii::voice::Endpoint {
   void cancel() noexcept override {}
 };
 std::atomic<unsigned> cancel_count{0};
+// What this owner's warm inference says it took. A test sets it, to stand a
+// slow warm inference beside the time its caller gave it.
+std::atomic<uint32_t> warm_took{1};
 struct FakeTts : aii::voice::Synthesizer {
   std::atomic<bool> cancelled{false};uint64_t id=0;unsigned count=0;
   void start(uint64_t generation,const std::string&) override { id=generation;count=0; }
@@ -35,7 +38,7 @@ struct Owner : aii::voice::ModelOwner {
   aii::voice::Vad& vad() override { return v; }
   aii::voice::Endpoint& endpoint() override { return e; }
   aii::voice::Synthesizer& synthesizer() override { return t; }
-  aii_voice_readiness warm() override {return {4,1,"cpu"};}
+  aii_voice_readiness warm() override {return {4,warm_took.load(),"cpu"};}
   std::vector<uint64_t> enrollment_finals() override {return {11,12,13};}
   std::string enroll_selected(const std::string& current,const std::string& id,const std::string& label,const std::vector<uint64_t>& finals) override {
     if(current!="fixture"||id!="person"||label!="Chosen"||finals!=std::vector<uint64_t>{11,12,13})throw std::invalid_argument("test selection changed at C ABI");
@@ -46,3 +49,4 @@ struct Owner : aii::voice::ModelOwner {
 extern "C" aii_voice_models* aii_test_models() { return aii::voice::wrap_models(std::make_unique<Owner>()); }
 extern "C" unsigned aii_test_cancel_count() { return cancel_count.load(); }
 extern "C" void aii_test_yield() { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+extern "C" void aii_test_warm_took(uint32_t milliseconds) { warm_took=milliseconds; }

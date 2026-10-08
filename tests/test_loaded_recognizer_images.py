@@ -26,3 +26,25 @@ def test_legacy_and_tampered_composition(tmp_path):
 def test_unknown_composition_does_not_assume_legacy(tmp_path):
     binary,_=fixture(tmp_path,{'diarizer':'unknown'})
     with pytest.raises(ValueError):recognizer_images(binary,'windows')
+
+
+def test_a_windows_process_is_a_child_only_if_it_was_created_after_its_parent():
+    """Windows keeps a dead parent's number in its children and gives the number out again: a program started
+    long before the carrier can carry the carrier's number as its parent's. The listing asks for the parent's
+    creation time and takes only what was created no earlier."""
+    from scripts import native_loaded_images as images
+    command = images.windows_children_command(4242)
+    assert "-Filter 'ProcessId = 4242'" in command and "-Filter 'ParentProcessId = 4242'" in command
+    assert '$_.CreationDate -ge $p.CreationDate' in command and '$p -and' in command
+    asked = []
+
+    def run(argv, **how):
+        asked.append((argv, how))
+        return run.says
+    run.says = '{"ProcessId":7,"ExecutablePath":"C:/r/bin/aii_voice_worker.exe"}\n'
+    assert images.windows_children(4242, run) == [dict(ProcessId=7, ExecutablePath='C:/r/bin/aii_voice_worker.exe')]
+    assert asked[0][0][-1] == command and asked[0][1] == dict(text=True, timeout=20)
+    run.says = '[{"ProcessId":7,"ExecutablePath":"a"},{"ProcessId":8,"ExecutablePath":"b"}]'
+    assert [child['ProcessId'] for child in images.windows_children(4242, run)] == [7, 8]
+    run.says = '\n'
+    assert images.windows_children(4242, run) == []

@@ -10,7 +10,7 @@ import pytest
 
 from scripts.assemble_guided_beta_candidate import uid_replacement
 from scripts.package_native_runtime import runtime_inventory, sha256, verify
-from scripts.validate_source_closeout import validate_environment
+from scripts.validate_source_closeout import report_counts, run_bounded, validate_environment
 
 
 def test_source_gate_refuses_missing_test_prerequisites_before_running():
@@ -19,6 +19,33 @@ def test_source_gate_refuses_missing_test_prerequisites_before_running():
     with pytest.raises(ValueError, match="pytest_asyncio"):
         validate_environment((3, 12), lambda name: None if name == "pytest_asyncio" else object())
     validate_environment((3, 12), lambda name: object())
+
+
+def test_the_floor_counts_test_cases_and_the_python_double_is_told_apart(tmp_path):
+    # The report's own total counts subtests where the installed pytest reports them (here 7 for 3
+    # cases); the floor is held to the cases, which are the same on every machine.
+    report = tmp_path / "pytest.xml"
+    report.write_text(
+        '<testsuites><testsuite tests="7" failures="1" errors="0" skipped="0">'
+        '<testcase classname="tests.test_native_output_only" name="a"/>'
+        '<testcase classname="tests.test_native_build_profile.BuildProfile" name="b"/>'
+        '<testcase classname="tests.test_plugin_engine" name="c"><failure message="x"/></testcase>'
+        '</testsuite></testsuites>')
+    counts, cases, double = report_counts(report)
+    assert counts == dict(tests=7, failures=1, errors=0, skipped=0)
+    assert (cases, double) == (3, 1)
+    assert report_counts(tmp_path / "no-report.xml") == (dict(tests=0, failures=0, errors=0, skipped=0), 0, 0)
+
+
+def test_a_run_that_reaches_its_time_limit_is_an_outcome_not_a_traceback(tmp_path):
+    with (tmp_path / "slow.log").open("xb") as log:
+        code, timed_out, seconds = run_bounded([sys.executable, "-c", "import time; time.sleep(60)"],
+                                               cwd=tmp_path, env=None, log=log, limit=0.5)
+    assert code is None and timed_out and 0.4 <= seconds < 30
+    with (tmp_path / "quick.log").open("xb") as log:
+        code, timed_out, _ = run_bounded([sys.executable, "-c", "print('said'); raise SystemExit(3)"],
+                                         cwd=tmp_path, env=None, log=log, limit=30)
+    assert (code, timed_out) == (3, False) and (tmp_path / "quick.log").read_bytes().strip() == b"said"
 
 
 @pytest.mark.parametrize("qualified", [True, False])

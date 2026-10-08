@@ -26,6 +26,8 @@ def test_privacy_guard_and_its_fixtures_do_not_match_themselves():
     ('https'+':'+'//'+'user'+':'+'password'+'@'+'example.com', 'credential-url'),
     ('api_'+'key="'+'x'*30+'"', 'literal-credential'),
     ('see deliver'+'ables/run-1/result.json', 'unpublished-evidence'),
+    ('finding AB'+'C-DE-7 of it', 'unpublished-review'),
+    ('an External'+' Review found', 'unpublished-review'),
 ])
 def test_sensitive_text_is_refused_without_echoing_value(text, category):
     rows=scan_text(text)
@@ -37,6 +39,7 @@ def test_examples_and_public_attributions_remain_valid():
     assert scan_text('127.0.0.1 /home/user/project /path/to/work/project') == []
     assert scan_text('192.0.2.23 '+APPROVED) == []
     assert scan_text('C:/work/proof/run/coordination.json') == []
+    assert scan_text('CC-BY-4.0 and CC-BY-NC-SA-4.0 are licence names') == []
     assert scan_text('Copyright author'+'@'+'example.org', attribution_notice=True) == []
     assert scan_text('h'+'f_'+'x'*32, attribution_notice=True) == [(1,'provider-token')]
 

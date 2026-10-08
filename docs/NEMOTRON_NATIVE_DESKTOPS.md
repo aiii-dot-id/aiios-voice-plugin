@@ -1,8 +1,10 @@
 # Nemotron native desktop composition
 
 Scope: macOS Apple Silicon, Ubuntu Linux and Windows desktop qualification.
-This is an implemented native recognition component with an opt-in sealed
-macOS candidate. It does not change the default public release.
+This is the native recognition composition that the released desktop sets
+carry on all three desktops; each release's records say which sets carry it
+and how they were qualified. The dated checkpoints below keep their own
+bounds: what one of them did not claim, it still does not.
 
 ## Composition
 
@@ -77,7 +79,9 @@ the same later input, and that feeding a copy never changes its source.
 Build the native dependency with its `scripts/configure.sh metal-diar` or
 `vulkan-diar` preset and its pinned static SentencePiece helper. For Metal,
 apply the upstream preset's ggml Metal patches; do not copy those changes
-into the Vulkan build. Install the result into a private staging prefix.
+into the Vulkan build. The shipped Metal build sets
+`GGML_METAL_EMBED_LIBRARY=OFF` and carries precompiled kernels (see the sealed
+macOS candidate below). Install the result into a private staging prefix.
 Do not require a developer's Homebrew or system Python at inference time.
 A sealed checkpoint whose NeMo library predates the current patch is rebound
 with `python -m scripts.rebuild_native_checkpoint --nemo FILE --nemo FILE`,
@@ -293,8 +297,11 @@ still needs a sealed dependency inventory and device/resource admission.
   overlap, resource contention and observed latency. The streaming chunk's
   lookahead remains even when inference runs faster than real time.
 
-No release/catalog update, broad UID qualification, per-word timing/confidence,
-mobile qualification or Windows qualification is claimed by this checkpoint.
+That checkpoint claimed no release/catalog update, broad UID qualification,
+per-word timing/confidence, mobile qualification or Windows qualification. The
+desktop sets released since carry this composition on all three desktops,
+Windows included, on each release's own records; this document still claims
+no broad UID qualification, per-word timing/confidence or mobile qualification.
 
 ## Sealed macOS candidate
 
@@ -317,8 +324,14 @@ copies the native dependency closure as regular files, relocates/signs native
 images, and rebuilds the carrier against the resulting inventory. It replaces
 only hearing components and preserves the parent's other model bytes. Model
 files and native dependencies remain separate, inventoried artifacts; no
-system Python or package manager is required for inference. Embed Metal's
-shader library and strip local compiler source paths when building dependencies.
+system Python or package manager is required for inference. Do not embed
+Metal's shader source: build each ggml copy with `GGML_METAL_EMBED_LIBRARY=OFF`
+and ship its kernels compiled at build time (`bin/default.metallib` for the
+NeMo library's ggml, `lib/libnative_pocket_resident.metallib` for the speech
+library), as [DEVELOPMENT.md](DEVELOPMENT.md) describes. The host's sandbox
+denies writes, so a library that embeds shader source compiles it again on
+every contained start. Strip local compiler source paths when building
+dependencies.
 Vendor-provided diagnostic build paths are distinguished from our private data.
 
 The complete native contract suite passes 46 tests with this factory wiring.

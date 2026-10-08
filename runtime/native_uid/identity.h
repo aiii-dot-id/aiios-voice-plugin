@@ -9,6 +9,10 @@
 namespace aii::uid {
 using Vector = std::vector<double>;
 std::vector<uint32_t> unicode_scalars(const std::string&); // strict UTF-8
+// Whether a label, as it is given, is text an operator can read as written
+// (identity.cpp says what that is). A label already stored is not judged by
+// this: validate() reads it as it was stored.
+bool readable_label(const std::string&);
 // A read-only projection of speaker_identity/snapshot.py, NOT a new store.
 // The composition root supplies a verified policy from its bound catalog and
 // the authoritative host snapshot. No enrollment, file IO or authorization.

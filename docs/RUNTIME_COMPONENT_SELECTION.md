@@ -4,10 +4,11 @@ Full and Small are two resource targets of one voice platform. Small is built
 from smaller or more efficient components and an appropriate execution plan.
 It must retain STT, TTS, speaker UUIDs and labels, history and filtering, VAD,
 interruption, recovery, and the same callable contracts. This document records
-the implementation direction. The generic selector and authoring changes are
-source implementations, not yet a published host capability. Recorded desktop
-execution is established below; Full/Small release and installed qualification
-remain separate gates.
+the implementation direction. The generic selector is a published host
+capability since AII OS 0.1.12, and every runtime's declared extent needs
+AII OS 0.1.14; both are detailed below. Recorded desktop execution is
+established below; each release's signature and installed qualification remain
+separate gates, recorded with that release.
 
 ## One engine, selected components
 
@@ -96,7 +97,8 @@ is an implementation capability, not a qualification or Small release claim.
 The resident ONNX separator accepts complete inputs through 80,003 samples
 at 16 kHz. Longer overlapping turns retain the original unresolved records;
 the engine does not crop them to fit. Each call is best effort within 5
-times its audio duration, clamped to 4-25 s; expiry cancels only that call and
+times its audio duration, clamped to 4-25 s by default (the limits table's
+`separation_min_ms` and `separation_max_ms`); expiry cancels only that call and
 keeps the turn's unresolved records (see the overlap identity gate). Its CUDA arena uses the measured
 1.5 GiB bound and one EP stream. That is not a total GPU reservation: the
 selected composition must still measure concurrent recognition and synthesis.

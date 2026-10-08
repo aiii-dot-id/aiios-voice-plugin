@@ -135,7 +135,53 @@ int main() {
       try { r.gate.close(); } catch(const std::runtime_error& e) { refused=std::string(e.what())=="model fault"; }
       require(refused && r.gate.outstanding()==1,"stale model failure became absence");
     }
-    std::cout<<"pause clock: horizon, inclusive speech, hold, bounded silence, retained context, ownership, timeout and faults passed\n";
+    {
+      // THE GATE'S TWO WAITS ARE ITS CALLER'S TO STATE, before any input and
+      // never as nothing.
+      Rig r;
+      for(const bool decision:{true,false}) {
+        Gate fresh([](uint64_t,std::vector<float>){return std::shared_future<double>();},[](const Gate::Event&){});
+        bool refused=false;
+        try { fresh.configure_waits(std::chrono::milliseconds(decision?0:300),std::chrono::milliseconds(decision?300:0)); }
+        catch(const std::invalid_argument&) {refused=true;}
+        require(refused,"a wait stated as nothing was taken");
+      }
+      bool refused=false;
+      try { r.gate.configure_waits(std::chrono::milliseconds(300),std::chrono::milliseconds(300)); } catch(const std::invalid_argument&) {refused=true;}
+      require(refused,"the waits changed after input");
+    }
+    {
+      // A verdict is waited for the stated time and no shorter: 1300 ms here,
+      // past the second the header keeps for a caller that states none. The
+      // turn is not guessed, the query stays owned, and the gate says once
+      // that the verdict was late.
+      std::vector<std::shared_ptr<std::promise<double>>> jobs; std::vector<Gate::Event> events;
+      Gate gate([&](uint64_t,std::vector<float>) {
+        auto job=std::make_shared<std::promise<double>>(); jobs.push_back(job); return job->get_future().share();
+      },[&](const Gate::Event& event) { events.push_back(event); });
+      gate.configure_waits(std::chrono::milliseconds(1300),std::chrono::milliseconds(300));
+      std::vector<float> block(512,1); gate.append(block.data(),block.size());
+      const auto asked=Gate::Clock::now();
+      gate.poll(false,10240,10752);
+      require(gate.poll(false,12288,12800)==Decision::None && !gate.pending() && gate.outstanding()==1,
+              "a late verdict guessed a turn, faulted or lost ownership");
+      require(Gate::Clock::now()-asked>=std::chrono::milliseconds(1300),"the verdict was not waited for the stated time");
+      size_t late=0; for(const auto& event:events) late+=event.kind==Gate::Event::Kind::Late;
+      require(late==1 && events.back().kind==Gate::Event::Kind::Late && events.back().stale &&
+              events.back().resolution_position==12800,"a late verdict was not said, once, where it was late");
+      // And a query still owned at the input's end is waited for the stated
+      // time: the refusal carries it, 300 ms and not the header's fifteen seconds.
+      bool unretired=false;
+      const auto closing=Gate::Clock::now();
+      try { gate.close(); } catch(const Gate::Unretired& e) {
+        unretired=e.waited==std::chrono::milliseconds(300) && std::string(e.what())=="semantic endpoint did not retire in 300 ms";
+      }
+      require(unretired && gate.outstanding()==1,"a query that did not retire was not refused with the stated wait, or was dropped");
+      require(Gate::Clock::now()-closing<std::chrono::seconds(10),"a query at the input's end was waited for the header's time, not the stated one");
+      jobs[0]->set_value(.9); gate.close();
+      require(events.back().kind==Gate::Event::Kind::Resolution && events.back().stale,"the late verdict was not kept as stale evidence");
+    }
+    std::cout<<"pause clock: horizon, inclusive speech, hold, bounded silence, retained context, ownership, stated waits, timeout and faults passed\n";
     return 0;
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
 }

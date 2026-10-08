@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #include "timing_trace.h"
 
@@ -22,7 +23,9 @@ class PauseGate {
   using Clock=std::chrono::steady_clock;
   using Submit=std::function<std::shared_future<double>(uint64_t,std::vector<float>)>;
   struct Event {
-    enum class Kind { Query, Resolution } kind;
+    // Late: the verdict of the query submitted for a commit point did not
+    // come inside the decision wait, and the turn goes on to end by silence.
+    enum class Kind { Query, Resolution, Late } kind;
     uint64_t query_id, query_position, resolution_position;
     size_t samples;
     double probability;
@@ -32,10 +35,21 @@ class PauseGate {
   enum class Decision { None, SemanticNoHold, BoundedSilence };
   static constexpr uint64_t trigger_samples=10240, commitment_samples=12288, maximum_silence_samples=30720;
   static constexpr double hold_threshold=.01;
-  // A latency target for scheduling/telemetry, not a speech-session deadline.
+  // A latency target told to a scheduler and written in a trace. Nothing
+  // waits by it and nothing ends at it.
   static constexpr auto timeout=std::chrono::milliseconds(250);
+  // The gate's two waits on the executor's thread, for a caller that states
+  // none, a test or a probe: its owner states them (configure_waits; the
+  // session states its settings', which a worker takes from its limits table).
   static constexpr auto decision_timeout=std::chrono::seconds(1);
   static constexpr auto retirement_timeout=std::chrono::seconds(15);
+  // A query still owned at the input's end did not come back inside the
+  // retirement wait. Its owner says which limit that was.
+  struct Unretired : std::runtime_error {
+    explicit Unretired(std::chrono::milliseconds limit)
+        : std::runtime_error("semantic endpoint did not retire in "+std::to_string(limit.count())+" ms"),waited(limit) {}
+    std::chrono::milliseconds waited;
+  };
 
   PauseGate(Submit submit, Record record, uint64_t trace_owner=0)
       : submit_(std::move(submit)),record_(std::move(record)),trace_owner_(trace_owner) {
@@ -49,6 +63,18 @@ class PauseGate {
     commit_ = ((uint64_t(milliseconds)*16+511)/512)*512;
     trigger_ = commit_-2048;
     maximum_ = commit_+18432;
+  }
+  // decision: at a turn's commit point, how long the verdict of the query
+  // submitted for it is waited for, counted from its submission. Past it the
+  // turn ends by silence alone and the verdict, when it comes, is stale.
+  // retirement: at the input's end, how long each query still owned is
+  // waited for; past it close() refuses with Unretired.
+  void configure_waits(std::chrono::milliseconds decision,std::chrono::milliseconds retirement) {
+    if (position_ || !audio_.empty() || pending_ || !retired_.empty())
+      throw std::invalid_argument("pause waits are pinned before session input");
+    if (decision.count()<=0 || retirement.count()<=0)
+      throw std::invalid_argument("pause waits must be stated");
+    decision_=decision; retirement_=retirement;
   }
   uint64_t commitment() const { return commit_; }
   bool pending() const { return bool(pending_); }
@@ -94,12 +120,13 @@ class PauseGate {
       // If inference exceeds its bounded decision budget, keep its ownership
       // as stale evidence and fall back to the acoustic maximum. Neither a
       // busy model nor transport batch timing may fault or move this turn.
-      if (pending_->future.wait_until(pending_->started+decision_timeout)==std::future_status::ready) {
+      if (pending_->future.wait_until(pending_->started+decision_)==std::future_status::ready) {
         const auto probability=resolve(*pending_,false,position);
         pending_.reset(); checked_=true;
         if (probability>hold_threshold) return Decision::SemanticNoHold;
       } else {
         trace(*pending_,"late_acoustic");
+        record_({Event::Kind::Late,pending_->id,pending_->position,position,pending_->samples,0,true});
         retire();checked_=true;
       }
     }
@@ -118,6 +145,7 @@ class PauseGate {
   uint64_t position_=0,next_id_=0;
   uint64_t trigger_=trigger_samples,commit_=commitment_samples,maximum_=maximum_silence_samples;
   bool checked_=false;
+  std::chrono::milliseconds decision_=decision_timeout,retirement_=retirement_timeout;
   uint64_t trace_owner_;
   void trace(const Query& query,const char* phase) const noexcept {
 #ifdef AII_ENDPOINT_TIMING_TRACE
@@ -143,8 +171,8 @@ class PauseGate {
     while (!retired_.empty()) {
       const auto& old=retired_.front();
       if (wait) {
-        if (old.query->future.wait_for(retirement_timeout)!=std::future_status::ready)
-          throw std::runtime_error("semantic endpoint did not retire within 15 seconds");
+        if (old.query->future.wait_for(retirement_)!=std::future_status::ready)
+          throw Unretired(retirement_);
       } else if (old.query->future.wait_for(std::chrono::seconds(0))!=std::future_status::ready) return;
       resolve(*old.query,true,old.position);
       retired_.pop_front();

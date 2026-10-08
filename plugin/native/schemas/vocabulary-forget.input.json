@@ -2,7 +2,7 @@
   "type":"object",
   "description":"Forget the correction for one heard phrase after operator confirmation. Applies from the next session on; transcripts already delivered are not changed. A phrase that has no rule changes nothing and says so.",
   "properties":{
-    "heard":{"type":"string","description":"The heard phrase of the rule to forget, as vocabulary.list shows it; case is ignored.","minLength":1,"maxLength":64},
+    "heard":{"type":"string","description":"The heard phrase of the rule to forget, as vocabulary.list shows it; case is ignored.","minLength":1,"maxLength":64,"pattern":"^[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$"},
     "revision":{"type":"integer","description":"Exact revision returned by vocabulary.list; a stale revision refuses without changing the list.","minimum":0,"maximum":9007199254740991}
   },
   "required":["heard","revision"],

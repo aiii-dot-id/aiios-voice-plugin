@@ -5,6 +5,8 @@ binaries. All shared settings and schemas must agree. Model paths may be
 deduplicated only when the complete declaration agrees. Platform companions
 are retained byte-for-byte and referenced by their existing declarations.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import copy
 import hashlib

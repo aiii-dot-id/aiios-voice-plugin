@@ -53,8 +53,9 @@ struct Owner final : aii::voice::ModelOwner {
 #ifdef AII_WITH_UID
     if(uid)uid->warm();
 #endif
+    // Measured here; what it may take is the caller's to state, and is held
+    // where every owner's warm returns (c_api.cpp, aii_voice_models_warm_within).
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
-    if(ms>40000)throw std::runtime_error("native warm inference exceeded 40 seconds");
     aii_voice_readiness result{};result.models_loaded=4;result.probe_ms=uint32_t(std::max<int64_t>(1,ms));
 #ifdef AII_WITH_UID
     if(uid)result.models_loaded=5;

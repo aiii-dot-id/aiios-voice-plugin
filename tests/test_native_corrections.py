@@ -133,3 +133,71 @@ def test_a_list_the_engine_cannot_hold_leaves_the_session_speaking_uncorrected(t
         assert "opening" not in log  # the diagnostic names the fault, never a rule's words
     finally:
         assert w.close() == 0
+
+
+def test_a_meant_longer_than_a_term_costs_no_session_and_is_said(tmp_path):
+    w = Worker(Path(os.environ["AII_NATIVE_INTERRUPT_FIXTURE"]), tmp_path / "long")
+    try:
+        # Twenty-two CJK characters are a rule (a side is 64 characters at
+        # most) and 66 bytes: more than the recognizer takes as a term, which
+        # is 64 bytes. Such a meant is not offered to it. The session opens,
+        # its readback says how many terms were kept and how many were too
+        # long to offer, and the rule still rewrites what was heard.
+        long_meant = (chr(0x6771) + chr(0x4EAC)) * 11
+        assert len(long_meant) == 22 and len(long_meant.encode()) == 66
+        # Two of the three are too long and one is offered, so the two counts
+        # cannot be taken for each other.
+        ready = open_with(w, "long", document(("Opening", long_meant), ("words", "terms"), ("zzz", long_meant), revision=7))
+        kept = {"revision": 7, "rules": 3, "preferred": 1, "too_long_to_prefer": 2}
+        assert ready["models"]["corrections"] == kept
+        assert w.status("long")["corrections"] == kept
+        finals = [e for e in speak_and_finish(w, "long", 1) if e["type"] == "transcript_final"]
+        assert len(finals) == 1, finals
+        final = finals[0]
+        assert (final["text"], final["recognized_text"], final["corrections"]) == (long_meant + " terms retained", "opening words retained", 2), final
+
+        # The bound is the recognizer's own: a meant of exactly 64 bytes is
+        # offered and kept, one of 65 bytes is not, and neither fails the open.
+        at_the_bound = chr(0xE9) * 32
+        assert len(at_the_bound.encode()) == 64
+        ready = open_with(w, "bound", document(("zzz", at_the_bound), ("yyy", at_the_bound + "a"), revision=8))
+        assert ready["models"]["corrections"] == {"revision": 8, "rules": 2, "preferred": 1, "too_long_to_prefer": 1}
+        for e in speak_and_finish(w, "bound", 2):
+            assert e["text"] in ("opening words", "opening words retained") and "recognized_text" not in e, e
+    finally:
+        assert w.close() == 0
+
+
+def test_what_was_meant_is_written_with_its_joiners_and_what_was_heard_takes_none(tmp_path):
+    w = Worker(Path(os.environ["AII_NATIVE_INTERRUPT_FIXTURE"]), tmp_path / "joined")
+    try:
+        non_joiner, joiner = chr(0x200C), chr(0x200D)
+        # A Persian word is written with its non-joiner, and an emoji made by
+        # joining three with the joiners between them. Both are what a rule
+        # may write, both are offered to the recognizer as terms like any
+        # other, and the transcript holds them exactly as they were taught.
+        persian = "".join(map(chr, (0x645, 0x6CC))) + non_joiner + "".join(map(chr, (0x62E, 0x648, 0x627, 0x647, 0x645)))
+        family = chr(0x1F468) + joiner + chr(0x1F469) + joiner + chr(0x1F467)
+        ready = open_with(w, "joined", document(("Opening", persian), ("words", family), revision=9))
+        assert ready["models"]["corrections"] == {"revision": 9, "rules": 2, "preferred": 2}
+        finals = [e for e in speak_and_finish(w, "joined", 1) if e["type"] == "transcript_final"]
+        assert len(finals) == 1, finals
+        final = finals[0]
+        assert (final["text"], final["recognized_text"], final["corrections"]) == (persian + " " + family + " retained", "opening words retained", 2), final
+
+        # A joiner that joins nothing is not spelling, and what was heard takes
+        # no joiner at all: such a list is one the engine cannot hold.
+        cases = {
+            "last": document(("opening", persian + non_joiner)),
+            "by-a-space": document(("opening", "a " + joiner + "b")),
+            "doubled": document(("opening", "a" + joiner + non_joiner + "b")),
+            "heard": document(("open" + non_joiner + "ing", "x")),
+        }
+        for stream, (name, stored) in enumerate(cases.items(), 2):
+            ready = open_with(w, name, stored)
+            state = ready["models"]["corrections"]
+            assert set(state) == {"unreadable"} and state["unreadable"], (name, state)
+            for e in speak_and_finish(w, name, stream):
+                assert "recognized_text" not in e and "opening" in e["text"], e
+    finally:
+        assert w.close() == 0

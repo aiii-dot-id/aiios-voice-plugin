@@ -3,6 +3,8 @@
 Recorded input and sink delivery evidence only. No browser, device, acoustic
 stop, AII OS conversation or human-quality qualification is claimed here.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 
 import argparse
 import hashlib
@@ -535,7 +537,6 @@ def run(
         ROOT / "tests/plugin_worker_fixture.py",
         ROOT / "tests/plugin_models.py",
         ROOT / "tests/test_plugin_engine.py",
-        ROOT / "plugin/runtime_bootstrap.py",
     ]
     report = {
         "passed": False,

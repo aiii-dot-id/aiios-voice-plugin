@@ -11,7 +11,26 @@ from scripts.windows_signing_targets import CORE_IMAGES
 def test_runtime_budget_is_explicit_and_measures_the_real_dependency_closure():
     rows = {'bin/worker': dict(bytes=100), 'lib/large.so': dict(bytes=2500000000)}
     assert runtime_pack_limits(rows, 3000000000) == dict(installed_bytes=2500000100,
-        files=2, file_bytes=2500000000, depth=3, compressed_bytes=3000000000)
+        files=2, files_budget=4, file_bytes=2500000000, depth=3, compressed_bytes=3000000000)
+
+
+def test_the_files_budget_admits_the_trees_directories_and_the_declared_count_stays_the_files():
+    # The packer and the host's reader count directories with files and admit a
+    # quarter of the budget again for them. A packaged Core ML cache has more
+    # directories than that: 606 files in 365 directories need a budget of 777.
+    from scripts.stage_qualified_runtime import directories, files_budget
+    assert files_budget(606, 365) == 777 and 777 + 777 // 4 == 606 + 365
+    assert files_budget(606, 151) == 606 and files_budget(606, 152) == 607
+    assert files_budget(33, 6) == 33 and files_budget(56, 11) == 56 and files_budget(1, 0) == 1
+    for files, dirs in ((606, 365), (56, 11), (2, 2), (1, 9), (4000, 1)):
+        budget = files_budget(files, dirs)
+        assert budget >= files and budget + budget // 4 >= files + dirs
+        assert budget == files or (budget - 1) + (budget - 1) // 4 < files + dirs
+    rows = {'coreml-cache/m/%d/%d/weights.bin' % (n, n): dict(bytes=1) for n in range(40)}
+    rows['bin/worker'] = dict(bytes=1)
+    assert directories(rows) == 2 + 80 + 1 and directories({'worker': dict(bytes=1)}) == 0
+    limits = runtime_pack_limits(rows, 200)
+    assert limits['files'] == 41 and limits['files_budget'] == files_budget(41, 83) == 100
 
 
 def test_coreml_cache_depth_is_not_the_historical_fixture_ceiling():

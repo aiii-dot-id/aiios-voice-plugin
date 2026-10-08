@@ -12,8 +12,9 @@ import shutil
 import subprocess
 
 from scripts.native_checkpoint_binding import sha, verify_checkpoint
-from scripts.package_native_runtime import bind_carrier, runtime_inventory
+from scripts.package_native_runtime import bind_carrier, refuse_interpreter_profile, runtime_inventory
 from scripts.rebuild_native_checkpoint import parent_bytes, relocate_macos, write_current_settings
+from scripts.runtime_limits import limits_to_state, read_limits_file
 
 
 def main():
@@ -23,8 +24,21 @@ def main():
     p.add_argument('--parent-sha256', required=True)
     p.add_argument('--model-sha256', required=True)
     p.add_argument('--echo', type=Path, help='Prebuilt native echo stage, including licenses')
+    p.add_argument('--limits', type=Path, metavar='FILE',
+                   help='The time limits this set states in its profile: a JSON object of every member '
+                        '(plugin/native/limits.go). Omitted, what the parent states is carried unchanged, '
+                        'and a member it does not state is written at its default')
     a = p.parse_args()
+    # A caller's table is held to the carrier's rules before the parent is
+    # read or anything is written.
+    limits_table, limits_sha256 = read_limits_file(a.limits) if a.limits is not None else (None, None)
     frozen, profile, bindings = parent_bytes(a.parent, a.parent_sha256)
+    # A parent that describes an interpreter is verified like any other, and
+    # is no parent: nothing is staged from one and no output is made.
+    refuse_interpreter_profile(profile)
+    limits = limits_to_state(profile, limits_table)
+    if a.limits is not None:
+        bindings[str(a.limits.resolve())] = limits_sha256
     if profile['platform'] != 'darwin' or profile['arch'] != 'arm64':
         raise ValueError('Mac arm64 parent required')
     if sha(a.model) != a.model_sha256:
@@ -102,7 +116,9 @@ def main():
     install(a.model, a.out/'data/stt/nemotron.gguf')
     models['stt/nemotron.gguf'] = dict(sha256=a.model_sha256, bytes=a.model.stat().st_size)
     updated = copy.deepcopy(profile)
-    updated.update(files=runtime_inventory(runtime, target_platform='darwin'), qualified=False)
+    # The profile states every time limit its carrier and worker wait by:
+    # left out, a package would ship whatever its carrier compiled.
+    updated.update(files=runtime_inventory(runtime, target_platform='darwin'), qualified=False, limits=limits)
     (runtime/'voice-runtime.json').write_text(json.dumps(updated, indent=2)+'\n')
     bind_carrier(runtime, a.out/'carrier-build.json', a.go)
     record = json.loads((a.out/'carrier-build.json').read_text())

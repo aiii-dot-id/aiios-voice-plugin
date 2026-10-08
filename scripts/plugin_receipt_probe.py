@@ -1,4 +1,6 @@
 """Synthetic client observations for SDK tests, never actual browser rendering."""
+from scripts._assertions import require_assertions
+require_assertions()
 
 import time
 

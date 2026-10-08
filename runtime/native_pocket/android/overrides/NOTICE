@@ -1,0 +1,86 @@
+Android Vulkan overrides
+
+These files are development inputs for an Android arm64 build of the speech
+engine's Vulkan backend. No recipe in this repository compiles them: the
+CMakeLists.txt one directory up builds against an engine checkout it is given
+as ENGINE_SOURCE and takes ggml from that checkout. A build that uses the
+overrides puts them in the place of that checkout's Vulkan backend itself.
+
+Each file in this directory is listed here with where it comes from.
+
+ggml-vulkan.cpp
+  A modified copy of ggml's Vulkan backend, src/ggml-vulkan/ggml-vulkan.cpp,
+  which the speech engine carries under external/ggml. ggml is distributed
+  under the MIT License reproduced at the end of this notice; the modified
+  copy stays under that licence. This repository's Apache-2.0 licence covers
+  the three other files in this directory and does not replace ggml's terms
+  for this one.
+
+  Upstream revision: 3174e6b26f11a0e39b4f150961dce98f43ba860d of the speech
+  engine (audio.cpp), which carries ggml's file at
+  external/ggml/src/ggml-vulkan/ggml-vulkan.cpp. ggml's own revision inside
+  that engine is not recorded. The base was established by comparison: the
+  copy here, without its three-line head comment, differs from that file
+  (sha256 bf3ca8dcb06f29e866a430e1d546fd6db200c0291a214508e3d7e459cf1daedf
+  with line ends as here) in thirteen places, 55 lines added and 20 removed,
+  and in nothing else. The file did not enter this repository with that
+  record; it was made afterwards, against an engine source whose pinned
+  files match the revision.
+
+  The thirteen places, all of them:
+    - includes scalar_tile_warp.h and aii_matmul_f32_spv.h (the second is
+      generated from aii_matmul_f32.comp by the build that uses the override);
+    - the device structure gains the member pipeline_aii_matmul_f32;
+    - the scalar matrix-multiply tile configurations (l_warptile, m_warptile,
+      s_warptile) take their warp from aii_scalar_tile_warp() where upstream
+      took it from the hardware subgroup size;
+    - when the environment variable AII_VK_F32_TILED is set, the pipeline
+      aii_matmul_f32_tiled is created from aii_matmul_f32_spv;
+    - where that pipeline exists, a multiplication of two F32 matrices that
+      needs no dequantisation uses it; such a multiplication with contiguous
+      operands is kept off the matrix-vector path; and it is not fused with a
+      following operation, so that the add node is computed and not dropped;
+    - before a result is read back through a host-coherent mapping, a memory
+      barrier from the writing stage to the host's read is recorded: the
+      fence alone says the work ended, not that the host may read it;
+    - the submission that waits for a graph's completion is a real command
+      that carries that dependency with the fence, in place of a submission
+      with no command (five of the thirteen places), because on a physical
+      phone the empty submission returned while mapped output still changed.
+
+scalar_tile_warp.h
+  Written for this project. Apache-2.0, as the repository.
+
+aii_matmul_f32.comp
+  Written for this project: a compute shader for F32 matrix multiplication.
+  Its push-constant block follows the layout the backend passes to its own
+  matrix-multiply shaders. Apache-2.0, as the repository.
+
+narrow_f32_branch.glsl
+  Written for this project: the branch of aii_matmul_f32.comp for a product
+  with one output column. Apache-2.0, as the repository.
+
+--------------------------------------------------------------------------
+ggml
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

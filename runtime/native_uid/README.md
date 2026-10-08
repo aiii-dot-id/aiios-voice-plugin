@@ -89,10 +89,19 @@ cancellation, prompt retirement, fault classification and full-context use.
 The separate instrumented build is recorded with the same numerical/decision
 gate, not an assumed bit-identical build.
 
-This is a native UID component, not a completed native resident or human-level
-UID qualification. The unchanged harder known-speaker subset still rejects
-2/20 examples. Native GPU/target qualification, live/noisy/overlap evidence,
-session composition and the signed browser journey remain required. Keep the
-working GPU implementations and enrolled vectors intact until replacement
-passes those gates. Native semantic endpointing must also preserve the current
-neural turn decision; VAD alone is not an equivalent substitute.
+This is a native UID component, not a human-level UID qualification. In the
+proof recorded here the unchanged harder known-speaker subset still rejected
+2/20 examples. When it was written,
+native GPU/target qualification, live/noisy/overlap evidence, session
+composition and the signed browser journey were still required, and the
+working GPU implementations and enrolled vectors were to stay intact until the
+replacement passed those gates.
+
+Since then the resident session engine in `runtime/native/session` composes
+this component on the three desktops, and every released desktop set since
+0.1.0-beta.7 carries it with the ECAPA binding named above. That is recorded
+with each release; it is not broad speaker-accuracy proof, and overlap
+identity remains unqualified
+([the overlap gate](../../docs/OVERLAP_IDENTITY_GATE.md)). Native semantic
+endpointing must also preserve the current neural turn decision; VAD alone is
+not an equivalent substitute.

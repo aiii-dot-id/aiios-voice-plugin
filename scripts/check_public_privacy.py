@@ -32,6 +32,10 @@ PATTERNS = {
     'attribution-trailer': re.compile(r'(?i)^\s*co-authored-by:'),
     # A pointer to evidence kept outside the tree is a pointer a reader cannot follow.
     'unpublished-evidence': re.compile(r'(?<![\w.-])deliverables[/]'),
+    # So is a finding of a review that is not published, by its number or by
+    # the review's mention. A licence's name has a number's shape and ends in
+    # a version (CC-BY-4.0); that is not one.
+    'unpublished-review': re.compile(r'\b[A-Z]{2,5}-[A-Z]{2,5}-[0-9]{1,3}\b(?![.][0-9])|(?i:\bexternal[ ]review\b)'),
 }
 EMAIL = re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b')
 IPV4 = re.compile(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])')

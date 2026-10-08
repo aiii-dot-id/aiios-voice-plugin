@@ -12,41 +12,44 @@ import (
 	"testing"
 )
 
+// The bound runtime these tests verify and change: the native worker its
+// profile names, and one more bound file that is not executable. The second
+// keeps its name because runtime_path_windows_test.go changes it by name. It
+// is a bound file of the inventory and nothing starts it.
+const (
+	fixtureWorker    = "engine/voice-worker"
+	fixtureBoundFile = "engine/boot.py"
+)
+
 func runtimeFixture(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
 	return runtimeFixtureAt(t, root)
 }
 
+// runtimeFixtureAt writes a native profile, the only kind the carrier
+// starts. It wrote a Python profile until the carrier refused one
+// (runtime_python_profile_test.go keeps that shape, to prove the refusal).
 func runtimeFixtureAt(t *testing.T, root string) (string, string) {
 	t.Helper()
 	files := map[string]runtimeFile{}
-	for name, content := range map[string]string{"python/bin/python": "interpreter", "engine/boot.py": "code"} {
+	for name, content := range map[string]string{fixtureWorker: "native worker", fixtureBoundFile: "code"} {
 		path := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatal(err)
 		}
 		mode := os.FileMode(0644)
-		if name == "python/bin/python" {
+		if name == fixtureWorker {
 			mode = 0755
 		}
 		if err := os.WriteFile(path, []byte(content), mode); err != nil {
 			t.Fatal(err)
 		}
 		h := sha256.Sum256([]byte(content))
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[name] = runtimeFile{hex.EncodeToString(h[:]), int64(len(content)), info.Mode()&0111 != 0}
+		// Stated, not read back from the file: Windows has no execute bit to read.
+		files[name] = runtimeFile{hex.EncodeToString(h[:]), int64(len(content)), name == fixtureWorker}
 	}
-	backend := "mlx"
-	if runtime.GOOS == "windows" {
-		backend = "windows-pocket"
-	} else if runtime.GOOS == "linux" {
-		backend = "cuda"
-	}
-	p := runtimeProfile{Schema: "aiii.voice.native-runtime", Platform: runtime.GOOS, Arch: runtime.GOARCH, Backend: backend, Python: "python/bin/python", Bootstrap: "engine/boot.py", Site: "python/site", Files: files}
+	p := runtimeProfile{Schema: "aiii.voice.native-runtime", Platform: runtime.GOOS, Arch: runtime.GOARCH, Backend: "native", Native: fixtureWorker, Files: files}
 	data, err := json.Marshal(p)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +68,7 @@ func TestPackagedRuntimeRefusesTamper(t *testing.T) {
 			if _, err := verifyRuntime(root, "carrier", digest); err != nil {
 				t.Fatal(err)
 			}
-			code := filepath.Join(root, "engine/boot.py")
+			code := filepath.Join(root, fixtureBoundFile)
 			var err error
 			switch change {
 			case "hash":
@@ -91,9 +94,9 @@ func TestPackagedRuntimeRefusesTamper(t *testing.T) {
 					if err := json.Unmarshal(data, &p); err != nil {
 						t.Fatal(err)
 					}
-					item := p.Files["engine/boot.py"]
+					item := p.Files[fixtureBoundFile]
 					item.Executable = !item.Executable
-					p.Files["engine/boot.py"] = item
+					p.Files[fixtureBoundFile] = item
 					data, err = json.Marshal(p)
 					if err != nil {
 						t.Fatal(err)
@@ -124,9 +127,9 @@ func TestWindowsProducerExecutableMetadata(t *testing.T) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		t.Fatal(err)
 	}
-	// A real Python-produced Windows inventory marks *.exe executable.
-	// The file is deliberately not chmod-executable under Unix.
-	name := "python/protoc.exe"
+	// The packaging scripts that write a Windows inventory mark *.exe
+	// executable. The file is deliberately not chmod-executable under Unix.
+	name := "engine/protoc.exe"
 	path := filepath.Join(root, filepath.FromSlash(name))
 	if err := os.WriteFile(path, []byte("good"), 0644); err != nil {
 		t.Fatal(err)
@@ -144,13 +147,14 @@ func TestWindowsProducerExecutableMetadata(t *testing.T) {
 	digest := hex.EncodeToString(h[:])
 	_, err = verifyRuntime(root, "carrier", digest)
 	if runtime.GOOS != "windows" {
-		if err == nil {
-			t.Fatal("Unix execute mode mismatch accepted")
+		// Refused for the mode it states, and for nothing else about the profile.
+		if err == nil || !strings.Contains(err.Error(), "runtime inventory mismatch: "+name) {
+			t.Fatalf("Unix execute mode mismatch accepted, or refused for another reason: %v", err)
 		}
 		return
 	}
 	if err != nil {
-		t.Fatalf("unchanged Python-produced executable rejected on Windows: %v", err)
+		t.Fatalf("unchanged script-produced executable rejected on Windows: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("evil"), 0644); err != nil {
 		t.Fatal(err)
@@ -175,12 +179,13 @@ func TestPackagedCommandHasNoDeveloperFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmd.Args) != 5 || !reflect.DeepEqual(cmd.Args[1:4], []string{"-I", "-S", "-B"}) {
+	// The bound worker and nothing else: no interpreter, no script, no flag.
+	if len(cmd.Args) != 1 {
 		t.Fatal(cmd.Args)
 	}
 	// Compare actual file identities, not one path spelling. Windows final-path
 	// resolution legitimately returns an extended-length DOS/UNC name.
-	for _, pair := range [][2]string{{cmd.Dir, root}, {cmd.Path, filepath.Join(root, "python/bin/python")}, {cmd.Args[4], filepath.Join(root, "engine/boot.py")}} {
+	for _, pair := range [][2]string{{cmd.Dir, root}, {cmd.Path, filepath.Join(root, fixtureWorker)}, {cmd.Args[0], filepath.Join(root, fixtureWorker)}} {
 		a, e1 := os.Stat(pair[0])
 		b, e2 := os.Stat(pair[1])
 		if e1 != nil || e2 != nil || !os.SameFile(a, b) {
@@ -209,7 +214,7 @@ func TestPackagedCommandHasNoDeveloperFallback(t *testing.T) {
 	old := packagedRuntimeSHA
 	packagedRuntimeSHA = digest
 	t.Cleanup(func() { packagedRuntimeSHA = old })
-	if _, err := workerCommand([]string{"/developer/python"}); err == nil {
+	if _, _, err := workerCommand([]string{"/developer/python"}); err == nil {
 		t.Fatal("packaged override accepted")
 	}
 }
@@ -224,12 +229,16 @@ func TestRuntimePathIsLocal(t *testing.T) {
 
 func TestRuntimeLibrariesAreBoundDirectories(t *testing.T) {
 	root, _ := runtimeFixture(t)
-	p := &runtimeProfile{Files: map[string]runtimeFile{"engine/boot.py": {}}, LibraryDirs: []string{"engine"}}
+	// A directory that is there and holds no bound file.
+	if err := os.MkdirAll(filepath.Join(root, "other/bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	p := &runtimeProfile{Files: map[string]runtimeFile{fixtureBoundFile: {}}, LibraryDirs: []string{"engine"}}
 	dirs, err := runtimeLibraries(root, p)
 	if err != nil || !reflect.DeepEqual(dirs, []string{filepath.Join(root, "engine")}) {
 		t.Fatalf("valid bound library: %v %v", dirs, err)
 	}
-	for _, names := range [][]string{{"/usr/lib"}, {"../outside"}, {"engine", "engine"}, {"python/bin"}, {"engine/boot.py"}} {
+	for _, names := range [][]string{{"/usr/lib"}, {"../outside"}, {"engine", "engine"}, {"other/bin"}, {fixtureBoundFile}} {
 		p.LibraryDirs = names
 		if _, err := runtimeLibraries(root, p); err == nil {
 			t.Fatalf("unbound/unsafe library accepted: %v", names)

@@ -68,6 +68,8 @@ jobs:
         run: python -m scripts.check_source_manifest
       - name: Check source and release-tag history for private data
         run: python -m scripts.check_public_privacy --history
+      - name: Refuse a test module that no gate runs
+        run: python -m pytest -q --fail-on-skips tests/test_every_test_module_has_a_gate.py
       - name: Prove compiled carrier binding is not an appended digest
         run: python -m pytest -q tests/test_carrier_runtime_binding.py tests/test_desktop_audit_declarations.py
       - name: Refuse unqualified portable audio transforms
@@ -78,12 +80,16 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release -DAII_WORKER_FIXTURE=ON
       - name: Verify fixture configuration and parser integrity
         run: python -m pytest -q tests/test_native_fixture_configuration.py
-      - name: Compile resident topology fixture
-        run: cmake --build .build/topology-contracts --target aii_voice_worker_fixture --parallel 4
+      - name: Compile resident topology fixture and the enrollment codec probe
+        run: cmake --build .build/topology-contracts --target aii_voice_worker_fixture aii_uid_snapshot_probe --parallel 4
       - name: Prove worker matches the copied host topology vectors
         env:
           AII_NATIVE_INTERRUPT_FIXTURE: ${{ github.workspace }}/.build/topology-contracts/aii_voice_worker_fixture
         run: python -m pytest -q --fail-on-skips tests/test_native_output_only.py tests/test_native_model_progress.py tests/test_native_settings_packaging.py
+      - name: Hold the Python enrollment codec to the native one
+        env:
+          AII_UID_SNAPSHOT_PROBE: ${{ github.workspace }}/.build/topology-contracts/aii_uid_snapshot_probe
+        run: python -m pytest -q --fail-on-skips tests/test_native_uid_snapshot.py
       - name: Run package and catalog contracts without models or private evidence
         run: >-
           python -m pytest -q --fail-on-skips
@@ -127,3 +133,48 @@ jobs:
           tests/test_distribution_disposition.py
           tests/test_hearing_distribution_disposition.py
           tests/test_third_party_notice_coverage.py
+          tests/test_release_gates_refuse_optimised_python.py
+      - name: Run source, package and release-tool contracts that need only Python
+        run: >-
+          python -m pytest -q --fail-on-skips
+          tests/test_android_override_notice.py
+          tests/test_engine_override_notice.py
+          tests/test_prepare_engine_source.py
+          tests/test_native_checkpoint_binding.py
+          tests/test_native_cuda_speech_candidate.py
+          tests/test_native_desktop_package_audit.py
+          tests/test_native_desktop_sdk_audit.py
+          tests/test_native_package_platforms.py
+          tests/test_native_runtime.py
+          tests/test_native_worker_wire_document.py
+          tests/test_nemotron_composition.py
+          tests/test_python_engine_is_not_built.py
+          tests/test_release_checksums.py
+          tests/test_restore_staged_native_checkpoint.py
+          tests/test_runtime_limits.py
+          tests/test_uid_gallery_readiness.py
+          tests/test_windows_override_notice.py
+      - name: Run the tests of the Python double (not of the engine that ships)
+        run: >-
+          python -m pytest -q --fail-on-skips
+          tests/test_native_async.py
+          tests/test_native_endpoint_backend.py
+          tests/test_native_pocket_backend.py
+          tests/test_native_pocket_profile.py
+          tests/test_native_preview.py
+          tests/test_native_profile.py
+          tests/test_native_resident.py
+          tests/test_native_stream.py
+          tests/test_native_streaming.py
+          tests/test_plugin_cuda_control.py
+          tests/test_python_carrier_liveness.py
+          tests/test_python_speaker_amendment.py
+          tests/test_semantic_endpoint_late.py
+      - name: Compile and run the native ownership, event and trace contracts
+        run: >-
+          python -m pytest -q --fail-on-skips
+          tests/test_native_model_injection.py
+          tests/test_native_owned_runtime_replace.py
+          tests/test_native_speaker_observation.py
+          tests/test_native_tts_phase_trace.py
+          tests/test_uid_backend_binding.py

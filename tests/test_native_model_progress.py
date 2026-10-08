@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from scripts.prove_native_worker_transport import Worker
+from tests.native_limits import limits
 
 
 def open_output(w, sid):
@@ -44,7 +45,8 @@ def test_stalled_models_fault_and_retire_before_recovery(tmp_path):
         assert stubborn.p.poll() == 72, 'unretired inference must end the process nonzero'
         assert time.monotonic() - started >= 29, 'failed before the production call deadline'
         failure = cooperative.event('failure', 'cooperative')
-        assert failure['reason'] == 'synthesis model call exceeded progress deadline'
+        assert failure['reason'] == ('synthesis model call exceeded progress deadline: 30000 ms, the time the '
+                                     'limits table gives it (model_call_ms)')
         assert failure['resources_released'] is True
         assert not stubborn.frames and not cooperative.frames
         assert not any(e['type'] == 'session_end' for e in stubborn.events)
@@ -70,3 +72,28 @@ def test_stalled_models_fault_and_retire_before_recovery(tmp_path):
             if w.p.poll() is None and index == 1:
                 w.p.kill()
             w.close()
+
+
+def test_a_model_call_is_given_the_tables_time(tmp_path):
+    """One model call is given the table's model_call_ms, by the session's
+    watchdog. It was thirty seconds in the session's own header, which the
+    worker never stated, whatever table it was handed. Stated here as 1.5 s: a
+    synthesis that holds fails its session 1.5 s on, and the failure says the
+    time it was given and the member that states it."""
+    stated = 1.5
+    w = Worker(Path(os.environ['AII_NATIVE_INTERRUPT_FIXTURE']), tmp_path / 'held',
+               limits=limits(model_call_ms=int(stated * 1000)))
+    try:
+        open_output(w, 'held')
+        w.call('synthesize', session_id='held', synthesis_id='reply', text='Hold.')
+        w.event('synthesis_start', 'held')
+        began = time.monotonic()
+        failure = w.event('failure', 'held', timeout=10)
+        after = time.monotonic() - began
+        assert failure['reason'] == ('synthesis model call exceeded progress deadline: 1500 ms, the time the '
+                                     'limits table gives it (model_call_ms)'), failure
+        assert failure['resources_released'] is True
+        assert stated - .2 <= after < 6, (
+            f'the session failed {after:.2f} s after its synthesis began to hold; the table gives a model call {stated} s')
+    finally:
+        w.close()

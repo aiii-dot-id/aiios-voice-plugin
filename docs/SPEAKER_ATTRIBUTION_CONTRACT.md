@@ -90,9 +90,15 @@ are not calibrated probabilities. A voice match is never command authority.
 
 The producer keeps at most eight outstanding model-result references and 128
 recent attribution records. A pending public state becomes terminal uncertain
-after 15 seconds (`speaker_match_timeout`); the associated outstanding model
+after the limits table's `speaker_match_ms`, 15 seconds by default
+(`speaker_match_timeout`); the associated outstanding model
 reference stays retained until its caller retires, so a late return cannot
-revive the identity or fault merely because recent history filled up.
+revive the identity or fault merely because recent history filled up. The
+number is stated in the runtime profile's `limits`
+(`plugin/native/limits.go`; `docs/NATIVE_WORKER_WIRE.md` 1.3) and handed to
+the worker, which types none of its own. The observation's reason carries no
+number; the worker's log says which limit passed and its number
+(`AII_VOICE_SPEAKER`, `speaker_match_late`).
 
 Abort/failure retires pending states with `session_aborted` / `session_failed`.
 An unexpectedly missing result on clean termination uses `speaker_result_missing`.

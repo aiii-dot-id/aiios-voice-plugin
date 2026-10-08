@@ -49,8 +49,10 @@ func TestEnrollmentRequiresOperatorAndPreservesSpeechDeadline(t *testing.T) {
 		}
 		delta := c.pending[c.id].deadline.Sub(before)
 		if enrollmentOperation(op) {
-			if delta < 44*time.Second || delta > 46*time.Second {
-				t.Fatal(delta)
+			// What its storage may take, from the table (limits.go). It was
+			// 45 s typed, which two whole reads and a publication could pass.
+			if want := c.limits.storageOperation(); delta < want-time.Second || delta > want+time.Second {
+				t.Fatal(delta, want)
 			}
 		} else if delta < time.Second || delta > 3*time.Second {
 			t.Fatal("speech control acquired enrollment deadline", delta)

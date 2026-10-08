@@ -1,13 +1,28 @@
 """Unmodified native worker transport, fake models; no devices or model inference."""
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse,json,os,queue,struct,subprocess,threading,time,hashlib
 from pathlib import Path
+from scripts.runtime_limits import default_limits,worker_environment
 
 class Worker:
-    def __init__(self,binary,out,drain=True,uid=False,separated=False,anonymous=False):
+    # What a test passes as limits to start a worker with no table at all, as only a probe is started.
+    NO_TABLE=object()
+    def __init__(self,binary,out,drain=True,uid=False,separated=False,anonymous=False,limits=None,stderr=None):
         self.events=[];self.frames=[];self.replies=queue.Queue();self.settings=queue.Queue();self.counter=0
-        self.all=[];self.errors=[];self.control_done=threading.Event();self.out=out;out.mkdir(parents=True,exist_ok=False)
+        # A reply's own question for the settings in force (settings_request with refresh): answered here with
+        # the values its session was opened with, as a host whose settings have not changed would. A test that
+        # changes them sets self.values[session] before the next reply, or takes the questions itself from
+        # self.refreshes after setting self.answer_refresh=False.
+        self.values={};self.refreshes=queue.Queue();self.answer_refresh=True;self.send_lock=threading.Lock()
+        self.all=[];self.errors=[];self.control_done=threading.Event();self.out=out;out.mkdir(parents=True,exist_ok=False);self.reading=threading.Event();self.reading.set()
         r,w=os.pipe();rr,ww=os.pipe();self.input=os.fdopen(w,'wb',buffering=0);self.output=os.fdopen(rr,'rb',buffering=0)
         env={**os.environ};creation={}
+        # The limits table, as a carrier states it: always its own and never one this process inherited. Where
+        # the test passes none it is the table the carrier computes from its defaults (scripts/runtime_limits.py).
+        env.pop('AII_VOICE_LIMITS',None)
+        self.limits=None if limits is Worker.NO_TABLE else worker_environment(default_limits()) if limits is None else limits
+        if self.limits is not None:env['AII_VOICE_LIMITS']=self.limits
         if os.name=='nt':
             import msvcrt
             handles=[msvcrt.get_osfhandle(fd) for fd in (r,ww)]
@@ -15,17 +30,22 @@ class Worker:
             startup=subprocess.STARTUPINFO();startup.lpAttributeList={'handle_list':handles};creation={'startupinfo':startup}
         else:handles=[r,ww];creation={'pass_fds':tuple(handles)}
         env.update(dict(zip(('AII_AUDIO_IN_FD','AII_AUDIO_OUT_FD'),map(str,handles))))
-        self.log=(out/'stderr.log').open('wb')
+        self.log=(out/'stderr.log').open('wb') if stderr is None else stderr  # a test may say what the worker's log is written to
         models=['fixture']*7
         if uid:models[0]=('fixture-separated-anonymous' if anonymous else 'fixture-separated-uid') if separated else 'fixture-uid'
+        models+=list(self.more)
         self.p=subprocess.Popen([str(binary),*models],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.log,bufsize=0,**creation)
         (out/'owner.json').write_text(json.dumps({'pid':self.p.pid,'binary':str(binary),'sha256':hashlib.sha256(Path(binary).read_bytes()).hexdigest()})+'\n')
         os.close(r);os.close(ww)
         def controls():
             try:
                 for raw in self.p.stdout:
-                    row=json.loads(raw);self.all.append(row)
+                    self.reading.wait();row=json.loads(raw);self.all.append(row)  # a test clears self.reading to stop taking the worker's lines
                     if 'event' in row:self.events.append(row['event'])
+                    elif 'settings_request' in row and row['settings_request'].get('refresh'):
+                        q=row['settings_request'];known=self.values.get(q['session_id'])
+                        if self.answer_refresh and known is not None:self.send({'settings_reply':{'id':q['id'],'session_id':q['session_id'],'values':known}})
+                        else:self.refreshes.put(q)
                     elif 'settings_request' in row:self.settings.put(row['settings_request'])
                     else:self.replies.put(row)
             except Exception as e:self.errors.append(repr(e))
@@ -53,7 +73,14 @@ class Worker:
         self.audio_thread=threading.Thread(target=audio,daemon=True) if drain else None
         if self.audio_thread:self.audio_thread.start()
         self.ready=self.replies.get(timeout=8);assert self.ready['ready']['identity']['backend']=='fixture-native'
-    def send(self,row):self.p.stdin.write(json.dumps(row).encode()+b'\n');self.p.stdin.flush()
+    # What a worker is started with after its seven models. A carrier starts one with a speaker policy by
+    # three more: a backend, a speaker model and the policy's file. A test that needs such a worker states
+    # them in a class of its own.
+    more=()
+    def send(self,row):
+        reply=row.get('settings_reply')
+        if reply and 'values' in reply and reply['session_id'] not in self.values:self.values[reply['session_id']]=reply['values']
+        with self.send_lock:self.p.stdin.write(json.dumps(row).encode()+b'\n');self.p.stdin.flush()
     def call(self,op,**args):
         self.counter+=1;begun=time.monotonic();self.send({'id':self.counter,'operation':'speech.session.'+op,'arguments':args})
         row=self.replies.get(timeout=2);assert row['id']==self.counter,row
@@ -82,11 +109,15 @@ class Worker:
     def configure(self,q,pause):self.send({'settings_reply':{**q,'values':{'turn_pause_ms':pause}}})
     def status(self,sid):return self.call('status',session_id=sid)[0]
     def close(self):
+        # The control channel ends first and the audio input stays open until the worker has exited, as it does
+        # behind a carrier: the carrier holds no writing end of that pipe, and the host keeps its own until the
+        # carrier is gone. Ended beside the control, the audio's end could be read first, and a worker closed
+        # with a session open then said its audio endpoint was lost and exited 1.
         if not self.p.stdin.closed:self.p.stdin.close()
-        if not self.input.closed:self.input.close()
         try:code=self.p.wait(timeout=8)
         except subprocess.TimeoutExpired:self.p.kill();self.p.wait(timeout=3);raise
         finally:
+            if not self.input.closed:self.input.close()
             self.thread.join(timeout=1)
             if self.audio_thread:self.audio_thread.join(timeout=1)
             self.output.close();self.log.close()

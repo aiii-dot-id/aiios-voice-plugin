@@ -22,7 +22,8 @@ directory is never used.
 
 ## Choosing one
 
-The setting is pinned for the session, like the voice. When a session asks for
+The setting is pinned for the session. The voice is not: a saved voice is
+taken at the first segment of the next reply. When a session asks for
 a language other than the one loaded, the engine releases the resident speech
 model and loads the requested one before the session opens; one speech model
 is resident at a time. A language is refused, and only that session fails,

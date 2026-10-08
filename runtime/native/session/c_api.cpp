@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 struct aii_voice_models {
   std::unique_ptr<aii::voice::ModelOwner> owner;
@@ -27,6 +29,40 @@ template<class F> aii_voice_result call(aii_voice_error* error,F f) noexcept {
   catch(...) { if(error)copy(error->message,"unknown native embedding failure");return AII_VOICE_FAILED; }
 }
 aii::voice::Session& get(aii_voice_session* s) { need(s!=nullptr,"session required");return *s->session; }
+// The one open. Its caller's waits, where it states them, replace the
+// defaults of session.h and the tail of the control settings; the session
+// refuses one that is out of range.
+aii_voice_result open_session(aii_voice_models* m,const aii_voice_open_options* options,const aii_voice_session_limits* limits,bool stated,aii_voice_session** out,aii_voice_error* e) {
+  return call(e,[&]{need(m && out && !*out,"models and empty output handle required");
+    need(options && options->input_enabled<=1,"open options with strict input_enabled boolean required");
+    need(!stated || limits,"the session's limits are required");
+    bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
+    try {
+      aii::voice::Settings settings;
+      settings.capture_limit_minutes=options->capture_limit_minutes;
+      const auto* c=options->control;
+      const auto* speech=options->speech;
+      if(c) { settings.pause_ms=c->pause_ms;settings.speech_threshold=c->speech_threshold;settings.input_tail_timeout_ms=c->input_tail_timeout_ms; }
+      if(limits) {
+        settings.model_call_timeout_ms=limits->model_call_ms;settings.input_tail_timeout_ms=limits->input_tail_ms;settings.output_take_timeout_ms=limits->output_take_ms;
+        settings.endpoint_decision_timeout_ms=limits->endpoint_decision_ms;settings.endpoint_retire_timeout_ms=limits->endpoint_retire_ms;
+        // Stated: zero is not "keep the recognizer's own" here, it is refused.
+        need(limits->separation_min_ms && limits->separation_max_ms,"the separation budget's bounds are required");
+        settings.separation_minimum_ms=limits->separation_min_ms;settings.separation_maximum_ms=limits->separation_max_ms;
+      }
+      if(speech) {
+        auto bounded=[](const char* p,size_t max) { need(p!=nullptr,"speech setting string required");size_t n=0;while(n<=max && p[n])++n;need(n && n<=max,"speech setting string exceeds bound");return std::string(p,n); };
+        settings.speech={bounded(speech->voice,64),bounded(speech->tts_language,16),bounded(speech->stt_language,16),speech->temperature,speech->seed};
+      }
+      auto h=std::make_unique<aii_voice_session>();h->models=m;
+      std::optional<aii::voice::Hearing> hearing;
+      if(options->input_enabled)
+        hearing.emplace(aii::voice::Hearing{m->owner->recognizer(),m->owner->vad(),m->owner->endpoint(),m->owner->speaker()});
+      h->session=std::make_unique<aii::voice::Session>(m->owner->synthesizer(),settings,hearing);
+      *out=h.release();return AII_VOICE_OK;
+    } catch(...) { m->leased=false;throw; }
+  });
+}
 }
 namespace aii::voice {
 aii_voice_models* wrap_models(std::unique_ptr<ModelOwner> owner) {
@@ -73,9 +109,22 @@ aii_voice_result aii_voice_models_prefer(aii_voice_models* m,const char* const* 
   });
 }
 aii_voice_result aii_voice_models_warm(aii_voice_models* m,aii_voice_readiness* out,aii_voice_error* e) {
+  return aii_voice_models_warm_within(m,aii::voice::default_warm_probe_ms,out,e);
+}
+// A model owner measures its own warm inference. What it may take is its
+// caller's to state, so it is held here, once, for every owner: it was 40
+// seconds typed in each owner, beside the same number in the carrier.
+aii_voice_result aii_voice_models_warm_within(aii_voice_models* m,uint32_t limit_ms,aii_voice_readiness* out,aii_voice_error* e) {
   return call(e,[&]{need(m && out,"models and readiness output required");
+    need(limit_ms>=1,"the time a warm inference may take is required");
     bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
-    try { *out=m->owner->warm();m->leased=false;return AII_VOICE_OK; }
+    try {
+      const auto warmed=m->owner->warm();
+      if(warmed.probe_ms>limit_ms)
+        throw std::runtime_error("native warm inference took "+std::to_string(warmed.probe_ms)+" ms, more than the "+
+            std::to_string(limit_ms)+" ms the limits table gives it (warm_probe_ms)");
+      *out=warmed;m->leased=false;return AII_VOICE_OK;
+    }
     catch(...) { m->leased=false;throw; }
   });
 }
@@ -118,27 +167,10 @@ aii_voice_result aii_voice_open_with_capture_limit(aii_voice_models* m,const aii
   return aii_voice_open_session(m,&options,out,e);
 }
 aii_voice_result aii_voice_open_session(aii_voice_models* m,const aii_voice_open_options* options,aii_voice_session** out,aii_voice_error* e) {
-  return call(e,[&]{need(m && out && !*out,"models and empty output handle required");
-    need(options && options->input_enabled<=1,"open options with strict input_enabled boolean required");
-    bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
-    try {
-      aii::voice::Settings settings;
-      settings.capture_limit_minutes=options->capture_limit_minutes;
-      const auto* c=options->control;
-      const auto* speech=options->speech;
-      if(c) { settings.pause_ms=c->pause_ms;settings.speech_threshold=c->speech_threshold;settings.input_tail_timeout_ms=c->input_tail_timeout_ms; }
-      if(speech) {
-        auto bounded=[](const char* p,size_t max) { need(p!=nullptr,"speech setting string required");size_t n=0;while(n<=max && p[n])++n;need(n && n<=max,"speech setting string exceeds bound");return std::string(p,n); };
-        settings.speech={bounded(speech->voice,64),bounded(speech->tts_language,16),bounded(speech->stt_language,16),speech->temperature,speech->seed};
-      }
-      auto h=std::make_unique<aii_voice_session>();h->models=m;
-      std::optional<aii::voice::Hearing> hearing;
-      if(options->input_enabled)
-        hearing.emplace(aii::voice::Hearing{m->owner->recognizer(),m->owner->vad(),m->owner->endpoint(),m->owner->speaker()});
-      h->session=std::make_unique<aii::voice::Session>(m->owner->synthesizer(),settings,hearing);
-      *out=h.release();return AII_VOICE_OK;
-    } catch(...) { m->leased=false;throw; }
-  });
+  return open_session(m,options,nullptr,false,out,e);
+}
+aii_voice_result aii_voice_open_bounded(aii_voice_models* m,const aii_voice_open_options* options,const aii_voice_session_limits* limits,aii_voice_session** out,aii_voice_error* e) {
+  return open_session(m,options,limits,true,out,e);
 }
 aii_voice_result aii_voice_release(aii_voice_session** s,aii_voice_error* e) {
   return call(e,[&]{need(s && *s,"session handle required");if(!(*s)->session->status().retired)return AII_VOICE_BUSY;
@@ -163,6 +195,25 @@ aii_voice_result aii_voice_cancel_synthesis(aii_voice_session* s,uint64_t id,aii
 aii_voice_result aii_voice_release_generation(aii_voice_session* s,uint64_t id,aii_voice_error* e) {
   return call(e,[&]{get(s).release_generation(id);return AII_VOICE_OK;});
 }
+aii_voice_result aii_voice_speech_pending(aii_voice_session* s,uint32_t wait_milliseconds,aii_voice_error* e) {
+  return call(e,[&]{get(s).speech_pending(wait_milliseconds);return AII_VOICE_OK;});
+}
+aii_voice_result aii_voice_set_speech(aii_voice_session* s,const aii_voice_speech_settings* speech,aii_voice_error* e) {
+  return call(e,[&]{need(speech!=nullptr,"speech settings required");
+    auto bounded=[](const char* p,size_t max) { need(p!=nullptr,"speech setting string required");size_t n=0;while(n<=max && p[n])++n;need(n && n<=max,"speech setting string exceeds bound");return std::string(p,n); };
+    get(s).speech({bounded(speech->voice,64),bounded(speech->tts_language,16),bounded(speech->stt_language,16),speech->temperature,speech->seed});
+    return AII_VOICE_OK;});
+}
+aii_voice_result aii_voice_speech_unchanged(aii_voice_session* s,aii_voice_error* e) {
+  return call(e,[&]{get(s).speech_unchanged();return AII_VOICE_OK;});
+}
+aii_voice_result aii_voice_speech(aii_voice_session* s,aii_voice_speech_state* out,aii_voice_error* e) {
+  return call(e,[&]{need(out!=nullptr,"speech state output required");
+    const auto state=get(s).speech_state();*out={};
+    copy(out->voice,state.speech.voice.c_str());copy(out->refused,state.refused.c_str());
+    out->temperature=state.speech.temperature;out->seed=state.speech.seed;out->revision=state.revision;
+    return AII_VOICE_OK;});
+}
 aii_voice_result aii_voice_playback(aii_voice_session* s,uint64_t id,uint64_t n,uint8_t terminal,uint8_t stopped,aii_voice_error* e) {
   return call(e,[&]{need(terminal<=1 && stopped<=1,"strict boolean required");get(s).playback(id,n,terminal,stopped);return AII_VOICE_OK;});
 }
@@ -179,7 +230,8 @@ aii_voice_result aii_voice_status(aii_voice_session* s,aii_voice_snapshot* out,a
     out->queued_audio_samples=v.queued_audio_samples;out->synthesis_segments=v.synthesis_segments;out->completed_segments=v.completed_segments;
     out->input_finished=v.input_finished;out->synthesizing=v.synthesizing;out->draining=v.draining;
     out->stopping=v.stopping;out->retired=v.retired;out->aborted=v.aborted;out->closing=v.closing;
-    out->cutoff_set=v.cutoff_set;out->recognition_active=v.recognition_active;copy(out->error,v.error.c_str());return AII_VOICE_OK;});
+    out->cutoff_set=v.cutoff_set;out->recognition_active=v.recognition_active;
+    out->model_call_in_flight=v.model_call_in_flight;out->model_calls_ended=v.model_calls_ended;copy(out->error,v.error.c_str());return AII_VOICE_OK;});
 }
 aii_voice_result aii_voice_enrollment_finals(aii_voice_session* s,uint64_t* output,size_t capacity,size_t* required,aii_voice_error* e) {
   return call(e,[&]{need(s&&required&&(output||!capacity),"final discovery arguments required");*required=0;

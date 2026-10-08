@@ -75,6 +75,10 @@ type nativeHost struct {
 	// store, when set, is the host's private store for the three file calls
 	// (vocabulary_test.go); without it every call but settings.get is refused.
 	store *correctionHost
+	// settingsAnswer, when set, is what the host does with a settings read:
+	// the whole frame it answers that call with, or "" to answer nothing.
+	// Without it the host answers its settings. Guarded by mu.
+	settingsAnswer func(id json.RawMessage) string
 }
 
 func startNativeCarrier(t *testing.T, fixture string, env ...string) *nativeHost {
@@ -174,7 +178,14 @@ func (h *nativeHost) read(public *os.File) {
 			}
 			_ = json.Unmarshal(m.Params, &call)
 			if bytes.Contains(m.Params, []byte(`"settings.get"`)) {
-				h.write(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"status":"succeeded","operation_result":{"values":{"turn_pause_ms":768}}}}`, m.ID))
+				h.mu.Lock()
+				answer := h.settingsAnswer
+				h.mu.Unlock()
+				if answer == nil {
+					h.write(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"status":"succeeded","operation_result":{"values":{"turn_pause_ms":768}}}}`, m.ID))
+				} else if frame := answer(m.ID); frame != "" {
+					h.write(frame)
+				}
 			} else if store := h.privateStore(); store != nil && strings.HasPrefix(call.Operation, "fs.") {
 				h.mu.Lock()
 				result, err := store.HostCallTo(context.Background(), call.Operation, call.Target, call.Arguments)
@@ -267,7 +278,7 @@ func TestUnframedAudioWriteRetiresWorkerAndCarrier(t *testing.T) {
 		Reason   string `json:"reason"`
 		Released bool   `json:"resources_released"`
 	}
-	if json.Unmarshal(failure, &reason) != nil || reason.Reason != "native pipe write interrupted/expired" || !reason.Released {
+	if json.Unmarshal(failure, &reason) != nil || reason.Reason != "native pipe write expired: 3000 ms, the time the limits table gives it (audio_write_ms)" || !reason.Released {
 		t.Fatalf("not the audio writer's own deadline: %s", failure)
 	}
 	select {

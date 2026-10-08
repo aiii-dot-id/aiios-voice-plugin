@@ -58,6 +58,45 @@ std::vector<uint32_t> unicode_scalars(const std::string& s) {
   }
   return points;
 }
+namespace {
+// Unicode general categories Cf and Zs, whole, from DerivedGeneralCategory.txt
+// of Unicode 16.0.0; 15.0.0 and 17.0.0 list the same code points.
+constexpr uint32_t format_characters[][2]={
+  {0xad,0xad},{0x600,0x605},{0x61c,0x61c},{0x6dd,0x6dd},{0x70f,0x70f},{0x890,0x891},{0x8e2,0x8e2},{0x180e,0x180e},
+  {0x200b,0x200f},{0x202a,0x202e},{0x2060,0x2064},{0x2066,0x206f},{0xfeff,0xfeff},{0xfff9,0xfffb},
+  {0x110bd,0x110bd},{0x110cd,0x110cd},{0x13430,0x1343f},{0x1bca0,0x1bca3},{0x1d173,0x1d17a},{0xe0001,0xe0001},{0xe0020,0xe007f}};
+constexpr uint32_t spaces[][2]={{0x20,0x20},{0xa0,0xa0},{0x1680,0x1680},{0x2000,0x200a},{0x202f,0x202f},{0x205f,0x205f},{0x3000,0x3000}};
+template<size_t N> bool among(uint32_t c,const uint32_t (&ranges)[N][2]) {
+  for(const auto& range:ranges)if(c>=range[0] && c<=range[1])return true;
+  return false;
+}
+bool joiner(uint32_t c) {return c==0x200c || c==0x200d;}
+}
+// A label is a person's name as an operator reads and confirms it, in any
+// script. It holds no character that ends the line (general categories Cc, Zl
+// and Zp) and no format character (Cf): those have no shape of their own, and
+// hide in a name or turn its neighbours around. Two format characters are
+// ordinary spelling and stay where spelling puts them: the zero width
+// non-joiner and joiner (U+200C, U+200D), inside a word, between two
+// characters that are neither a space (Zs) nor a joiner. Persian and Indic
+// names and joined emoji are written with them.
+//
+// The carrier asks its toolchain's Unicode tables the same question and the
+// operations' input schemas say it as a pattern; spec/uid_label_vectors.json
+// holds the three to one answer. The session's corrections.h lists the same
+// Cc, Cf, Zl and Zp for a correction's text.
+bool readable_label(const std::string& s) {
+  try {
+    const auto points=unicode_scalars(s);
+    const auto joins=[&](size_t at){return !joiner(points[at]) && !among(points[at],spaces);};
+    for(size_t i=0;i<points.size();++i) {
+      const auto c=points[i];
+      if(joiner(c)) {if(i==0 || i+1==points.size() || !joins(i-1) || !joins(i+1))return false;}
+      else if(c<0x20 || (c>=0x7f && c<=0x9f) || c==0x2028 || c==0x2029 || among(c,format_characters))return false;
+    }
+    return true;
+  }catch(const std::invalid_argument&){return false;}
+}
 void validate(const Snapshot& s,const Policy& expected) {
   policy(expected);policy(s.policy);
   const auto& p=s.policy;

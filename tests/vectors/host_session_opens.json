@@ -1,0 +1,255 @@
+{
+  "description": "The speech.session.open a host sends a resident voice engine today, whole, as the host's code builds it. session_topology.json (the host's file, copied byte for byte) says which directions an open may ask for; these entries are the opens themselves, with everything else the host puts in one: the mode word, the handles in the host's form, the capture report, the channel roles, and audio.input.stream, the AUD1 stream number the session's input is written on. They stand in the order one engine process could be sent them: each open with an input declares the next stream number, starting at 1 and never repeated; an open with no input declares none; a refused open's number is not given to a later one. The host keeps no vectors of its whole open, so these were written from the host code named in each entry's source, as the release named in taken_from builds it. Session ids and endpoint numbers are placeholders in the host's form (vs- and 32 hex digits; browser:<n>:mic and browser:<n>:spk). page_request is the page's voice_session message that makes the host build the open, without the members that change nothing in the open (the page's mark that an open followed a gesture). admission is the audio member of this engine's answer where it is not the shared file's confirmed admission for the topology. refused_without is the whole answer of an engine built without the frontend that needs names.",
+  "taken_from": {
+    "host": {
+      "release": "AII OS 0.1.15",
+      "topology_vectors_sha256": "9273c2786e9a71e710963ee80d6727ae959069e78fc68b3270ba5b418313e131",
+      "copied_to": "tests/vectors/session_topology.json",
+      "open_built_by": [
+        "internal/dashboard/static/voice-stream.js StreamLane.open: the page's voice_session open (mode, rate, channels, processing)",
+        "internal/dashboard/voice_stream.go handleVoiceSession: the endpoints browser:<n>:mic and browser:<n>:spk in the page's declared format (8000 to 192000 Hz, 1 or 2 channels); no microphone endpoint for mode output; mode meeting when the page names none",
+        "internal/app/voice_session.go OpenVoiceSession: the session id, the mode (output when there is no microphone; voiceOpenMode otherwise), capture_channel_roles and capture_processing (tested false always, sample_rate only when above 0)",
+        "internal/audio/audio.go Plane.bind: the handles in:<session>:<endpoint> and out:<session>:<endpoint>, the formats of the two endpoints",
+        "internal/pluginhost/voiceaudio.go OpenWithAudio, allocateInputStream, audioOpenArgs: output_handle, input_handle, the audio object, audio.input.stream, and the roles and the report moved under audio.input; audio.input null and no input_handle for a binding with no input",
+        "internal/pluginhost/voicesession.go VoiceSession.open: session_id, and the control speech.session.open"
+      ]
+    },
+    "kit": {
+      "topology_vectors": "vectors/session_topology.json",
+      "pinned_revision": "65c4427527d3701668038088c279104dba83a7e5",
+      "pinned_topology_vectors_sha256": "9273c2786e9a71e710963ee80d6727ae959069e78fc68b3270ba5b418313e131"
+    }
+  },
+  "opens": [
+    {
+      "name": "conversation: a microphone and a speaker, the capture report whole",
+      "source": {
+        "functions": [
+          "internal/app/voice_session.go OpenVoiceSession",
+          "internal/pluginhost/voiceaudio.go audioOpenArgs",
+          "internal/pluginhost/voiceaudio.go allocateInputStream"
+        ],
+        "page_request": {
+          "action": "open",
+          "mode": "conversation",
+          "rate": 48000,
+          "channels": 1,
+          "processing": {
+            "echo_cancellation": true,
+            "noise_suppression": true,
+            "auto_gain_control": true,
+            "sample_rate": 48000
+          }
+        }
+      },
+      "arguments": {
+        "session_id": "vs-00000000000000000000000000000001",
+        "mode": "conversation",
+        "input_handle": "in:vs-00000000000000000000000000000001:browser:1:mic",
+        "output_handle": "out:vs-00000000000000000000000000000001:browser:1:spk",
+        "audio": {
+          "format": "s16le",
+          "input": {
+            "rate": 48000,
+            "channels": 1,
+            "stream": 1,
+            "processing": {
+              "echo_cancellation": true,
+              "noise_suppression": true,
+              "auto_gain_control": true,
+              "tested": false,
+              "sample_rate": 48000
+            }
+          },
+          "output": {
+            "rate": 48000,
+            "channels": 1
+          }
+        }
+      },
+      "topology": "duplex"
+    },
+    {
+      "name": "output: a speaker and no microphone, typed replies spoken",
+      "source": {
+        "functions": [
+          "internal/app/voice_session.go OpenVoiceSession",
+          "internal/pluginhost/voiceaudio.go audioOpenArgs"
+        ],
+        "page_request": {
+          "action": "open",
+          "mode": "output",
+          "rate": 48000,
+          "channels": 1
+        }
+      },
+      "arguments": {
+        "session_id": "vs-00000000000000000000000000000002",
+        "mode": "output",
+        "output_handle": "out:vs-00000000000000000000000000000002:browser:2:spk",
+        "audio": {
+          "format": "s16le",
+          "input": null,
+          "output": {
+            "rate": 48000,
+            "channels": 1
+          }
+        }
+      },
+      "topology": "output_only"
+    },
+    {
+      "name": "conversation with a playback reference: two input channels with their roles",
+      "source": {
+        "functions": [
+          "internal/app/voice_session.go OpenVoiceSession",
+          "internal/pluginhost/voiceaudio.go audioOpenArgs",
+          "internal/pluginhost/voiceaudio.go allocateInputStream",
+          "internal/pluginhost/voice_channel_roles.go validateChannelRoles"
+        ],
+        "page_request": {
+          "action": "open",
+          "mode": "conversation",
+          "rate": 48000,
+          "channels": 2,
+          "processing": {
+            "channel_roles": [
+              "capture",
+              "playback_reference"
+            ],
+            "echo_cancellation": false,
+            "noise_suppression": false,
+            "auto_gain_control": false,
+            "sample_rate": 48000
+          }
+        }
+      },
+      "arguments": {
+        "session_id": "vs-00000000000000000000000000000003",
+        "mode": "conversation",
+        "input_handle": "in:vs-00000000000000000000000000000003:browser:3:mic",
+        "output_handle": "out:vs-00000000000000000000000000000003:browser:3:spk",
+        "audio": {
+          "format": "s16le",
+          "input": {
+            "rate": 48000,
+            "channels": 2,
+            "stream": 2,
+            "channel_roles": [
+              "capture",
+              "playback_reference"
+            ],
+            "processing": {
+              "echo_cancellation": false,
+              "noise_suppression": false,
+              "auto_gain_control": false,
+              "tested": false,
+              "sample_rate": 48000
+            }
+          },
+          "output": {
+            "rate": 48000,
+            "channels": 2
+          }
+        }
+      },
+      "topology": "duplex",
+      "needs": "playback_reference",
+      "admission": {
+        "input": {
+          "rate": 16000,
+          "channels": 2,
+          "channel_roles": [
+            "capture",
+            "playback_reference"
+          ]
+        },
+        "output": {
+          "rate": 24000,
+          "channels": 1
+        }
+      },
+      "refused_without": "native playback-reference processing not included in this runtime"
+    },
+    {
+      "name": "meeting: the same open under the mode word meeting, with no capture report",
+      "source": {
+        "functions": [
+          "internal/app/voice_session.go OpenVoiceSession",
+          "internal/app/voice_session.go voiceOpenMode",
+          "internal/pluginhost/voiceaudio.go audioOpenArgs",
+          "internal/pluginhost/voiceaudio.go allocateInputStream"
+        ],
+        "page_request": {
+          "action": "open",
+          "mode": "meeting",
+          "rate": 44100,
+          "channels": 1
+        }
+      },
+      "arguments": {
+        "session_id": "vs-00000000000000000000000000000004",
+        "mode": "meeting",
+        "input_handle": "in:vs-00000000000000000000000000000004:browser:4:mic",
+        "output_handle": "out:vs-00000000000000000000000000000004:browser:4:spk",
+        "audio": {
+          "format": "s16le",
+          "input": {
+            "rate": 44100,
+            "channels": 1,
+            "stream": 3
+          },
+          "output": {
+            "rate": 44100,
+            "channels": 1
+          }
+        }
+      },
+      "topology": "duplex"
+    },
+    {
+      "name": "conversation: a capture report in which the browser named nothing",
+      "source": {
+        "functions": [
+          "internal/app/voice_session.go OpenVoiceSession",
+          "internal/pluginhost/voiceaudio.go audioOpenArgs",
+          "internal/pluginhost/voiceaudio.go allocateInputStream"
+        ],
+        "page_request": {
+          "action": "open",
+          "mode": "conversation",
+          "rate": 48000,
+          "channels": 1,
+          "processing": {
+            "sample_rate": null
+          }
+        }
+      },
+      "arguments": {
+        "session_id": "vs-00000000000000000000000000000005",
+        "mode": "conversation",
+        "input_handle": "in:vs-00000000000000000000000000000005:browser:5:mic",
+        "output_handle": "out:vs-00000000000000000000000000000005:browser:5:spk",
+        "audio": {
+          "format": "s16le",
+          "input": {
+            "rate": 48000,
+            "channels": 1,
+            "stream": 4,
+            "processing": {
+              "echo_cancellation": null,
+              "noise_suppression": null,
+              "auto_gain_control": null,
+              "tested": false
+            }
+          },
+          "output": {
+            "rate": 48000,
+            "channels": 1
+          }
+        }
+      },
+      "topology": "duplex"
+    }
+  ]
+}

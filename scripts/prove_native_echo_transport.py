@@ -1,4 +1,6 @@
 """Real worker/AEC with explicit fake recognition models; no physical audio."""
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse, json, struct, time
 from pathlib import Path
 from scripts.prove_native_worker_transport import Worker

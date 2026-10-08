@@ -4,6 +4,8 @@ Synthetic PCM only. This is not an installed AII OS, browser, microphone, or
 human-speaker qualification. The Go carrier's descriptor/argument contracts
 are separately tested by plugin/native and prove_plugin_sdk_engine.py.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 
 import base64
 import hashlib

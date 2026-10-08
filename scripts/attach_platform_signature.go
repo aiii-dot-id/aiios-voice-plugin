@@ -9,10 +9,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	pkg "github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiospkg"
 )
+
+// A staged root is a package's own name: its id, a hyphen, its version. The
+// tool took only this plugin's id, and so could not attach a signature to
+// another plugin's package that the same platform key signs. Nothing else
+// here ever depended on the id: the staged tree must be the unsigned bundle
+// byte for byte, and the envelope must sign that package and that manifest.
+var packageRoot = regexp.MustCompile(`^id\.aiii\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$`)
 
 func attach(stage, unsigned, signature, output string) error {
 	stage, err := filepath.Abs(stage)
@@ -20,7 +28,7 @@ func attach(stage, unsigned, signature, output string) error {
 		return err
 	}
 	root := filepath.Base(stage)
-	if !strings.HasPrefix(root, "id.aiii.voice-") {
+	if !packageRoot.MatchString(root) {
 		return errors.New("unexpected package root")
 	}
 	if filepath.Base(unsigned) != root+".aiiospkg" || filepath.Base(output) != root+".aiiospkg" {

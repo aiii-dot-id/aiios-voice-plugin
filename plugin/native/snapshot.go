@@ -8,7 +8,6 @@ import (
 	"errors"
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
 	"strings"
-	"time"
 )
 
 // Fixed, host-owned profile and explicitly requested pending evidence; never a
@@ -62,6 +61,15 @@ func (q snapshotQuery) valid() bool {
 	}
 	return false
 }
+
+// workers says a request names storage that is the WORKER's to read and
+// replace. The correction list is not: the carrier keeps it, under the
+// operator's confirmation of each change (vocabulary.go), and hands a
+// session its copy in the settings reply. The carrier's own calls on the
+// list use this type, so a worker that named the list was served as the
+// carrier is: it could have read and replaced it with no confirmation
+// asked. No worker asks for it; one that does is at fault.
+func (q snapshotQuery) workers() bool { return q.Resource != correctionsResource }
 func (q snapshotQuery) recovery() bool {
 	return strings.HasPrefix(q.Resource, "recovery:") && hexDigest(strings.TrimPrefix(q.Resource, "recovery:"))
 }
@@ -257,8 +265,17 @@ func (c *carrier) startSnapshots() {
 		}
 	}()
 }
+
+// storageNoAnswer is the reason of a query the host did not answer inside
+// its time. It is this carrier's and not one of the host's reason codes.
+const storageNoAnswer = "HOST_STORAGE_NO_ANSWER"
+
 func (c *carrier) readSnapshot(q snapshotQuery, get func(context.Context) (aiiosdk.Object, error)) {
-	ctx, cancel := context.WithTimeout(c.ctx, 1500*time.Millisecond)
+	// The host's time by what the query does: a page read, or a durable
+	// write (stage, publish). It was 1.5 s for all three, and a write is a
+	// file synced, a rename, a directory synced and a record synced: on a
+	// slow disk it could not fit, and the speaker was reported unavailable.
+	ctx, cancel := context.WithTimeout(c.ctx, c.limits.query(q.Action))
 	defer cancel()
 	raw, err := get(ctx)
 	reply := &snapshotReply{settingsQuery: q.settingsQuery}
@@ -270,6 +287,10 @@ func (c *carrier) readSnapshot(q snapshotQuery, get func(context.Context) (aiios
 		var classified snapshotFailure
 		if errors.As(err, &classified) {
 			reply.Reason = classified.reason
+		} else if ctx.Err() != nil && c.ctx.Err() == nil {
+			// The host's time for this query passed. The worker says "late"
+			// for it and not "unavailable" (snapshot_bridge.h StorageLate).
+			reply.Reason = storageNoAnswer
 		}
 	}
 	select {

@@ -3,6 +3,8 @@
 Outputs are validation fixtures, NOT a release catalog or a T3 admission.
 The final catalog must be regenerated from the operator-signed archive.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 from datetime import datetime, timezone
 import json

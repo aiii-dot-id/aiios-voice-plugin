@@ -3,6 +3,8 @@
 This fixture simulates synced receipts. It cannot qualify the real host's disk
 durability, containment, UI or speaker filters. No profile bytes are logged.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import base64
 from datetime import datetime, timezone
 import hashlib

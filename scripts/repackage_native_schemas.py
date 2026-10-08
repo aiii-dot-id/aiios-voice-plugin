@@ -3,6 +3,8 @@
 No signing, installation, native rebuild or inference qualification. A new
 version is assembled from a verified prior bundle and the actual schema files.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import hashlib
 import json

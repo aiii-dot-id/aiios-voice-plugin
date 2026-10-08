@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
@@ -32,7 +33,8 @@ const (
 	correctionsResource = "corrections"
 	correctionsSchema   = "aiii.voice.corrections"
 	maxCorrections      = 64
-	maxCorrectionBytes  = 64
+	maxCorrectionChars  = 64
+	maxCorrectionBytes  = 4 * maxCorrectionChars
 	maxCorrectionWords  = 4
 )
 
@@ -71,15 +73,64 @@ func foldHeard(s string) string {
 	return string(b)
 }
 
+// readable refuses text an operator cannot read as it is written. A rule is
+// confirmed by reading it, and what it writes is read as a speaker's words, so
+// neither side holds a character that ends the line (Unicode's general
+// categories Cc, Zl and Zp) or a format character (Cf), which has no shape of
+// its own and hides in the text or turns its neighbours around: zero-width
+// characters, direction marks and overrides, tags.
+//
+// The worker carries its own list of these (runtime/native/session/
+// corrections.h); this asks the toolchain's Unicode tables. The vectors hold
+// both to one table over every code point, so a toolchain whose Unicode has
+// added to these categories fails a test here and is not shipped apart.
+//
+// A side is counted in characters (code points), as the operations' input
+// schemas count it, so that what an operator is asked to confirm is what the
+// list holds. Four bytes a character bound its bytes.
+//
+// What was meant is written in any script, and two format characters are
+// ordinary spelling there: the zero width non-joiner and joiner. Where joined
+// is set they are taken where spelling puts them, by the rule a speaker's
+// label has (joinerInAWord): Persian and Indic words and joined emoji are
+// written with them. It is set for what was meant only. What was heard takes
+// neither: it is what the recognizer writes, and nothing here establishes
+// that the recognizer writes them.
+func readable(side, line, text string, joined bool) error {
+	if !utf8.ValidString(text) {
+		return errors.New("text must be valid UTF-8")
+	}
+	runes := []rune(text)
+	if len(runes) > maxCorrectionChars {
+		return errors.New(side + " must be 1..64 characters")
+	}
+	for i, r := range runes {
+		if unicode.In(r, unicode.Cc, unicode.Zl, unicode.Zp) {
+			return errors.New(line)
+		}
+		if joined && isJoiner(r) {
+			if !joinerInAWord(runes, i) {
+				return errors.New(side + " holds a joiner outside a word; a joiner is taken only inside a word")
+			}
+			continue
+		}
+		if unicode.Is(unicode.Cf, r) {
+			return errors.New(side + " must not hold format characters, such as zero-width and direction marks")
+		}
+	}
+	return nil
+}
+
 // validateCorrection refuses what the worker would refuse, in the same words
 // where a caller will read them. spec/correction_vectors.json holds both to it.
 func validateCorrection(rule correctionRule) error {
 	h, m := rule.Heard, rule.Meant
+	// The byte bound refuses a longer text for its length before it is read.
 	if len(h) == 0 || len(h) > maxCorrectionBytes {
-		return errors.New("heard must be 1..64 bytes")
+		return errors.New("heard must be 1..64 characters")
 	}
-	if !utf8.ValidString(h) || !utf8.ValidString(m) {
-		return errors.New("text must be valid UTF-8")
+	if err := readable("heard", "heard is words of letters, digits and apostrophes", h, false); err != nil {
+		return err
 	}
 	words := strings.Split(h, " ")
 	for _, word := range words {
@@ -99,15 +150,13 @@ func validateCorrection(rule correctionRule) error {
 		return errors.New("heard is at most four words")
 	}
 	if len(m) == 0 || len(m) > maxCorrectionBytes {
-		return errors.New("meant must be 1..64 bytes")
+		return errors.New("meant must be 1..64 characters")
 	}
 	if m[0] == ' ' || m[len(m)-1] == ' ' {
 		return errors.New("meant must not begin or end with a space")
 	}
-	for i := 0; i < len(m); i++ {
-		if m[i] < 0x20 || m[i] == 0x7f {
-			return errors.New("meant must be one line of text")
-		}
+	if err := readable("meant", "meant must be one line of text", m, true); err != nil {
+		return err
 	}
 	if m == h {
 		return errors.New("heard and meant are the same")
@@ -120,7 +169,10 @@ func parseCorrections(raw []byte) (correctionDocument, error) {
 	var doc correctionDocument
 	var fields map[string]json.RawMessage
 	bad := errors.New("stored correction list is unreadable")
-	if json.Unmarshal(raw, &fields) != nil || len(fields) != 3 {
+	// encoding/json mends bytes that are not UTF-8 into U+FFFD as it decodes.
+	// The worker is handed these same bytes and refuses them, so they are not
+	// listed here as a rule no session would apply.
+	if !utf8.Valid(raw) || json.Unmarshal(raw, &fields) != nil || len(fields) != 3 {
 		return doc, bad
 	}
 	for _, name := range []string{"schema", "revision", "rules"} {
@@ -163,7 +215,7 @@ func (d correctionDocument) result(changed *bool) map[string]any {
 	}
 	body := map[string]any{
 		"revision": d.Revision, "rules": rules,
-		"limits":  map[string]any{"rules": maxCorrections, "bytes": maxCorrectionBytes, "heard_words": maxCorrectionWords},
+		"limits":  map[string]any{"rules": maxCorrections, "characters": maxCorrectionChars, "heard_words": maxCorrectionWords},
 		"applies": "next_session",
 	}
 	if changed != nil {
@@ -342,13 +394,14 @@ func (c *carrier) vocabularyStore(control *aiiosdk.Control) {
 	c.mu.Unlock()
 	go func() {
 		defer c.workers.Done()
-		ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
-		defer cancel()
-		// One change at a time: two confirmed acts never read the same base.
-		c.vocabulary.Lock()
-		defer c.vocabulary.Unlock()
-		result, err := vocabularyCall(ctx, control.Session, control.Op, control.Args)
-		control.Answer(result, err)
+		// The table's time for one of this carrier's own storage operations
+		// (ownStorageCall), the wait for an earlier change included.
+		control.Answer(c.ownStorageCall(func(ctx context.Context) (any, error) {
+			// One change at a time: two confirmed acts never read the same base.
+			c.vocabulary.Lock()
+			defer c.vocabulary.Unlock()
+			return vocabularyCall(ctx, control.Session, control.Op, control.Args)
+		}))
 	}()
 }
 
@@ -364,6 +417,11 @@ func vocabularyCall(ctx context.Context, session privateStorageCaller, op string
 		Heard    string  `json:"heard"`
 		Meant    string  `json:"meant"`
 		Revision *uint64 `json:"revision"`
+	}
+	// A rule is judged on the bytes that were sent: decoding would mend what is
+	// not UTF-8 into U+FFFD before validateCorrection could refuse it.
+	if !utf8.Valid(args) {
+		return nil, errors.New("text must be valid UTF-8")
 	}
 	if json.Unmarshal(args, &request) != nil || request.Revision == nil {
 		return nil, errors.New("heard and a whole-number revision required; call vocabulary.list")
@@ -394,8 +452,8 @@ func vocabularyCall(ctx context.Context, session privateStorageCaller, op string
 			doc.Rules, changed = append(doc.Rules, rule), true
 		}
 	case "vocabulary.forget":
-		if request.Heard == "" || len(request.Heard) > maxCorrectionBytes {
-			return nil, errors.New("heard must be 1..64 bytes")
+		if request.Heard == "" || len(request.Heard) > maxCorrectionBytes || utf8.RuneCountInString(request.Heard) > maxCorrectionChars {
+			return nil, errors.New("heard must be 1..64 characters")
 		}
 		if at >= 0 {
 			doc.Rules, changed = append(doc.Rules[:at:at], doc.Rules[at+1:]...), true

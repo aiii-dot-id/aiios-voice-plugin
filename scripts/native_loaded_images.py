@@ -1,4 +1,6 @@
 """Read actual loaded native images for a recorded desktop gate."""
+from scripts._assertions import require_assertions
+require_assertions()
 import ctypes
 import json
 from pathlib import Path
@@ -46,11 +48,27 @@ def observe_linux(parent,binary):
     assert set(owned)==set(names),owned
     return {'pid':pid,'parent_pid':parent,'exe':str(exe),'images':paths,'native_images':owned,'maps':maps}
 
+def windows_children_command(parent):
+    """The PowerShell that lists a process's own children.
+
+    Windows keeps a parent's number in a child after that parent has ended,
+    and gives the number out again. A process whose parent number equals this
+    one's may therefore be older than it and none of its own: only a process
+    created no earlier than the parent is its child."""
+    number=int(parent)
+    return (f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId = {number}'; "
+            f"@(Get-CimInstance Win32_Process -Filter 'ParentProcessId = {number}' | "
+            "Where-Object { $p -and $_.CreationDate -ge $p.CreationDate } | "
+            "Select-Object ProcessId,ExecutablePath) | ConvertTo-Json -Compress")
+
+def windows_children(parent,run=subprocess.check_output):
+    listed=run(['powershell.exe','-NoProfile','-Command',windows_children_command(parent)],text=True,timeout=20)
+    children=json.loads(listed.strip() or '[]')  # no child is no output at all
+    return [children] if isinstance(children,dict) else children
+
 def observe_windows(parent, binary):
     """Read the actual child images, not merely the intended link inputs."""
-    command=f"@(Get-CimInstance Win32_Process -Filter 'ParentProcessId = {int(parent)}' | Select-Object ProcessId,ExecutablePath) | ConvertTo-Json -Compress"
-    children=json.loads(subprocess.check_output(['powershell.exe','-NoProfile','-Command',command],text=True,timeout=20))
-    if isinstance(children,dict):children=[children]
+    children=windows_children(parent)
     # The bound carrier opens by resolved file identity. Win32 may report
     # that executable with the extended-length prefix; spelling is not identity.
     assert len(children)==1 and Path(children[0]['ExecutablePath']).samefile(binary/'aii_voice_worker.exe'),children

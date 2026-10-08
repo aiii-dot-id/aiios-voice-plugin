@@ -1,9 +1,9 @@
 # Overlap identity: safety repair and remaining qualification
 
-Status: **not qualified for reliable overlap identity**. The installed release
-and any deployment approval are separate from this source branch. The released
-and installed runtime does not enable separation. An opt-in private resident
-composition is described below; it has not passed release acceptance.
+Status: **not qualified for reliable overlap identity**. Released desktop sets
+select the resident separation composition described below through their
+sealed hearing profile. That is a release decision recorded with each release;
+it is not a passed overlap-identity gate, and nothing here makes it one.
 
 ## Repaired production boundary
 
@@ -234,7 +234,9 @@ and 16.04 ms respectively; the same owners then processed all nine inputs.
 Those are two tested points, not an all-phase interruption guarantee. On the
 tested Mac, medians were 3.92 seconds for separation and 3.03 seconds for
 recognition, 6.93 seconds combined. **This finite offline path is not acceptable
-interactive latency and is not enabled in the shipped plugin.**
+interactive latency.** What the released sets select is the resident
+composition described below, under its own latency budget; that selection is a
+release decision recorded with each release, not a passed overlap-identity gate.
 
 The probe takes graph root, mel table, 1,024 framed tokens, Nemotron model and
 device, separator ONNX, separator thread count and CUDA device (-1 for CPU),
@@ -369,9 +371,10 @@ is retired and the next turn separates normally. Cancellation, a progress
 refusal and an invalid source result still fail the turn.
 
 Separation is best effort under a latency budget. One separator call may use
-5 times the separated audio's duration, clamped to 4 through 25 seconds
-(`SeparationBudget`: 25 s for the 80,003-sample window), which stays below the
-30 s model-call watchdog. CPU separation of one 5 s window was measured at
+5 times the separated audio's duration, clamped to 4 through 25 seconds by
+default (`SeparationBudget`: 25 s for the 80,003-sample window; the limits
+table's `separation_min_ms` and `separation_max_ms`), which the table holds
+below the model-call watchdog's time, 30 s by default. CPU separation of one 5 s window was measured at
 7.0-7.3 s on a Ryzen 9 7950X3D desktop, 9-11 s on an Ubuntu laptop (Core Ultra
 7 155H) at full clocks, about 12 s at the 2.35 GHz it averaged under a
 sustained lifecycle run, and 30-45 s while its firmware capped package power at
@@ -434,8 +437,9 @@ Observed finalization in this later shared-machine run ranged from 2.4 to
    inputs. This is not sufficient latency headroom or proof of long-input,
    late-cancellation, memory and installed lifecycle bounds. The staged Mac
    adapter has only finite-input qualification; Windows' compatible runtime still requires full-worker
-   integration. The opt-in resident composition above is not enabled in the
-   released or installed plugin.
+   integration. The released desktop sets select the resident composition
+   above through their sealed hearing profile, by a release decision recorded
+   with each release; that is not a pass of this item.
 2. **Short-speech identity.** One-second diagnostics lost many correct clean,
    noisy and microphone-shift matches. Lowering the production duration floor
    is not justified. Concatenating speech merely because it occupied the same

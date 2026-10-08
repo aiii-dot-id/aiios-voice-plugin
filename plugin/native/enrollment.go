@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
 )
@@ -24,6 +26,11 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 	var fields map[string]json.RawMessage
 	if len(args) > 4096 || json.Unmarshal(args, &fields) != nil || fields == nil {
 		return errors.New("bounded enrollment arguments required")
+	}
+	// A label is judged on the bytes that were sent. Bytes that are not UTF-8
+	// are refused in those words, before anything is read from them.
+	if (op == "speaker.enroll" || op == "speaker.associate") && !utf8.Valid(args) {
+		return errors.New("text must be valid UTF-8")
 	}
 	allowed := map[string]bool{"session_id": true}
 	if op == "speaker.associate" || op == "speaker.forget" || op == "speaker.link" {
@@ -51,6 +58,9 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 			if !ok || len(label) > 512 {
 				return errors.New("display_label required; empty clears the current label")
 			}
+			if !readableLabel(label) {
+				return errors.New("display_label holds a control or format character; a joiner is taken only inside a word")
+			}
 			if _, present := fields["external_id"]; present {
 				if value, ok := args.String("external_id"); !ok || len(value) > 512 {
 					return errors.New("bounded external_id string required")
@@ -67,6 +77,10 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 	if op == "speaker.enroll" {
 		allowed["label"] = true
 		allowed["finals"] = true
+		// Whether there is a label, and how long it may be, is the worker's to say.
+		if label, ok := args.String("label"); ok && !readableLabel(label) {
+			return errors.New("label holds a control or format character; a joiner is taken only inside a word")
+		}
 	}
 	if op == "speaker.enroll" || op == "speaker.discard_capture" {
 		allowed["capture_id"] = true
@@ -125,6 +139,51 @@ func validateEnrollment(op string, args aiiosdk.Object) error {
 	}
 	return nil
 }
+
+// isJoiner reports one of the two format characters that are ordinary
+// spelling: the zero width non-joiner and joiner (U+200C, U+200D).
+func isJoiner(r rune) bool { return r == 0x200C || r == 0x200D }
+
+// joinerInAWord reports whether the joiner at runes[i] stands where spelling
+// puts one: inside a word, between two characters that are neither a space
+// (Zs) nor a joiner. A speaker's label and what a correction meant are held
+// to this one rule.
+func joinerInAWord(runes []rune, i int) bool {
+	joins := func(r rune) bool { return !isJoiner(r) && !unicode.Is(unicode.Zs, r) }
+	return i > 0 && i < len(runes)-1 && joins(runes[i-1]) && joins(runes[i+1])
+}
+
+// readableLabel reports whether a speaker's label is text an operator can read
+// as it is written. A label is a person's name in any script, shown to the
+// operator who confirms it. It holds no character that ends the line
+// (Unicode's general categories Cc, Zl and Zp) and no format character (Cf),
+// which has no shape of its own and hides in a name or turns its neighbours
+// around. Two format characters are ordinary spelling and stay where spelling
+// puts them: the zero width non-joiner and joiner (U+200C, U+200D), inside a
+// word, between two characters that are neither a space (Zs) nor a joiner.
+// Persian and Indic names and joined emoji are written with them.
+//
+// The worker judges a label the same way (runtime/native_uid/identity.cpp),
+// and so do the input schemas, which are what the host holds a call to before
+// the operator is asked. spec/uid_label_vectors.json holds all three to one
+// answer. A label already stored is not judged again: it is read as stored.
+func readableLabel(label string) bool {
+	if !utf8.ValidString(label) {
+		return false
+	}
+	runes := []rune(label)
+	for i, r := range runes {
+		if isJoiner(r) {
+			if !joinerInAWord(runes, i) {
+				return false
+			}
+		} else if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return false
+		}
+	}
+	return true
+}
+
 func speakerUUID(s string) bool {
 	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' || s[14] != '4' || !strings.ContainsRune("89ab", rune(s[19])) {
 		return false

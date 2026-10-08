@@ -46,7 +46,7 @@ Json SnapshotBridge::page(uint64_t offset,bool digest,Clock::time_point deadline
   auto q=object();put(q,"offset",number(offset));put(q,"digest",boolean(digest));
   return exchange(std::move(q),deadline,store,archive);
 }
-Json SnapshotBridge::exchange(Json query,Clock::time_point deadline,Store store,const std::string& archive) {
+Json SnapshotBridge::exchange(Json query,Clock::time_point deadline,Store store,const std::string& archive,bool write) {
   (void)store_limit(store);
   require((store==Store::Recovery||store==Store::Waveform) ?
       archive.size()==64&&archive.find_first_not_of("0123456789abcdef")==std::string::npos : archive.empty(),
@@ -64,7 +64,10 @@ Json SnapshotBridge::exchange(Json query,Clock::time_point deadline,Store store,
   put(query,"id",number(pending_));put(query,"session_id",string(session_));
   put(message,"snapshot_request",std::move(query));
   l.unlock();send_(std::move(message));l.lock();
-  const auto limit=std::min(deadline,Clock::now()+std::chrono::seconds(2));
+  // The carrier answers every query, late or not, inside the host's time
+  // for its kind; this waits a margin longer than that, by the carrier's own
+  // table. It was two seconds for a read and a durable write alike.
+  const auto limit=std::min(deadline,Clock::now()+(write?limits_.exchange_write:limits_.exchange_read));
   if(!changed_.wait_until(l,limit,[&]{return !live_||!cJSON_IsNull(reply_.get());})||!live_)
     throw std::runtime_error("UID snapshot read cancelled/deadline");
   pending_=0;return std::move(reply_);
@@ -77,10 +80,17 @@ void SnapshotBridge::acquire(Clock::time_point deadline) {
   busy_=true;
 }
 void SnapshotBridge::release() noexcept {
-  std::lock_guard<std::mutex> l(mutex_);busy_=false;pending_=0;changed_.notify_all();
+  std::lock_guard<std::mutex> l(mutex_);busy_=false;pending_=0;++completed_;changed_.notify_all();
+}
+SnapshotBridge::Activity SnapshotBridge::activity() {
+  std::lock_guard<std::mutex> l(mutex_);return {busy_,completed_};
+}
+static bool late(const cJSON* reply) {
+  const auto* reason=field(reply,"reason_code");
+  return cJSON_IsString(reason)&&std::string(reason->valuestring)==kHostStorageNoAnswer;
 }
 std::string SnapshotBridge::read(bool* absent,Store store,const std::string& archive) {
-  const auto deadline=Clock::now()+std::chrono::seconds(10);
+  const auto deadline=Clock::now()+limits_.whole_read;
   acquire(deadline);try{auto bytes=read_owned(absent,deadline,store,archive);release();return bytes;}
   catch(...){release();throw;}
 }
@@ -93,6 +103,7 @@ std::string SnapshotBridge::read_owned(bool* absent,Clock::time_point deadline,S
     if(field(result.get(),"error")) {
       const auto* reason=field(result.get(),"reason_code");
       if(absent&&bytes.empty()&&cJSON_IsString(reason)&&std::string(reason->valuestring)=="FS_NOT_FOUND") {*absent=true;return {};}
+      if(late(result.get()))throw StorageLate("the host's storage did not answer in time; nothing was read");
       throw Refused("authoritative UID snapshot unavailable; no enrollment change");
     }
     require(cJSON_IsObject(p),"snapshot page required");
@@ -125,26 +136,30 @@ Json SnapshotBridge::publish(const std::string& candidate,const std::string& exp
   require((absent&&expected.empty())||(!absent&&expected.size()==64&&expected.find_first_not_of("0123456789abcdef")==std::string::npos),"explicit base generation required");
   if(store==Store::Recovery)require(picosha2::hash256_hex_string(candidate)==archive&&
       (absent||expected==archive),"recovery archive is immutable and content addressed");
-  const auto deadline=Clock::now()+std::chrono::seconds(30);
+  const auto deadline=Clock::now()+limits_.whole_publication;
   acquire(deadline);bool publication_sent=false;
   try {
     for(size_t offset=0;offset<candidate.size();offset+=65536) {
       const auto n=std::min<size_t>(65536,candidate.size()-offset);
       auto q=object();put(q,"action",string("stage"));put(q,"upload",string(upload));
       put(q,"append",boolean(offset!=0));put(q,"data_b64",string(aii::uid::encode_base64(std::string_view(candidate).substr(offset,n))));
-      auto receipt=exchange(std::move(q),deadline,store,archive);check(!field(receipt.get(),"error"),name+" upload refused; no publication requested");
+      auto receipt=exchange(std::move(q),deadline,store,archive,true);
+      if(late(receipt.get()))throw StorageLate(name+" upload: the host's storage did not answer in time; no publication requested");
+      check(!field(receipt.get(),"error"),name+" upload refused; no publication requested");
       const auto* v=field(receipt.get(),"value");
       check(integer(field(v,"bytes"),65536)==n&&integer(field(v,"size"),limit)==offset+n,name+" upload extent differs; no publication requested");
     }
     const auto digest=picosha2::hash256_hex_string(candidate);
     auto q=object();put(q,"action",string("publish"));put(q,"upload",string(upload));put(q,"sha256",string(digest));
     if(absent)put(q,"expected_absent",boolean(true));else put(q,"expected_sha256",string(expected));
-    publication_sent=true;auto receipt=exchange(std::move(q),deadline,store,archive);
+    publication_sent=true;auto receipt=exchange(std::move(q),deadline,store,archive,true);
     if(field(receipt.get(),"error")) {
       const auto* code=field(receipt.get(),"reason_code");
       if(cJSON_IsString(code)&&(std::string(code->valuestring)=="FS_GENERATION_MISMATCH"||std::string(code->valuestring)=="FS_DIGEST_MISMATCH")) {
         publication_sent=false;throw Refused(name+" generation/digest conflict; not published, obtain a fresh confirmation");
       }
+      // Sent and not answered in time: the file may or may not have changed.
+      if(late(receipt.get()))throw StorageLate(name+" publication: the host's storage did not answer in time");
       throw Refused(name+" publication unavailable");
     }
     auto* v=field(receipt.get(),"value");
@@ -155,7 +170,17 @@ Json SnapshotBridge::publish(const std::string& candidate,const std::string& exp
     check(read_owned(nullptr,deadline,store,archive)==candidate,"published "+name+" readback differs");
     auto result=clone(v);put(result,"readback_verified",boolean(true));
     release();return result;
-  }catch(const std::exception& e){release();if(publication_sent)throw Refused(name+" publication/readback unresolved; do not assume unchanged or retry automatically");throw;}
+  }catch(const std::exception& e){
+    release();
+    if(publication_sent) {
+      // Unresolved either way; it stays "late" when lateness is why, so the
+      // caller can say which.
+      const auto text=name+" publication/readback unresolved; do not assume unchanged or retry automatically";
+      if(dynamic_cast<const StorageLate*>(&e))throw StorageLate(text);
+      throw Refused(text);
+    }
+    throw;
+  }
   catch(...){release();throw;}
 }
 aii_voice_result SnapshotBridge::callback(void* p,char* bytes,size_t capacity,size_t* written) noexcept {
@@ -166,6 +191,7 @@ aii_voice_result SnapshotBridge::callback(void* p,char* bytes,size_t capacity,si
     if(absent)return AII_VOICE_AGAIN; // typed absence, never a fabricated unreadable profile
     if(raw.size()>capacity)return AII_VOICE_CAPACITY;
     std::memcpy(bytes,raw.data(),raw.size());*written=raw.size();return AII_VOICE_OK;
-  }catch(...){return AII_VOICE_FAILED;}
+  }catch(const StorageLate&){return AII_VOICE_BUSY;} // late, not unreadable (c_api.h)
+  catch(...){return AII_VOICE_FAILED;}
 }
 }

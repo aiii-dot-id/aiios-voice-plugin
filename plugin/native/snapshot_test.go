@@ -158,3 +158,23 @@ func TestSnapshotWaitCancelledOnRetirement(t *testing.T) {
 		t.Fatal("snapshot wait survived carrier")
 	}
 }
+
+// THE CORRECTION LIST IS NOT THE WORKER'S. The carrier keeps it under the
+// operator's confirmation and uses the storage request's type for its own
+// calls, so the wire served a worker that named it. What a worker may name
+// is still served; the carrier's own query is still well formed.
+func TestTheCorrectionListIsNotAWorkersToReadOrReplace(t *testing.T) {
+	own := correctionsQuery()
+	if !own.valid() {
+		t.Fatal("the carrier's own query on the correction list is no longer well formed")
+	}
+	if own.workers() {
+		t.Fatal("the correction list is served to a worker that names it")
+	}
+	for _, resource := range []string{"", "captures", "speaker_registry", "recovery:" + strings.Repeat("a", 64), "waveform:" + strings.Repeat("b", 64)} {
+		q := snapshotQuery{settingsQuery: settingsQuery{1, "s"}, Resource: resource}
+		if !q.valid() || !q.workers() {
+			t.Errorf("storage that is the worker's (%q) is refused: valid %v, the worker's %v", resource, q.valid(), q.workers())
+		}
+	}
+}

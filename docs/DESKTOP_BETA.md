@@ -35,11 +35,11 @@ multilingual recognition, biometric authentication or a mobile release.
 4. Open Speech settings, select AII Voice and the desired voice and pause.
    Start a new speech session and check the engine's effective settings.
 
-The unified package is about 9.6 MB. Platform companions are approximately
-12.4 MB (macOS), 26.8 MB (Ubuntu) or 112.9 MB (Windows), before extraction;
-selected models/data are roughly 3.1 GB per platform. Extraction, download
-cache, installed runtime and update rollback need additional space. These
-figures are not RAM or GPU-memory requirements. The signed release declares
+The unified package is about 9.6 MB. A desktop has more than one runtime set
+(Full, Small and, on Linux and Windows, a CPU-only Small), and the host
+downloads only the set it selects, with that set's models. Extraction, download
+cache, installed runtime and update rollback need additional space. Download
+sizes are not RAM or GPU-memory requirements. The signed release declares
 exact byte counts and reservations; no unmeasured GPU-memory peak is promised.
 
 Ubuntu 24.04 may require the host's documented bubblewrap AppArmor profile.
@@ -53,12 +53,15 @@ notarization. T3 package verification is a separate check on every platform.
 ## Operator settings
 
 These settings are emitted by the compiled worker, packaged unchanged and
-read back from the opened session. Save changes, then start a new session;
-there is no promise of applying them mid-utterance.
+read back from the opened session. A saved voice, variation or seed is taken
+at the first segment of the next reply, never inside a reply. The speaking
+language and every hearing setting (recognition language, turn pause, capture
+limit, VAD threshold) apply at the next session: save the change, then start a
+new session.
 
 | Setting | Meaning |
 | --- | --- |
-| TTS voice | Select one of the twenty declared reference voices. All segments reuse it. |
+| TTS voice | Select one of the twenty declared reference voices. All segments of a reply use the same one. |
 | Speaking language | English, and six more where their models are installed; see [speaking languages](SPEAKING_LANGUAGES.md). No unsupported locale is advertised. |
 | Recognition language | English in this release. |
 | Turn pause | Silence allowance before committing a conversational turn. |

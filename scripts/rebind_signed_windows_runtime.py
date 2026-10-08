@@ -16,7 +16,7 @@ import struct
 import subprocess
 
 from scripts.native_checkpoint_binding import sha, verify_checkpoint
-from scripts.package_native_runtime import bind_carrier, runtime_inventory, verify
+from scripts.package_native_runtime import bind_carrier, refuse_interpreter_profile, runtime_inventory, verify
 from scripts.windows_signing_targets import signing_targets
 
 SUBJECT = 'CN=AIII, O=AIII, L=Westford, S=Massachusetts, C=US'
@@ -122,6 +122,9 @@ def prepare(parent, signing, out, go, signtool):
     frozen_path = parent/'freeze.json'; parent_sha = sha(frozen_path)
     frozen = json.loads(frozen_path.read_text())
     profile = verify(parent/'runtime', frozen['runtime_manifest_sha256'])
+    # A parent that describes an interpreter is verified like any other, and
+    # is no parent: no signed set is rebound from one and no output is made.
+    refuse_interpreter_profile(profile)
     require(profile['platform'] == 'windows' and profile['arch'] == 'amd64', 'not a Windows checkpoint')
     old_build = json.loads((parent/'carrier-build.json').read_text())
     require(old_build['carrier_sha256'] == sha(parent/'runtime/aii-voice-t3.exe') == frozen['carrier_sha256'], 'parent carrier differs')

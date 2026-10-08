@@ -283,6 +283,8 @@ RegistryChange bind_enrolled_speaker(const std::string& raw,const PolicyDocument
 RegistryChange associate_speaker(const std::string& raw,const PolicyDocument& p,uint64_t expected,
     const std::string& id,const std::string& label,const std::string& external_id) {
   auto r=read_registry(raw,p);require(r.revision==expected,"stale speaker registry revision");uuid(id);text(label);text(external_id);
+  // The label is judged as it is given; the history keeps what was stored.
+  require(readable_label(label),"speaker label holds a control or format character; a joiner is taken only inside a word");
   const auto found=std::find_if(r.buckets.begin(),r.buckets.end(),[&](const auto& b){return b.uuid==id;});
   require(found!=r.buckets.end(),"speaker UUID not found");
   if((found->associations.empty()&&!found->enrollment&&label.empty()&&external_id.empty())||

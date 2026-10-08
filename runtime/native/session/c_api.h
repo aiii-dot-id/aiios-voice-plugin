@@ -42,8 +42,12 @@ typedef struct aii_voice_open_options {
 typedef struct aii_voice_snapshot {
   uint64_t received, controlled, recognized, generation, sequence, cutoff;
   uint64_t queued_audio_samples, synthesis_segments, completed_segments;
+  /* Model calls the session's watchdog has given back, and whether it holds
+   * one now. A call in flight has its own limit, so a caller's idle limit
+   * does not speak while one is. */
+  uint64_t model_calls_ended;
   uint8_t input_finished, synthesizing, draining, stopping, retired, aborted;
-  uint8_t closing, cutoff_set, recognition_active;
+  uint8_t closing, cutoff_set, recognition_active, model_call_in_flight;
   char error[512];
 } aii_voice_snapshot;
 typedef struct aii_voice_generation {
@@ -74,6 +78,11 @@ typedef struct aii_voice_capture {
   // Unused tail stays zero and is never serialized or used in comparisons.
   double embedding[256];
 } aii_voice_capture;
+/* FROM A STORAGE CALLBACK (the snapshot reader, the track observers),
+ * AII_VOICE_BUSY says the host's storage did not answer inside its time:
+ * nothing was read, and nothing is known to have changed. The observation
+ * then says the storage was late; any other failure says, as before, that
+ * the enrollment is unavailable. */
 /* Private model-composition callback, not a Plugin SDK operation. Runs only
  * on the bounded speaker worker. Null evidence means a provisional track.
  * The owner publishes via host CAS/readback before returning a UUID. Callback
@@ -128,6 +137,11 @@ aii_voice_result aii_voice_models_prefer(aii_voice_models*,const char* const* te
 /* Explicit blocking warm inference, before public readiness and without an
  * active session. Does not capture audio or claim acoustic/quality evidence. */
 aii_voice_result aii_voice_models_warm(aii_voice_models*, aii_voice_readiness*, aii_voice_error*);
+/* The same warm inference, with the time it may take stated by its caller in
+ * milliseconds (at least 1). One that took longer is a failed start, and the
+ * error says both numbers. The entry above gives it the default of session.h;
+ * the worker states its limits table's warm_probe_ms. Additive entry. */
+aii_voice_result aii_voice_models_warm_within(aii_voice_models*, uint32_t limit_ms, aii_voice_readiness*, aii_voice_error*);
 /* Blocking background preparation from a completed, explicitly requested
  * recording. Requires no open microphone and shares the existing exclusive
  * model lease: BUSY while speech/warm/preparation owns it. 31920..480000 mono
@@ -140,6 +154,24 @@ aii_voice_result aii_voice_prepare_capture(aii_voice_models*, const float*, size
 aii_voice_result aii_voice_models_release(aii_voice_models**, aii_voice_error*);
 aii_voice_result aii_voice_open(aii_voice_models*, const aii_voice_settings*, aii_voice_session**, aii_voice_error*);
 aii_voice_result aii_voice_open_session(aii_voice_models*, const aii_voice_open_options*, aii_voice_session**, aii_voice_error*);
+/* The session's own waits, in milliseconds, each 1..600000: one model call,
+ * the frames of a conversation up to the sample it was told it ends at, and
+ * synthesized audio waiting to be taken from the bounded output queue. When
+ * one passes the session fails and its error names it and its number. Then
+ * the endpoint's two: its verdict at a turn's commit point, past which the
+ * turn ends by silence alone and an event says so, and a query still owned
+ * at the input's end. And the two bounds of a separating recognizer's budget
+ * for one separation, the longer inside model_call_ms. */
+typedef struct aii_voice_session_limits {
+  uint32_t model_call_ms, input_tail_ms, output_take_ms;
+  uint32_t endpoint_decision_ms, endpoint_retire_ms;
+  uint32_t separation_min_ms, separation_max_ms;
+} aii_voice_session_limits;
+/* The canonical open with those waits stated by its caller: the worker states
+ * them from its limits table. All are required, and input_tail_ms replaces
+ * the input_tail_timeout_ms of the options' control settings. The entries
+ * that take none keep the defaults of session.h. Additive entry. */
+aii_voice_result aii_voice_open_bounded(aii_voice_models*, const aii_voice_open_options*, const aii_voice_session_limits*, aii_voice_session**, aii_voice_error*);
 /* Settings are pinned for the session. Unknown languages/voices are refused;
  * open is initialization work and never runs on the interruption lane. */
 aii_voice_result aii_voice_open_configured(aii_voice_models*, const aii_voice_settings*, const aii_voice_speech_settings*, aii_voice_session**, aii_voice_error*);
@@ -157,6 +189,26 @@ aii_voice_result aii_voice_synthesize(aii_voice_session*, uint64_t generation, c
 aii_voice_result aii_voice_stop_playback(aii_voice_session*, uint64_t generation, aii_voice_error*);
 aii_voice_result aii_voice_cancel_synthesis(aii_voice_session*, uint64_t generation, aii_voice_error*);
 aii_voice_result aii_voice_release_generation(aii_voice_session*, uint64_t generation, aii_voice_error*);
+/* THE SPEAKING VOICE IS THE NEXT REPLY'S. The voice, its variation and its
+ * seed are taken at the first segment of each reply, never inside one.
+ * set_speech asks for them from the next reply on and refuses at once
+ * (INVALID, with the reason) what the backend would refuse and any change
+ * of language, which is another model and stays a new session's.
+ * speech_pending says the composition is asking its host for the settings
+ * in force: the next reply waits up to wait_milliseconds (1..2000) for
+ * set_speech or speech_unchanged. speech reads the voice in force; its
+ * revision moves when a change is taken or refused where it was applied. */
+typedef struct aii_voice_speech_state {
+  char voice[65];
+  float temperature;
+  uint32_t seed;
+  uint64_t revision;
+  char refused[256];
+} aii_voice_speech_state;
+aii_voice_result aii_voice_speech_pending(aii_voice_session*, uint32_t wait_milliseconds, aii_voice_error*);
+aii_voice_result aii_voice_set_speech(aii_voice_session*, const aii_voice_speech_settings*, aii_voice_error*);
+aii_voice_result aii_voice_speech_unchanged(aii_voice_session*, aii_voice_error*);
+aii_voice_result aii_voice_speech(aii_voice_session*, aii_voice_speech_state*, aii_voice_error*);
 aii_voice_result aii_voice_playback(aii_voice_session*, uint64_t generation, uint64_t rendered, uint8_t terminal, uint8_t stopped, aii_voice_error*);
 aii_voice_result aii_voice_close(aii_voice_session*, uint8_t abort, aii_voice_error*);
 aii_voice_result aii_voice_wait(aii_voice_session*, uint32_t milliseconds, aii_voice_error*);

@@ -164,9 +164,41 @@ struct VoiceEndpoint final:Endpoint {
 };
 struct Pocket final:Synthesizer {
   size_t playback_reserve_samples() const override { return 3 * 24000; }
+  // Replaced only by select(), under `control`. Whoever speaks (start, next,
+  // reset) uses it outside that lock, because a cancel has to get in while
+  // they compute; that holds only while configure() is called before that
+  // owner exists or by that owner itself, never beside it. Nothing else
+  // reads it: see `published`.
   void* model=nullptr;
   TtsPhaseTrace phase_trace;
   std::mutex control;
+#if defined(__linux__) && !defined(__ANDROID__)
+  // What the resident model says of where it runs, kept as text. A status
+  // request reads it on the worker's control thread while a session opening
+  // on another thread may be inside select(), where `model` is being
+  // released or is not loaded yet: asking the model then was a refused
+  // readback that failed the engine, or a read of freed memory. So the
+  // model is asked by its owner alone,
+  // each time one becomes resident, and a readback takes this copy under its
+  // own lock: never `model`, and never `control`, which a load holds for as
+  // long as it takes. While a load runs the copy is the model before it.
+  std::mutex published;
+  std::string execution;
+  int execution_status=-1;
+  void publish_execution() {
+    char value[4096]{};
+    const int status=nv_execution_info(model,value,sizeof value); // no model: the library's own refusal
+    std::lock_guard<std::mutex> lock(published);
+    execution_status=status; execution=status?"":value;
+  }
+  std::string execution_info() {
+    std::lock_guard<std::mutex> lock(published);
+    aii::voice::check(execution_status,"TTS execution readback failed");
+    return execution;
+  }
+#else
+  void publish_execution() {}
+#endif
   uint64_t generation=0,client=0,cancelled=0;
   bool started=false,silent=false;
   uint32_t seed=20260908;
@@ -182,6 +214,7 @@ struct Pocket final:Synthesizer {
     char error[1024]{};
     model=nv_create_bound(p.pocket.c_str(),p.pocket_config.c_str(),p.tts_backend.c_str(),4,error,sizeof error);
     if(!model) throw std::runtime_error(error);
+    publish_execution();
   }
   ~Pocket() override { if(model && nv_destroy(model)) std::terminate(); }
   struct Location { std::filesystem::path root,config; };
@@ -229,13 +262,25 @@ struct Pocket final:Synthesizer {
     if(model) { if(nv_destroy(model)) throw std::runtime_error("speech model is busy; language unchanged"); model=nullptr; }
     char error[1024]{};
     model=create(at,error,sizeof error);
-    if(model) { language=code; replacements=std::move(table); return; }
+    if(model) { language=code; replacements=std::move(table); publish_execution(); return; }
     const std::string first=error;
     const auto* previous=speech_language(language);
     char second[1024]{};
     if(previous && previous!=next) model=create(location(*previous),second,sizeof second);
+    publish_execution(); // the model put back is another instance; with none, a readback fails as it did
     if(!model) throw std::runtime_error(std::string("speech model for ")+next->label+" did not load ("+first+") and the previous one could not be restored ("+second+")");
     throw std::invalid_argument(std::string("speech model for ")+next->label+" did not load: "+first);
+  }
+  // What configure would refuse for a voice in the language already
+  // loaded, from the files on disk alone: asked from the control owner
+  // while a reply may be being spoken, so it takes no lock and touches no
+  // model. A language is never changed this way (Session::speech). It hides
+  // the backend-result helper of the same name, which this owner therefore
+  // names in full (aii::voice::check).
+  void check(const SpeechSettings& settings) const override {
+    const auto* next=speech_language(settings.tts_language);
+    if(!next) throw std::invalid_argument("unsupported speaking language");
+    require_installed(*next,location(*next),settings.voice);
   }
   void configure(const SpeechSettings& settings) override {
     std::lock_guard<std::mutex> lock(control);
@@ -246,7 +291,7 @@ struct Pocket final:Synthesizer {
     require_installed(*next,at,settings.voice);
     if(!model || settings.tts_language!=language) select(next,at);
     char error[1024]{};
-    check(nv_configure_voice(model,settings.voice.c_str(),settings.temperature,error,sizeof error),error);
+    aii::voice::check(nv_configure_voice(model,settings.voice.c_str(),settings.temperature,error,sizeof error),error);
     seed=settings.seed;
   }
   void open() override {
@@ -272,20 +317,20 @@ struct Pocket final:Synthesizer {
     const auto rc=nv_start(model,generation,spoken.c_str(),seed,750,nullptr,error,sizeof error);
     phase_trace.started(rc);
     if(rc==-2) throw Cancelled("synthesis cancelled at start");
-    check(rc,error);
+    aii::voice::check(rc,error);
   }
   std::vector<float> next() override {
     if(silent) return {};
     std::vector<float> result(120000); size_t n=0; char error[1024]{};
     const auto rc=nv_next(model,generation,result.data(),result.size(),&n,error,sizeof error);
     if(rc==-2) throw Cancelled("synthesis cancelled during inference");
-    if(rc!=0 && rc!=1) check(rc,error);
+    if(rc!=0 && rc!=1) aii::voice::check(rc,error);
     phase_trace.audio(n);
     result.resize(n); return result;
   }
   void reset() override {
     if(started) {
-      char error[1024]{}; check(nv_reset(model,generation,error,sizeof error),error); started=false;
+      char error[1024]{}; aii::voice::check(nv_reset(model,generation,error,sizeof error),error); started=false;
       phase_trace.finish();
     }
   }
@@ -364,10 +409,8 @@ Vad& NativeModels::vad(){return p_->vad;}
 Endpoint& NativeModels::endpoint(){return p_->endpoint;}
 Synthesizer& NativeModels::synthesizer(){return p_->pocket;}
 #if defined(__linux__) && !defined(__ANDROID__)
-std::string NativeModels::tts_execution_info(){
-  char value[4096]{};
-  check(nv_execution_info(p_->pocket.model,value,sizeof value),"TTS execution readback failed");
-  return value;
-}
+// The published copy, never the model: a status request asks this while an
+// open may be replacing the model.
+std::string NativeModels::tts_execution_info(){return p_->pocket.execution_info();}
 #endif
 }

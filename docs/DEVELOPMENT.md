@@ -44,7 +44,9 @@ and rejection of modified parser bytes.
 ### Stalled model calls
 
 The native session bounds each synchronous VAD, recognizer, endpoint, synthesis
-and speaker-identification call to 30 seconds. This is a fail-stop bound, not a
+and speaker-identification call to the limits table's `model_call_ms`, 30
+seconds by default, which the worker states to it as it opens each session
+(`docs/NATIVE_WORKER_WIRE.md` 1.3). This is a fail-stop bound, not a
 latency target or an acoustic-quality claim. Each model has its own active-call
 deadline; status polling and other models cannot extend it. Idle listening,
 input gaps and audio-consumer backpressure are not model calls. Startup and
@@ -52,8 +54,8 @@ transport/drain deadlines remain separately owned.
 
 Expiry fences output and faults the session, then requests cancellation. A
 model that ignores cancellation remains owned, never falsely retired or freed.
-The worker's existing five-second abort-retirement bound ends that process
-with nonzero status when necessary. A responsive model can be reused only
+The worker's abort-retirement bound, the table's `abort_ms` (five seconds by
+default), ends that process with nonzero status when necessary. A responsive model can be reused only
 after actual retirement; a killed worker must be replaced by its supervisor.
 The SDK, wire and operator settings are unchanged.
 
@@ -65,6 +67,22 @@ doubles, including process exit and recovery. Neither is installed or real-model
 qualification. Changed engine bytes still need that qualification before release.
 
 ## Python tooling and package checks
+
+The engine that ships is native: the C++ worker and the Go carrier. The carrier
+starts only the native worker its bound runtime profile names. A profile that
+describes an interpreter (its `python`, `bootstrap` or `site` member is set) is
+refused by the carrier at its start, and no script here rebuilds, stages,
+binds, packages or assembles one; `tests/test_python_engine_is_not_built.py`
+holds the scripts to that. A script can still verify that the bytes of such a
+runtime are what its profile binds: checking what exists is not building it.
+The Python in this tree is of three kinds: the
+tests; the tooling under `scripts/` that builds, stages and assembles a
+release; and a Python engine, `runtime/plugin_engine` and the Python packages
+it imports, kept as a double of the native worker for the tests. A test runs
+the double in its own process, by itself, or behind a development carrier that
+is given its worker on its command line, which a packaged carrier refuses. The
+double could be packed into a runtime once; that packer and the packaged
+interpreter's bootstrap are removed.
 
 Python 3.11+ is a **development** dependency, not part of the shipped native
 runtime. Use an isolated environment:
@@ -171,10 +189,18 @@ loading a model (`worker_environment.h`), or ggml on an M5-class GPU would tile
 its matrix work for kernels the library does not contain. The Pocket build
 (`runtime/native_pocket/portable`) pins its Apple options and compiles its own
 metallib; its engine source is audio.cpp
-`3174e6b26f11a0e39b4f150961dce98f43ba860d` with `capacity-history.patch` and
-`metal-library-beside.patch` applied. The worker holds both ggml copies, whose
-kernels differ, so the patch makes Pocket's copy read the library named after
-its own image instead of a shared `default.metallib`.
+`3174e6b26f11a0e39b4f150961dce98f43ba860d` with the five files of
+`runtime/native_pocket/engine_overrides` and the two of
+`runtime/native_pocket/windows_resident/overrides` in place of the engine's
+own, and with `metal-library-beside.patch` applied
+(`python -m scripts.prepare_engine_source --layout macos` makes that directory
+from an upstream checkout and holds every file to its digest). The worker
+holds both ggml copies, whose kernels differ, so the patch makes Pocket's copy
+read the library named after its own image instead of a shared
+`default.metallib`. `capacity-history.patch` is in this tree and is applied as
+a whole in no shipped library: neither of its two changes is in the Windows or
+the macOS library, and the Linux library holds the second
+(`runtime/native_pocket/engine_overrides_linux/NOTICE`).
 
 ## Go carrier
 
@@ -187,9 +213,11 @@ before an offline build.
 
 The authoring SDK and its clean public mirror do not share commit IDs. At
 beta.4 preparation, pin `8155af048f312faec9000defe294b0086b28b62c` was not
-present in that mirror. The SDK owner is handling its public source delivery;
+present in that mirror; the pin has moved since, and `sdk-source.json` names
+the current revision. The SDK owner is handling its public source delivery;
 this voice release does not publish or modify the SDK. Maintainers can use
-the already sealed 1,341,440-byte archive with the hash in `sdk-source.json`.
+the sealed archive of the pinned revision, verified by the `archive_sha256`
+in `sdk-source.json`.
 Do not substitute a floating public main. This developer-source dependency
 does not affect installing or running the signed plugin: no SDK checkout is
 downloaded by the product.

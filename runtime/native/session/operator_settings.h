@@ -11,7 +11,11 @@ inline constexpr std::array<const char*,20> native_voices={"alba","marius","jave
 inline constexpr std::array<const char*,20> native_voice_labels={"Alba - casual dialogue","Marius","Javert","Fantine","Éponine","Azelma","Bill Boerst - audiobook narrator","Peter Yearsley - audiobook narrator","Stuart Bell - audiobook narrator","Caro Davy - audiobook narrator",
   "Anna","Charles","Eve","George","Jane","Mary","Michael","Paul","Vera","Estelle - French speaker"};
 struct OperatorSettings {
-  aii_voice_settings control{768,3000,.5f};
+  // The pause and the threshold are the operator's. The wait for a
+  // conversation's last frames is not a setting of the operator's and none is
+  // typed here: the worker states it from its limits table as it opens the
+  // session (aii_voice_open_bounded), which replaces this field.
+  aii_voice_settings control{768,0,.5f};
   std::string voice="alba",tts_language="en",stt_language="en";
   float temperature=.3f;
   uint32_t seed=20260908;
@@ -54,7 +58,7 @@ struct OperatorSettings {
       put(row,"scope",string(scope));
       put(row,"description",string(description));put(row,"default",clone(field(defaults.get(),key)));return row;
     };
-    auto voice=add("tts_voice","speaking","enum","Speaking voice","Fixed preset for every reply segment. Applies next session. Separate from speaker identity.");
+    auto voice=add("tts_voice","speaking","enum","Speaking voice","One preset for a whole reply, never changed inside one. Applies from the next reply. Separate from speaker identity.");
     auto choices=own(cJSON_CreateArray()),labels=object();
     for(size_t i=0;i<native_voices.size();++i){cJSON_AddItemToArray(choices.get(),string(native_voices[i]).release());put(labels,native_voices[i],string(native_voice_labels[i]));}
     put(voice,"values",std::move(choices));put(voice,"labels",std::move(labels));cJSON_AddItemToArray(out.get(),voice.release());
@@ -74,8 +78,8 @@ struct OperatorSettings {
     numeric("turn_pause_ms","hearing","integer","Speaking pause (VAD, ms)",320,5000,"Voice activity detection is always enabled. Minimum silence before turn completion; short pauses retain speech and semantic handling may extend it. Applies next session; does not delay interruption.");
     numeric("capture_limit_minutes","hearing","integer","Listening session limit (minutes; 0 = no automatic stop)",0,UINT32_MAX,"Captured audio minutes, including silence. 0 means no automatic stop. Positive limits finalize accepted input. Applies next session; separate from VAD pause and enrollment. Stop, Finish and Abort remain available.");
     numeric("vad_threshold","hearing","number","Speech detection (VAD) threshold",.05,.95,"Voice activity detection is always enabled. Higher values require stronger speech evidence. Applies next session; changing this can miss quiet speech.");
-    numeric("tts_temperature","speaking","number","Voice variation",0,1,"Advanced sampling control. Applies next session; higher values may reduce consistency.");
-    numeric("tts_seed","speaking","integer","Synthesis seed",0,4294967295.0,"Stable sampling seed. Applies next session. Does not enroll or identify a speaker.");
+    numeric("tts_temperature","speaking","number","Voice variation",0,1,"Advanced sampling control. Applies from the next reply; higher values may reduce consistency.");
+    numeric("tts_seed","speaking","integer","Synthesis seed",0,4294967295.0,"Stable sampling seed. Applies from the next reply. Does not enroll or identify a speaker.");
     return out;
   }
 };

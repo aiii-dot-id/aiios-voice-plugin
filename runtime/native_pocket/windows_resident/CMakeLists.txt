@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
+# MIMI_OVERRIDE and ACOUSTIC_OVERRIDE are the two files in overrides/ beside
+# this recipe: modified copies of the engine's own, stated in overrides/NOTICE.
 foreach(required ENGINE_SOURCE ENGINE_BUILD RESIDENT_SOURCE MIMI_OVERRIDE ACOUSTIC_OVERRIDE BOUND_SOURCE VULKAN_LIBRARY PATH_SHIM_SOURCE)
   if(NOT DEFINED ${required})
     message(FATAL_ERROR "Missing ${required}")

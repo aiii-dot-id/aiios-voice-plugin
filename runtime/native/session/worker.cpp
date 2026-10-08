@@ -9,6 +9,7 @@
 #include "speaker_observation.h"
 #include "attribution.h"
 #include "snapshot_bridge.h"
+#include "drain_hold.h"
 #include "speaker_registry_store.h"
 #include "speaker_readback.h"
 #include "capture_enrollment.h"
@@ -48,10 +49,10 @@ using Clock = std::chrono::steady_clock;
 #define AII_WORKER_BACKEND "native-common-cpu"
 #endif
 #ifdef AII_AUDIO_ACK_TEST_HOOK
-// Fixture target only (worker_test_models.cpp): publication-order and
-// audio-deadline detection-order seams, and the place between a pass's poll
-// for the core's events and its read of the core's status.
-namespace aii::voice::wire { void before_audio_ack(bool end, bool failed); bool main_loop_sees_audio_deadline(); void after_event_poll(bool draining); }
+// Fixture target only (worker_test_models.cpp): publication- and deadline-
+// order seams, the place between a pass's poll for the core's events and its
+// read of the core's status, that read itself, and a frame about to be fed.
+namespace aii::voice::wire { void before_audio_ack(bool end, bool failed); bool main_loop_sees_audio_deadline(); void after_event_poll(bool draining); void before_last_status(aii_voice_session *session); void before_input_frame(aii_voice_session *session); }
 #endif
 namespace {
 // The worker's own deadline has passed: end now. On Windows that never waits
@@ -186,6 +187,13 @@ class Worker {
   std::map<uint64_t, std::shared_ptr<Generation>> generations_;
   uint64_t sequence_ = 0, request_id_ = 0, settings_id_ = 0,
            input_received_ = 0, current_ = 0, input_final_sequence_ = 0;
+  // The settings this session opened with, kept so that the voice in force
+  // can be said again when it changes; the request a reply is waiting on;
+  // the last change of voice this worker has reported; and the last reason
+  // a change was not taken, said once and not at every reply.
+  OperatorSettings config_;
+  uint64_t refresh_id_ = 0, speech_revision_ = 0;
+  std::string speech_refusal_;
   uint32_t stream_counter_ = 0, input_stream_ = 0, input_seq_ = 0;
   bool input_enabled_ = true, input_started_ = false, end_seen_ = false;
   uint64_t input_limit_ = 0;
@@ -226,8 +234,13 @@ class Worker {
   static constexpr uint64_t kGapChunkSamples = 4096;
   bool waiting_settings_ = false, pending_audio_ = false, abort_ = false,
        quit_ = false;
-  Clock::time_point opening_deadline_, closing_deadline_, exit_deadline_;
-  uint64_t drain_recognized_ = 0;
+  Clock::time_point opening_deadline_, open_deadline_, closing_deadline_, exit_deadline_;
+  // When this session's opening began, and whether it has been said that
+  // the opening is waiting (once for its settings, once for its open).
+  Clock::time_point opening_began_;
+  bool said_waiting_settings_ = false, said_waiting_open_ = false;
+  uint64_t drain_recognized_ = 0, drain_sequence_ = 0;
+  aii::voice::DrainHold drain_hold_;
   // The sequence of the last event taken from the core. The core numbers its
   // events from one; the session ends only when the core has retired AND the
   // last event it numbered has been taken (pump).
@@ -249,7 +262,20 @@ class Worker {
   // receipts cannot. Abort and capture preparation retain their own deadlines.
   void advance_drain() {
     if (lifecycle_ == "draining" && !abort_ && session_)
-      closing_deadline_ = Clock::now() + std::chrono::seconds(15);
+      closing_deadline_ = Clock::now() + uid_snapshot_.limits().drain_idle;
+  }
+  // One look a pass at the work that has a limit of its own: storage, a
+  // model call, a write of audio (drain_hold.h, where the rule and its reason
+  // are). What ended since the last pass moves a drain's deadline now; what
+  // is returned is whether any is in flight, which holds a deadline that has
+  // passed. The model calls are the core's, from its status.
+  static aii::voice::DrainHold::ModelCalls model_calls(const aii_voice_snapshot &engine) {
+    return {engine.model_call_in_flight != 0, engine.model_calls_ended};
+  }
+  bool look_at_drain() {
+    return drain_hold_.look(uid_snapshot_.activity(), model_calls(snapshot_), pending_audio_,
+                            lifecycle_ == "draining" && !abort_, Clock::now(), uid_snapshot_.limits().drain_idle,
+                            closing_deadline_) != aii::voice::DrainHold::By::nothing;
   }
   // The host can read PCM/END before the audio writer publishes that write's
   // Ack. A report only the active write could account for waits for its Ack;
@@ -531,7 +557,48 @@ class Worker {
     put(diagnostic,"event",string("failure"));
     put(diagnostic,"session_id",string(sid_));
     put(diagnostic,"reason",string(reason.substr(0,1024)));
-    std::cerr<<"AII_VOICE_FAILURE "<<encode(diagnostic)<<'\n';
+    log_line("AII_VOICE_FAILURE " + encode(diagnostic));
+  }
+  // The worker begins to end: its input has ended, or it has failed. From
+  // here it has the table's retire, and its carrier waits longer than that
+  // for its exit before it kills it.
+  void begin_retiring() {
+    quit_ = true;
+    exit_deadline_ = Clock::now() + uid_snapshot_.limits().retire;
+  }
+  // What a worker that is ending still waits for (run's own test of it).
+  std::string still_retiring() const {
+    std::string waits;
+    const auto add = [&waits](bool pending, const char *what) {
+      if (pending)
+        waits += std::string(waits.empty() ? "" : ", ") + what;
+    };
+    add(session_ != nullptr, "a session");
+    add(opening_.valid(), "a session's open");
+    add(enrollment_.valid(), "an enrollment");
+    add(capturing_.valid(), "a capture's close");
+    add(waveform_publish_.valid(), "a recording's publication");
+    add(pending_audio_, "audio not yet written");
+    return waits.empty() ? "its work" : waits;
+  }
+  // The table's retire has passed and the worker has not ended. It says so,
+  // with the member, its number and what had not ended, and ends: its own
+  // deadline was silent, and only the status 72 said that one had passed.
+  [[noreturn]] void retire_passed(const std::string &awaited) {
+    say_failure("the worker did not retire in " + std::to_string(uid_snapshot_.limits().retire.count()) +
+                " ms, the time the limits table gives it (retire_ms): " + awaited + " had not ended");
+    abandon(72);
+  }
+  // An aborted session has not retired by its deadline, and the process ends
+  // so that a new one can clear what is stuck. The deadline is the table's
+  // abort, or its retire where the worker was already ending and that has
+  // passed; which one, and its number, is said before the end.
+  [[noreturn]] void end_unretired(const char *what) {
+    if (quit_ && Clock::now() > exit_deadline_)
+      retire_passed(what);
+    say_failure(std::string(what) + " had not ended " + std::to_string(uid_snapshot_.limits().abort.count()) +
+                " ms after its abort, the time the limits table gives it (abort_ms)");
+    abandon(72);
   }
   void fail(const std::string &reason) {
     if (!failure_.empty())
@@ -543,10 +610,12 @@ class Worker {
     uid_snapshot_.cancel();
     if (lifecycle_ == "closed")
       return;
+    const bool aborting = abort_ && lifecycle_ == "draining";
     lifecycle_ = "draining";
     abort_ = true;
     waiting_settings_ = false;
-    closing_deadline_ = Clock::now() + std::chrono::seconds(5);
+    if (!aborting) // a failure after an abort does not give it its time again
+      closing_deadline_ = Clock::now() + uid_snapshot_.limits().abort;
     for (auto &g : generations_)
       g.second->fenced = true;
     if (session_)
@@ -564,6 +633,14 @@ class Worker {
     put(r, "state_sequence", number(sequence_));
     put(r, "attributions", attributions_.snapshot());
     put(r, "lifecycle", string(lifecycle_));
+    if (lifecycle_ == "opening") {
+      // What an opening is waiting for: its settings from the host, then the
+      // open itself, which may load a speaking model.
+      auto opening = object();
+      put(opening, "waiting_for", string(waiting_settings_ ? "settings" : "open"));
+      put(opening, "waited_ms", number(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - opening_began_).count())));
+      put(r, "opening", std::move(opening));
+    }
     put(r, "reason", failure_.empty() ? null() : string(failure_));
     put(r, "operator_settings", clone(effective_.get()));
     if(!cJSON_IsNull(corrections_state_.get()))put(r,"corrections",clone(corrections_state_.get()));
@@ -657,11 +734,13 @@ class Worker {
     put(r,"bookkeeping",std::move(book));
     return r;
   }
-  void validate_processing(const cJSON *p) {
-    if (!p || cJSON_IsNull(p)) {
-      processing_ = null();
-      return;
-    }
+  // Checks an open's capture report and returns what its session will show.
+  // It changes nothing here: an open can still be refused after this check,
+  // and a refused open's report was showing in the status of the session
+  // before it.
+  Json checked_processing(const cJSON *p) {
+    if (!p || cJSON_IsNull(p))
+      return null();
     require(cJSON_IsObject(p), "capture processing object required");
     for (auto *f = p->child; f; f = f->next) {
       std::string key = f->string;
@@ -678,7 +757,7 @@ class Worker {
         require(cJSON_IsNull(f) || cJSON_IsBool(f), "capture boolean required");
       }
     }
-    processing_ = clone(p);
+    return clone(p);
   }
   Json waveform_result() {
     auto data=object();put(data,"state",string(waveform_state_));
@@ -775,7 +854,7 @@ class Worker {
       const auto channels = integer(field(f, "channels"), 2);
       require(channels >= 1, "audio channels invalid");
     }
-    validate_processing(field(field(audio, "input"), "processing"));
+    auto processing = checked_processing(field(field(audio, "input"), "processing"));
     const auto* roles=field(source,"channel_roles");
     bool reference=false;
     if(roles) {
@@ -795,6 +874,7 @@ class Worker {
     echo_=std::move(next_echo);echo_cutoff_.reset();echo_tail_.clear();
 #endif
     reference_input_=reference;
+    processing_ = std::move(processing);
     sid_ = id;
     uid_snapshot_.begin(sid_);
     recent_waveforms_.begin(sid_);
@@ -832,7 +912,11 @@ class Worker {
     early_finish_.reset();
     lifecycle_ = "opening";
     waiting_settings_ = !capture_;
-    opening_deadline_ = Clock::now() + std::chrono::seconds(2);
+    // The carrier answers inside the host's time for a session's settings;
+    // this waits its margin longer (worker_limits.h). It was two seconds.
+    opening_deadline_ = Clock::now() + uid_snapshot_.limits().opening;
+    opening_began_ = Clock::now();
+    said_waiting_settings_ = said_waiting_open_ = false;
     emit("session_start");
     if(capture_) {
       // Enrollment audio is never opened as a recognizer/session and never
@@ -867,6 +951,108 @@ class Worker {
     put(r, "audio", std::move(formats));
     return r;
   }
+  // THE VOICE IS ASKED FOR AT EACH REPLY. A preset was read when a session
+  // opened and at no other time, and a page keeps one session open for as
+  // long as voice is on: a voice the operator saved changed nothing they
+  // could hear until voice was turned off and on.
+  // As a reply is admitted the worker asks its carrier for the settings in
+  // force and tells the core an answer is coming; the reply's first segment
+  // waits for it, bounded by the table's reply_settings (worker_limits.h),
+  // and a later answer serves the reply after. Nothing here can refuse or
+  // delay the reply's admission.
+  void ask_speech() {
+    auto query = object(), message = object();
+    put(query, "id", number(++settings_id_));
+    issued_settings_[settings_id_] = sid_;
+    if (issued_settings_.size() > 32)
+      issued_settings_.erase(issued_settings_.begin());
+    put(query, "session_id", string(sid_));
+    put(query, "refresh", boolean(true)); // the settings alone: no correction list is read for it
+    put(message, "settings_request", std::move(query));
+    send(std::move(message));
+    refresh_id_ = settings_id_;
+    core(aii_voice_speech_pending(session_, uint32_t(uid_snapshot_.limits().reply_settings.count()), &error_), error_);
+  }
+  // The carrier's answer: the voice, its variation and its seed go to the
+  // core for the next reply; anything else in the settings stays the next
+  // session's, as its description says. An answer that cannot be taken
+  // (the host gave none, a value this engine does not hold, a change of
+  // language) leaves the voice in force and is said once in the log.
+  // WHICH OF THREE A FAILED SETTINGS READ WAS, in the carrier's word for
+  // it: reason_code (plugin/native/settings.go), the name a snapshot_reply
+  // uses on both sides. The worker read `reason`, a name the carrier never
+  // wrote, so with the two together every failed read reached the session
+  // as the sentence for a carrier that gives no reason. Each side's test
+  // passed because each wrote its own name.
+  const char *settings_failure(const cJSON *p) {
+    const auto *why = field(p, "reason_code");
+    const std::string reason = cJSON_IsString(why) ? why->valuestring : "";
+    if (reason == "HOST_SETTINGS_NO_ANSWER")
+      return "host settings: no answer from the host in time";
+    if (reason == "HOST_SETTINGS_ERROR")
+      return "host settings: the host refused the read";
+    if (reason == "HOST_SETTINGS_NOT_SETTINGS")
+      return "host settings: the host's answer is not settings";
+    return "host settings unavailable"; // a carrier that gives no reason
+  }
+  void speech_answer(const cJSON *p) {
+    refresh_id_ = 0;
+    std::string why;
+    try {
+      if (field(p, "error"))
+        throw Refused(settings_failure(p));
+      require(cJSON_IsObject(field(p, "values")), "the host did not give the settings");
+      auto next = OperatorSettings::read(field(p, "values"));
+      const auto speech = next.speech();
+      aii_voice_error refused{};
+      const auto taken = aii_voice_set_speech(session_, &speech, &refused);
+      if (taken == AII_VOICE_OK)
+        return; // what the core does with it is read back (follow_speech)
+      if (taken != AII_VOICE_INVALID)
+        throw std::runtime_error(refused.message);
+      why = refused.message;
+    } catch (const Refused &e) {
+      why = e.what();
+    }
+    core(aii_voice_speech_unchanged(session_, &error_), error_);
+    say_speech("speech_settings_not_taken", why);
+  }
+  // What the core did with a change of voice, read where the session's
+  // status is read: taken at a reply's first segment, or refused there.
+  void follow_speech() {
+    aii_voice_speech_state state{};
+    core(aii_voice_speech(session_, &state, &error_), error_);
+    if (state.revision == speech_revision_)
+      return;
+    speech_revision_ = state.revision;
+    if (*state.refused) {
+      say_speech("speech_settings_not_taken", state.refused);
+      return;
+    }
+    config_.voice = state.voice;
+    config_.temperature = state.temperature;
+    config_.seed = state.seed;
+    effective_ = config_.effective();
+    speech_refusal_.clear();
+    say_speech("speech_settings", {});
+  }
+  // One line in the log when the voice in force changes, and one when a
+  // change is not taken, with its reason: once, not at every reply.
+  void say_speech(const char *event, const std::string &reason) {
+    if (!reason.empty()) {
+      if (reason == speech_refusal_)
+        return;
+      speech_refusal_ = reason;
+    }
+    auto diagnostic = object();
+    put(diagnostic, "component", string("voice-worker"));
+    put(diagnostic, "event", string(event));
+    put(diagnostic, "session_id", string(sid_));
+    put(diagnostic, "settings", clone(effective_.get()));
+    if (!reason.empty())
+      put(diagnostic, "reason", string(reason.substr(0, 256)));
+    log_line("AII_VOICE_SETTINGS " + encode(diagnostic));
+  }
   void settings(const cJSON *p) {
     require(cJSON_IsObject(p), "settings reply object required");
     const auto key = integer(field(p, "id"));
@@ -875,18 +1061,40 @@ class Worker {
             "foreign settings reply");
     if (key != settings_id_ || who != sid_)
       return;
-    if (!waiting_settings_)
+    if (!waiting_settings_) {
+      // An open session's own question, asked as a reply began (ask_speech).
+      if (key == refresh_id_ && session_ && lifecycle_ == "open")
+        speech_answer(p);
       return; // retired open cannot configure a successor
-    require(!field(p, "error") && cJSON_IsObject(field(p, "values")),
-            "host settings unavailable");
+    }
+    // The carrier says which of three it was, and the session's refusal
+    // says it on: a host that was slow, a host that refused, and an answer
+    // that is not settings are three different things to look for. One
+    // sentence covered them all.
+    if (field(p, "error"))
+      throw Refused(settings_failure(p));
+    require(cJSON_IsObject(field(p, "values")), "host settings unavailable");
     const auto *values = field(p, "values");
     const auto config=OperatorSettings::read(values);
     input_limit_=aii::voice::capture_samples(config.capture_limit_minutes);
     effective_=config.effective();
+    config_=config;refresh_id_=0;speech_revision_=0;speech_refusal_.clear();
+    // WHICH SETTINGS THIS SESSION WAS GIVEN, in the log. A preset is read
+    // when a session opens and at no other time, and nothing said which one
+    // a session had: an operator who heard another voice than the one saved
+    // could not be told whether the session predated the save. The
+    // effective settings are names and numbers the operator
+    // chose; no speech, no profile and no correction is in them.
+    {
+      auto diagnostic=object();
+      put(diagnostic,"component",string("voice-worker"));put(diagnostic,"event",string("session_settings"));
+      put(diagnostic,"session_id",string(sid_));put(diagnostic,"settings",clone(effective_.get()));
+      log_line("AII_VOICE_SETTINGS " + encode(diagnostic));
+    }
     // What a rule says was meant is also what the recognizer should prefer
-    // to write where the sound is close: every meant is handed to it as a
-    // term, for this session. It keeps those it can spell as short phrases
-    // and passes over the rest; the readback says how many it kept.
+    // to write where the sound is close: every meant it can take is handed to
+    // it as a term, for this session. It keeps those it can spell as short
+    // phrases and passes over the rest; the readback says how many it kept.
     std::vector<const char*> preferred;
     // A list that cannot be held does not take speech away: the session runs
     // uncorrected and says why, in its readback and in the lifecycle log.
@@ -897,28 +1105,49 @@ class Worker {
         put(corrections_state_,"revision",number(document.revision));
         put(corrections_state_,"rules",number(document.list.rules().size()));
         corrections_=std::move(document.list);
-        for(const auto& rule:corrections_.rules())preferred.push_back(rule.meant.c_str());
+        // The recognizer refuses a whole list that holds one term longer than
+        // it takes, and a refused list would fail this session. A longer
+        // meant is no short phrase to prefer: it is not offered, and its rule
+        // still rewrites what was heard.
+        for(const auto& rule:corrections_.rules())
+          if(rule.meant.size()<=aii::voice::Corrections::max_term_bytes)preferred.push_back(rule.meant.c_str());
       } catch(const Refused& e) {
         corrections_={};
         put(corrections_state_,"unreadable",string(std::string(e.what()).substr(0,256)));
         auto diagnostic=object();
         put(diagnostic,"component",string("voice-worker"));put(diagnostic,"event",string("corrections_unreadable"));
         put(diagnostic,"session_id",string(sid_));put(diagnostic,"reason",string(std::string(e.what()).substr(0,256)));
-        std::cerr<<"AII_VOICE_CORRECTIONS "<<encode(diagnostic)<<'\n';
+        log_line("AII_VOICE_CORRECTIONS " + encode(diagnostic));
       }
     }
     // Every session sets the recognizer's terms, an empty list included, so
     // one session's names never reach the next.
     uint32_t kept=0;
     core(aii_voice_models_prefer(models_,preferred.empty()?nullptr:preferred.data(),uint32_t(preferred.size()),&kept,&error_),error_);
-    if(cJSON_IsObject(corrections_state_.get())&&!field(corrections_state_.get(),"unreadable"))put(corrections_state_,"preferred",number(kept));
+    if(cJSON_IsObject(corrections_state_.get())&&!field(corrections_state_.get(),"unreadable")) {
+      put(corrections_state_,"preferred",number(kept));
+      // Said only when there is something to say: how many were not offered.
+      if(const auto unoffered=corrections_.rules().size()-preferred.size())put(corrections_state_,"too_long_to_prefer",number(unoffered));
+    }
     waiting_settings_ = false;
-    opening_ = std::async(std::launch::async, [this, config, input_enabled=input_enabled_] {
+    // The open runs on its own thread, inside a model's load when the
+    // speaking language changes, and cannot be cancelled. It is waited for
+    // the table's session_open and no longer (the poll, below).
+    open_deadline_ = Clock::now() + uid_snapshot_.limits().session_open;
+    // The session's own waits are the table's, stated to it as it opens:
+    // the session's header has numbers of its own for a caller that states
+    // none, and this worker is never that caller.
+    const auto &table = uid_snapshot_.limits();
+    const aii_voice_session_limits waits{uint32_t(table.model_call.count()), uint32_t(table.input_tail.count()),
+                                         uint32_t(table.output_take.count()), uint32_t(table.endpoint_decision.count()),
+                                         uint32_t(table.endpoint_retire.count()), uint32_t(table.separation_min.count()),
+                                         uint32_t(table.separation_max.count())};
+    opening_ = std::async(std::launch::async, [this, config, waits, input_enabled=input_enabled_] {
       aii_voice_error e{};
       aii_voice_session *s = nullptr;
       const auto speech=config.speech();
       const aii_voice_open_options options{&config.control,&speech,config.capture_limit_minutes,uint8_t(input_enabled)};
-      core(aii_voice_open_session(models_, &options, &s, &e), e);
+      core(aii_voice_open_bounded(models_, &options, &waits, &s, &e), e);
       return s;
     });
   }
@@ -1155,6 +1384,13 @@ class Worker {
               "session cannot close in current state");
       require(mode == "abort" || ((session_||capture_) && (!input_enabled_ || snapshot_.cutoff_set)),
               "drain needs admitted Finish");
+      // AN ABORT'S DEADLINE IS THE FIRST ABORT'S. Every abort taken set it
+      // again, so a host that sent abort again inside its time kept a
+      // session that would not retire, and this process, for as long as it
+      // went on sending. A session
+      // already aborting, by an abort or by a failure, is still told its
+      // abort is accepted; its deadline does not move.
+      const bool aborting = abort_ && lifecycle_ == "draining";
       if (mode == "abort") {
         capture_cancelled_=true;
         uid_snapshot_.cancel();
@@ -1164,9 +1400,15 @@ class Worker {
           item.second->fenced = true;
       }
       lifecycle_ = "draining";
-      closing_deadline_ =
-          Clock::now() + std::chrono::seconds(mode == "abort" ? 5 : capture_ ? 45 : 15);
+      // The table's (worker_limits.h): a drain's first deadline is its idle
+      // limit; an abort and an enrollment capture's close have their own.
+      // They were 5 s and 45 s typed here.
+      if (!aborting)
+        closing_deadline_ = Clock::now() + (mode == "abort" ? uid_snapshot_.limits().abort
+                                            : capture_ ? uid_snapshot_.limits().capture_close
+                                            : uid_snapshot_.limits().drain_idle);
       drain_recognized_ = snapshot_.recognized;
+      drain_sequence_ = snapshot_.sequence;
       if (session_)
         core(aii_voice_close(session_, abort_, &error_), error_);
       auto r = accepted();
@@ -1180,7 +1422,7 @@ class Worker {
       const auto end=integer(field(a,"end_sample"),480000);
       const bool first=!capture_->cutoff();capture_->finish(end);
       snapshot_.cutoff_set=true;snapshot_.cutoff=end;
-      if(first)capture_tail_deadline_=Clock::now()+std::chrono::seconds(2);
+      if(first)capture_tail_deadline_=Clock::now()+uid_snapshot_.limits().capture_tail;
       auto r=accepted();put(r,"stream_id",string(input_handle_));put(r,"end_sample",number(end));return r;
     }
     // A finish that arrives while the session is still opening is the page's
@@ -1225,6 +1467,7 @@ class Worker {
                   stream_counter_ < UINT32_MAX,
               "synthesis identity reuse/unresolved capacity/stream exhausted");
       const uint64_t next = current_ + 1;
+      ask_speech(); // the voice in force is the reply's (ask_speech)
       core(aii_voice_synthesize(session_, next, text.data(), text.size(),
                                 &error_),
            error_);
@@ -1352,8 +1595,19 @@ class Worker {
     }
     if(!abort_ && failure_.empty())
       for(auto& observation:attributions_.expire(uint64_t(
-          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count())))
+          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count()))) {
+        // The observation's reason is a word of the attribution contract and
+        // carries no number; the log says which limit passed, and its number.
+        auto diagnostic = object();
+        put(diagnostic, "component", string("voice-worker"));
+        put(diagnostic, "event", string("speaker_match_late"));
+        put(diagnostic, "session_id", string(sid_));
+        put(diagnostic, "refers_to", clone(field(observation.get(), "refers_to")));
+        put(diagnostic, "limit", string("speaker_match_ms"));
+        put(diagnostic, "limit_ms", number(attributions_.timeout_ms()));
+        log_line("AII_VOICE_SPEAKER " + encode(diagnostic));
         emit("speaker_observation",std::move(observation));
+      }
     if(capturing_.valid()&&capturing_.wait_for(std::chrono::milliseconds(0))==std::future_status::ready) {
       try {
         capture_result_=capturing_.get();
@@ -1421,25 +1675,73 @@ class Worker {
         }
       }
     }
+    // The carrier answers before this (its own bound is a margin shorter)
+    // and says which of three it was. This is the fourth: no word from the
+    // carrier at all.
     if (waiting_settings_ && Clock::now() > opening_deadline_)
-      fail_session("settings preparation timeout");
+      fail_session("host settings: no answer from the carrier in time");
+    // AN OPENING THAT IS WAITING SAYS WHAT IT IS WAITING FOR. The wait for a
+    // session's settings is now the storage's whole wait and its open has a
+    // minute; both used to end in two seconds, and nothing needed saying. A
+    // session that has been opening for the table's opening_notice says so
+    // once in the log, and its status says so for as long as it is true
+    // (status): slow is told from stuck, and from which side.
+    if (lifecycle_ == "opening" && Clock::now() > opening_began_ + uid_snapshot_.limits().opening_notice) {
+      bool &said = waiting_settings_ ? said_waiting_settings_ : said_waiting_open_;
+      if (!said) {
+        said = true;
+        auto diagnostic = object();
+        put(diagnostic, "component", string("voice-worker"));
+        put(diagnostic, "event", string("opening_waits"));
+        put(diagnostic, "session_id", string(sid_));
+        put(diagnostic, "waiting_for", string(waiting_settings_ ? "settings" : "open"));
+        put(diagnostic, "waited_ms", number(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - opening_began_).count())));
+        log_line("AII_VOICE_SETTINGS " + encode(diagnostic));
+      }
+    }
     if(capture_) {
+      // The frames up to the sample the capture was told it ends at are the
+      // host's to send; the table's capture_tail is how long they are waited
+      // for, and its passing is said with the member and the number.
       if(!abort_&&snapshot_.cutoff_set&&!end_seen_&&Clock::now()>capture_tail_deadline_)
-        fail_session("enrollment capture final tail timeout");
+        fail_session("enrollment capture final tail timeout: its last frames did not arrive in " +
+                     std::to_string(uid_snapshot_.limits().capture_tail.count()) +
+                     " ms after it was told where it ends, the time the limits table gives them (capture_tail_ms)");
+      const bool held = look_at_drain(); // on every pass, so that storage that ends moves the close when it ends
       if(lifecycle_=="draining") {
         if(!capturing_.valid()&&(abort_||input_final_sequence_))terminal();
-        else if(Clock::now()>closing_deadline_)fail_session("enrollment capture retirement deadline");
+        // A capture's preparation that never returns is the same shape as an
+        // open that never returns: said once as the session's failure, then,
+        // the abort's time later, the end of a process that cannot retire it.
+        else if(Clock::now()>closing_deadline_&&!held) {
+          if(abort_)end_unretired("an enrollment capture");
+          fail_session("enrollment capture retirement deadline");
+        }
       }
       return;
     }
     if (!session_) {
       if (lifecycle_ == "draining" && !opening_.valid())
         terminal();
+      // AN OPEN THAT DOES NOT RETURN IS WAITED FOR ITS TIME AND NO LONGER.
+      // With no session yet nothing below is reached, so no deadline was
+      // looked at here: an open that hung left the session "opening" for
+      // good, and one that was aborted meanwhile left it "draining" for
+      // good, the abort answered "accepted" and every later open refused.
+      // A load that will not return
+      // cannot be cancelled, so the engine says it failed, waits the
+      // abort's time for the open to come back after all, and then ends as
+      // an aborted session whose core will not retire ends.
+      else if (lifecycle_ == "draining" && abort_ && Clock::now() > closing_deadline_)
+        end_unretired("a session's open");
+      else if (lifecycle_ == "opening" && opening_.valid() && Clock::now() > open_deadline_)
+        fail("session open did not return in " + std::to_string(uid_snapshot_.limits().session_open.count() / 1000) + " seconds");
       return;
     }
     core(aii_voice_status(session_, &snapshot_, &error_), error_);
     if (*snapshot_.error)
       fail_engine(snapshot_.error);
+    follow_speech();
     {
       std::optional<Ack> ack;
       {
@@ -1544,6 +1846,19 @@ class Worker {
           } else put(data, "text", string(text));
         }
       }
+      if (kind == "pause_late") {
+        // The endpoint's verdict did not come in the table's time and the
+        // turn ends by silence alone. Nothing failed, so nothing goes to the
+        // host; the log says which limit passed, and its number.
+        auto diagnostic = object();
+        put(diagnostic, "component", string("voice-worker"));
+        put(diagnostic, "event", string("endpoint_decision_late"));
+        put(diagnostic, "session_id", string(sid_));
+        put(diagnostic, "limit", string("endpoint_decision_ms"));
+        put(diagnostic, "limit_ms", number(uint64_t(uid_snapshot_.limits().endpoint_decision.count())));
+        log_line("AII_VOICE_ENDPOINT " + encode(diagnostic));
+        continue;
+      }
       if (kind == "pause_query" || kind == "pause_resolved")
         continue;
       if(kind=="transcript_final") {
@@ -1622,20 +1937,39 @@ class Worker {
         changed_.notify_all();
       }
     }
+#ifdef AII_AUDIO_ACK_TEST_HOOK
+    before_last_status(session_);
+#endif
     core(aii_voice_status(session_, &snapshot_, &error_), error_);
+    // The core can fail and retire after this pass's first look at it. The
+    // session ends below on this look, so a failure it carries is said
+    // here: a session released first takes its engine's failure with it.
+    if (*snapshot_.error)
+      fail_engine(snapshot_.error);
     if (snapshot_.recognized > drain_recognized_) {
       advance_drain();
       drain_recognized_ = snapshot_.recognized;
     }
+    // An event the core numbered while draining is work that ended: a
+    // final, the end of input, a speaker's observation.
+    if (snapshot_.sequence > drain_sequence_) {
+      advance_drain();
+      drain_sequence_ = snapshot_.sequence;
+    }
+    // Storage and the core's model calls are looked at on every pass,
+    // draining or not: work that ends inside a drain moves its deadline on
+    // the pass that sees it end, so the idle limit runs from the last work.
+    const bool held = look_at_drain();
     // A verified private WAV publication borrows the same snapshot bridge as
-    // enrollment. Its own 30-second deadline bounds it; do not shorten that
-    // custody to the ordinary 15-second speech-drain deadline.
+    // enrollment. The table's whole publication bounds it; do not shorten
+    // that custody to the drain's idle limit.
     if (lifecycle_ == "draining" && Clock::now() > closing_deadline_ &&
-        !waveform_publish_.valid()) {
+        !waveform_publish_.valid() && !held) {
       if (!abort_)
-        fail("native drain made no progress for 15 seconds");
+        fail("native drain made no progress for " + std::to_string(uid_snapshot_.limits().drain_idle.count()) +
+             " ms, the time the limits table gives it (drain_idle_ms)");
       else if (!snapshot_.retired || pending_audio_)
-        abandon(72);
+        end_unretired("an aborted session");
     }
     // THE SESSION ENDS AFTER THE CORE'S LAST EVENT, NEVER AHEAD OF IT. The
     // poll above ran before this status was read, and the core's owners can
@@ -1703,7 +2037,7 @@ class Worker {
     put(held, "received", number(input_received_));
     put(held, "held_ms", number(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - pending_since_).count())));
     put(held, "queued_frames", number(uint64_t(queued)));
-    std::cerr << "AII_VOICE_BACKPRESSURE " << encode(held) << '\n';
+    log_line("AII_VOICE_BACKPRESSURE " + encode(held));
   }
   void fill_declared_gap(Frame &f) {
     if (!gap_open_) {
@@ -1722,7 +2056,7 @@ class Worker {
         put(gap, "session_id", string(sid_));
         put(gap, "start", number(input_received_));
         put(gap, "samples", number(gap_target_ - input_received_));
-        std::cerr << "AII_VOICE_GAP " << encode(gap) << '\n';
+        log_line("AII_VOICE_GAP " + encode(gap));
       }
     }
     // A few chunks per pass, so the control wire and the output stay served
@@ -1794,6 +2128,9 @@ class Worker {
 #endif
     if (!input_pending_)
       return;
+#ifdef AII_AUDIO_ACK_TEST_HOOK
+    before_input_frame(session_);
+#endif
     if (!held_reported_ && Clock::now() - pending_since_ > kHeldInputReport) {
       held_reported_ = true;
       std::size_t queued = 0;
@@ -1818,7 +2155,7 @@ class Worker {
         put(foreign, "session_id", string(sid_));
         put(foreign, "stream", number(uint64_t(input_pending_->stream)));
         put(foreign, "declared", declared_stream_ ? number(uint64_t(*declared_stream_)) : null());
-        std::cerr << "AII_VOICE_FOREIGN_INPUT " << encode(foreign) << '\n';
+        log_line("AII_VOICE_FOREIGN_INPUT " + encode(foreign));
       }
       input_pending_.reset();
       return;
@@ -1953,9 +2290,12 @@ class Worker {
 public:
   Worker(aii_voice_models *models, aii_voice_readiness ready, int wire,aii::voice::SnapshotBridge& uid,
       const std::string& policy,const std::string& previous)
-      : models_(models), uid_snapshot_(uid), readiness_(ready), controls_(0), wire_(wire, true),
+      // A write of a line to the carrier and a write of audio are each given the table's time.
+      : models_(models), uid_snapshot_(uid), readiness_(ready), controls_(0), wire_(wire, uid.limits().control_write, "control_write_ms"),
         input_(audio_descriptor("AII_AUDIO_IN_FD", true)),
-        output_(audio_descriptor("AII_AUDIO_OUT_FD", false), true) {
+        output_(audio_descriptor("AII_AUDIO_OUT_FD", false), uid.limits().audio_write, "audio_write_ms"),
+        // And a final's wait for its speaker.
+        attributions_(uint64_t(uid.limits().speaker_match.count())) {
     uid_snapshot_.sender([this](Json message){send(std::move(message));});
     if(!policy.empty()) {
       uid_policies_.emplace(policy,previous);
@@ -1985,7 +2325,7 @@ public:
         // the failure report. Only interrupt the pipe whose own deadline ran.
         if (wire_.expired()) {
           wire_.interrupt();
-          fault_transport("native control write deadline");
+          fault_transport(wire_.expiry());
         }
         if (output_.expired()
 #ifdef AII_AUDIO_ACK_TEST_HOOK
@@ -1993,7 +2333,7 @@ public:
 #endif
         ) {
           output_.interrupt();
-          fault_transport("native audio write deadline");
+          fault_transport(output_.expiry());
         }
         bool eof, audio_eof;
         std::string error, control;
@@ -2013,8 +2353,7 @@ public:
         if (eof && control.empty() && !quit_) {
           capture_cancelled_=true;
           uid_snapshot_.cancel();
-          quit_ = true;
-          exit_deadline_ = Clock::now() + std::chrono::seconds(5);
+          begin_retiring();
           if (lifecycle_ != "closed" && lifecycle_ != "failed") {
             abort_ = true;
             waiting_settings_ = false;
@@ -2027,10 +2366,8 @@ public:
           }
         }
         if (!error.empty()) {
-          if (!quit_) {
-            quit_ = true;
-            exit_deadline_ = Clock::now() + std::chrono::seconds(5);
-          }
+          if (!quit_)
+            begin_retiring();
           fail_engine(error);
         }
         if (audio_eof && !quit_ && lifecycle_ != "closed" &&
@@ -2072,18 +2409,23 @@ public:
           try {
             input();
           } catch (const Refused &e) {
-            fail_session(e.what());
+            // A core that has failed takes no more input and refuses it.
+            // That refusal is the engine's failure reaching the input, not
+            // a fault of the session's: the engine's reason is the one
+            // said, and the session is not blamed for it.
+            if (session_ && aii_voice_status(session_, &snapshot_, &error_) == AII_VOICE_OK && *snapshot_.error)
+              fail_engine(snapshot_.error);
+            else
+              fail_session(e.what());
           }
         }
         if (quit_ && !session_ && !opening_.valid() && !enrollment_.valid() && !capturing_.valid() && !waveform_publish_.valid() && !pending_audio_)
           break;
         if (quit_ && Clock::now() > exit_deadline_)
-          abandon(72);
+          retire_passed(still_retiring());
       } catch (const std::exception &e) {
-        if (!quit_) {
-          quit_ = true;
-          exit_deadline_ = Clock::now() + std::chrono::seconds(5);
-        }
+        if (!quit_)
+          begin_retiring();
         fail_engine(e.what());
       }
       // Never pay a scheduler tick per already-queued frame. On Windows a
@@ -2116,8 +2458,9 @@ public:
     changed_.notify_all();
     // Do not lose the deadline watcher while a final response is being written.
     // Windows synchronous I/O needs its owning thread interrupted, not a Close
-    // issued by a different thread which may wait behind WriteFile.
-    const auto deadline = Clock::now() + std::chrono::seconds(5);
+    // issued by a different thread which may wait behind WriteFile. The
+    // deadline is the one the loop above ended inside: the whole of the
+    // worker's end is the table's retire, counted from when it began.
     while (live_threads_) {
       // CancelSynchronousIo only cancels already-pending operations. A reader
       // may have passed its stop check just before the first interrupt above.
@@ -2126,16 +2469,16 @@ public:
       if (wire_.expired()) {
         io_stop_ = true;
         wire_.interrupt();
-        fault_transport("native final control write deadline");
+        fault_transport(wire_.expiry());
       }
       if (output_.expired()) {
         // Keep the healthy control writer alive long enough to deliver its
         // terminal event; a cancelled audio write is its own failure.
         output_.interrupt();
-        fault_transport("native final audio write deadline");
+        fault_transport(output_.expiry());
       }
-      if (Clock::now() > deadline)
-        abandon(72);
+      if (Clock::now() > exit_deadline_)
+        retire_passed("its input and output threads");
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     for (auto &t : threads_)
@@ -2178,6 +2521,9 @@ int main(int argc, char **argv) {
     aii_voice_error error{};
     aii_voice_readiness ready{};
     aii::voice::SnapshotBridge uid;
+    // Before any model is loaded: a table of limits that does not hold stops
+    // the start, it is not half applied.
+    uid.limits(aii::voice::WorkerLimits::from_environment());
     std::string policy,previous;
 #ifdef AII_WITH_UID
     if(argc>=11) {
@@ -2197,7 +2543,10 @@ int main(int argc, char **argv) {
 #endif
     if(argc==9)core(aii_voice_models_load_with_backend(&paths,argv[8],&models,&error),error);
     else core(aii_voice_models_load(&paths, &models, &error), error);
-    core(aii_voice_models_warm(models, &ready, &error), error);
+    // The warm inference is given the table's warm_probe, and one that took
+    // longer fails this start saying so. The carrier refuses a report of one
+    // that took longer by the same member.
+    core(aii_voice_models_warm_within(models, uint32_t(uid.limits().warm_probe.count()), &ready, &error), error);
     int result;
     {
       Worker worker(models, ready, wire,uid,policy,previous);
@@ -2217,7 +2566,7 @@ int main(int argc, char **argv) {
     return result;
 #endif
   } catch (const std::exception &e) {
-    std::cerr << "native voice worker: " << e.what() << '\n';
+    log_line(std::string("native voice worker: ") + e.what());
 #ifdef _WIN32
     aii::voice::wire::end_process(1);
 #else

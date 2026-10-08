@@ -1,4 +1,8 @@
 """Generate immutable SpeechBrain 1.1.1 frontend coefficients, not model weights."""
+import sys
+if not __debug__ or sys.flags.optimize:  # scripts/_assertions.py, inline: this runs from its own directory
+    raise SystemExit("this is a release gate: its checks are assert statements and Python was started "
+                     "with optimisation, which removes them; run it without -O and without PYTHONOPTIMIZE")
 import argparse
 import hashlib
 import json

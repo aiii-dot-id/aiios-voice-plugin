@@ -1,5 +1,5 @@
 {
-  "description": "The audio topology of a resident speech session's open, as the host asks for it and as the engine confirms it. Frozen with the voice platform on 2026-09-18: the existing open and the existing audio object, with NO INPUT spelled as audio.input PRESENT and null and no input_handle at all. No input is not an empty input and not a finished one; omission is never read as absence. The PCM encoding is s16le: audio.format may be omitted (s16le is meant) and any other value — another encoding, null, a non-string — is refused, never read as s16le. Entries marked canonical are the exact open a host sends. The runtime owns this file (spec/audio/vectors); the kit carries a byte-for-byte copy.",
+  "description": "The audio topology of a resident speech session's open, as the host asks for it and as the engine confirms it. Frozen with the voice platform on 2026-09-18: the existing open and the existing audio object, with NO INPUT spelled as audio.input PRESENT and null and no input_handle at all. No input is not an empty input and not a finished one; omission is never read as absence. The PCM encoding is s16le: audio.format may be omitted (s16le is meant) and any other value — another encoding, null, a non-string — is refused, never read as s16le. Entries marked canonical are the exact open a host sends. A duplex open's input format names its stream (agreed with the voice platform on 2026-10-03): audio.input.stream is the AUD1 stream number the session's input is written on, a whole number 0..2^32-1 that the host never repeats within one engine process; the engine drops input frames on any other stream and refuses an open that repeats an earlier session's number. An engine that predates the field ignores it. The runtime owns this file (spec/audio/vectors); the kit carries a byte-for-byte copy.",
   "open_requests": [
     {
       "name": "duplex",
@@ -11,7 +11,8 @@
           "format": "s16le",
           "input": {
             "rate": 16000,
-            "channels": 1
+            "channels": 1,
+            "stream": 1
           },
           "output": {
             "rate": 24000,

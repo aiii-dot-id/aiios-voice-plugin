@@ -14,6 +14,11 @@ struct Cancelled : std::runtime_error { using std::runtime_error::runtime_error;
 // Identification could not read/validate its authoritative enrollment. This is
 // not a low match score or acoustic ambiguity; no raw broker error is exposed.
 struct EnrollmentUnavailable : std::runtime_error { using std::runtime_error::runtime_error; };
+// The storage the enrollment and the speaker files are read from did not
+// answer inside its time. A caller that does not ask which still sees the
+// enrollment unavailable; the session says "speaker_storage_late", so that a
+// slow disk is not reported as a missing or unreadable enrollment.
+struct SpeakerStorageLate : EnrollmentUnavailable { using EnrollmentUnavailable::EnrollmentUnavailable; };
 // Private composition boundary, not a second Plugin SDK protocol. The model
 // owner outlives Session. Each interface has exactly one inference caller;
 // cancel() is the only concurrent entry and must not wait for inference.
@@ -52,6 +57,13 @@ struct Recognizer {
   // error. Initialization owner only, like open(). A recognizer with no
   // such ability prefers none.
   virtual size_t prefer(const std::vector<std::string>& terms) { (void)terms; return 0; }
+  // A composite that runs a best-effort model under a budget of its own is
+  // told that budget's two bounds and the time one model call is given, as
+  // each session opens (Settings). It refuses a budget that does not end
+  // inside the call's time. A recognizer with no such model has none.
+  virtual void bound_separation(uint32_t minimum_ms, uint32_t maximum_ms, uint32_t model_call_ms) {
+    (void)minimum_ms; (void)maximum_ms; (void)model_call_ms;
+  }
   virtual void reset() = 0;
   virtual void cancel() noexcept = 0;
 };
@@ -85,6 +97,12 @@ struct Synthesizer {
   virtual void configure(const SpeechSettings& s) {
     if(!s.defaults())throw std::invalid_argument("speech settings unsupported by this backend");
   }
+  // What configure would refuse, said without touching the model, so that
+  // it can be asked while a reply is being spoken. A backend that takes
+  // other settings answers for them here as it does in configure.
+  virtual void check(const SpeechSettings& s) const {
+    if(!s.defaults())throw std::invalid_argument("speech settings unsupported by this backend");
+  }
   virtual void start(uint64_t, const std::string&) = 0;
   virtual std::vector<float> next() = 0; // empty only at natural completion
   virtual void reset() = 0;
@@ -105,17 +123,56 @@ struct SpeakerIdentifier {
     return identify_track(final,pcm);
   }
   virtual void cancel() noexcept = 0;
+  // THE MODEL'S PART ENDS HERE. An identifier that goes on to ask the host's
+  // storage after its inference (the registry's reads and publications)
+  // calls this when the inference is over. The session's model watchdog
+  // covers the model's part only; the storage that follows runs under its
+  // own limits (worker_limits.h). The session sets it around each call, on
+  // the thread that makes the call; an identifier that never calls it is
+  // watched for the whole call, as before.
+  std::function<void()> model_part_done;
 };
 struct Settings {
   uint32_t pause_ms = 768;
   float speech_threshold = .5f;
+  // THE SESSION'S WAITS: this one, model_call_timeout_ms,
+  // output_take_timeout_ms, and the endpoint's two and the separation's two
+  // below. The worker states each from its limits table (worker_limits.h)
+  // through aii_voice_open_bounded, so the numbers here are not what a
+  // released engine runs by: they serve a caller that states none, a probe or
+  // a test. When one passes the session says its name and its number.
+  //
+  // The frames of a conversation up to the sample it was told it ends at,
+  // counted from when it was told.
   uint32_t input_tail_timeout_ms = 3000;
   SpeechSettings speech{};
   uint32_t capture_limit_minutes = default_capture_limit_minutes; // 0: no duration stop
-  // Private bound on one synchronous model inference stage, not silence,
-  // recording duration, queue wait or playback. Public SDK/settings unchanged.
+  // One synchronous model inference stage, not silence, recording duration,
+  // queue wait or playback. Public SDK/settings unchanged.
   uint32_t model_call_timeout_ms = 30000;
+  // Synthesized audio waiting for room in the bounded output queue: how long
+  // its consumer has to take what is there.
+  uint32_t output_take_timeout_ms = 15000;
+  // The endpoint's verdict at a turn's commit point, counted from its query's
+  // submission: past it the turn ends by silence alone, which is said as an
+  // event (pause_late) and fails nothing. And each endpoint query still owned
+  // at the input's end: it is a model call, so this is that call's time and
+  // a margin, and the call's own limit speaks first.
+  uint32_t endpoint_decision_timeout_ms = 1000;
+  uint32_t endpoint_retire_timeout_ms = 30500;
+  // The two bounds of a separating recognizer's budget for one separation
+  // (Recognizer::bound_separation). Zero, both: not stated, and the
+  // recognizer keeps the budget it was built with.
+  uint32_t separation_minimum_ms = 0;
+  uint32_t separation_maximum_ms = 0;
 };
+// The most one of those three may be stated as: what the worker's table
+// bounds a member at (worker_limits.h, ceiling_ms).
+inline constexpr uint32_t session_wait_ceiling_ms = 600000;
+// What a warm inference may take where its caller states no other
+// (aii_voice_models_warm). The worker states its table's warm_probe_ms
+// (aii_voice_models_warm_within).
+inline constexpr uint32_t default_warm_probe_ms = 40000;
 // Input is one optional direction, not an empty microphone or another mode.
 // These owners are accessed only when hearing was admitted at open.
 struct Hearing {
@@ -137,6 +194,14 @@ struct Audio {
   bool end = false;
   std::vector<float> pcm; // mono/24k; host owns conversion and physical render
 };
+// The voice in force and how the last change asked for it ended. revision
+// counts changes taken AND changes refused where they were to be applied,
+// so a caller that asked for one can tell when it has been answered.
+struct SpeechState {
+  SpeechSettings speech;
+  uint64_t revision = 0;
+  std::string refused; // why the last change was not taken; empty when it was
+};
 struct Snapshot {
   bool input_enabled = true;
   uint64_t received = 0, controlled = 0, recognized = 0, generation = 0, sequence = 0, cutoff = 0;
@@ -145,6 +210,12 @@ struct Snapshot {
   bool recognition_active = false;
   size_t queued_audio_samples = 0;
   size_t synthesis_segments = 0, completed_segments = 0;
+  // A model call the watchdog holds now, and how many it has given back.
+  // Such a call has its own limit (model_call_timeout_ms), so a composition
+  // that calls a quiet session stalled reads these first: one in flight is
+  // not a stall, and one that ended is work that moved.
+  bool model_call_in_flight = false;
+  uint64_t model_calls_ended = 0;
   std::string error;
 };
 struct GenerationSnapshot {
@@ -164,6 +235,21 @@ class Session {
   bool feed(uint64_t start, const float*, size_t);
   void finish_input(uint64_t exclusive_end);
   void synthesize(uint64_t generation, const std::string&);
+  // THE SPEAKING VOICE IS THE NEXT REPLY'S, NOT THE SESSION'S. A preset was
+  // read when a session opened and at no other time, and a page keeps one
+  // session open for as long as voice is on: a voice the operator saved
+  // changed nothing they could hear. The voice, its
+  // variation and its seed are now taken at the first segment of each
+  // reply, never inside one. speech() asks for them from the next reply
+  // on; it refuses at once what the backend would refuse and a change of
+  // language, which is another model and stays a new session's.
+  // speech_pending() says the composition is asking its host for the
+  // settings in force: the next reply waits for the answer, bounded, and
+  // speech() or speech_unchanged() is that answer.
+  void speech_pending(uint32_t wait_milliseconds);
+  void speech(const SpeechSettings&);
+  void speech_unchanged();
+  SpeechState speech_state() const;
   void interrupt(uint64_t generation);
   void stop_playback(uint64_t generation);
   void cancel_synthesis(uint64_t generation);

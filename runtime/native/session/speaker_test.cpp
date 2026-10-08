@@ -122,8 +122,31 @@ void unavailable_enrollment() {
   }
   check(observations==1,"missing enrollment observation");
 }
+// COULD NOT READ IN TIME IS NOT COULD NOT READ. An identifier whose storage
+// did not answer inside its time says so, and the observation says the
+// storage was late: not that the enrollment is unavailable, which sends an
+// operator to look for a missing or unreadable profile. Nothing else fails,
+// and the session ends as any other.
+void late_storage_is_not_an_unavailable_enrollment() {
+  struct Late:U {
+    std::string identify(uint64_t,const std::vector<float>&)override {
+      throw SpeakerStorageLate("do not expose this private broker detail");
+    }
+  } u;
+  Asr a;V v;E e;T t;Session s(a,v,e,t,{},&u);
+  send(s,std::vector<float>(32000,.25f));until([&]{return s.status().input_finished;});
+  s.close(false);check(s.wait_closed(2000),"late storage stranded the drain");
+  Event ev;size_t observations=0;
+  while(s.event(ev))if(ev.kind=="speaker_observation") {
+    ++observations;
+    check(ev.text=="{\"outcome\":\"unavailable\",\"reason\":\"speaker_storage_late\",\"used_for_permissions\":false}",
+          "late storage was reported as an unavailable enrollment, or with private error text");
+  }
+  check(observations==1,"missing observation for the final whose storage was late");
+}
 int main(){try {
   association_drain_interruption();abort_fence();bounded_busy();unavailable_enrollment();
+  late_storage_is_not_an_unavailable_enrollment();
   unavailable_bounds(31919,"utterance_too_short");unavailable_bounds(480001,"utterance_exceeds_uid_context");
   std::cout<<"speaker association, exact PCM, independent stop, drain, abort and context bounds PASS\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

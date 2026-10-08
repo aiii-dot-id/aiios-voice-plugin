@@ -1,4 +1,6 @@
 """Seal a locally verified signed release handoff; never upload or install it."""
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 from datetime import datetime,timezone
 import json

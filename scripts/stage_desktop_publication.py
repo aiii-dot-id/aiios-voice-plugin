@@ -4,6 +4,8 @@ Stage only package-declared release assets and retain pinned upstream evidence.
 No signing, publication, installed state or model execution occurs. A complete
 local handoff is deliberately not a release-admission verdict.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 from datetime import datetime, timezone
 import hashlib

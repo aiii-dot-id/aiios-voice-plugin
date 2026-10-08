@@ -5,6 +5,8 @@ is the concurrency fence: a changed catalog requires a fresh review, not an
 overwrite. The actual host separately verifies the prepared catalog after
 signing. No SDK, package, or catalog authority is reimplemented here.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import copy
 from datetime import datetime

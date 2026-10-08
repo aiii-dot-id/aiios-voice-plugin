@@ -1,4 +1,6 @@
 """SDK Abort during an unresolved drain; pipe evidence, never browser silence."""
+from scripts._assertions import require_assertions
+require_assertions()
 
 import hashlib
 import time

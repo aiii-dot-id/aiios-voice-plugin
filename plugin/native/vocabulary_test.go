@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,9 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiospkg"
@@ -112,21 +116,76 @@ func listed(t *testing.T, value any) (uint64, []correctionRule, map[string]any) 
 	return reply.Result.Revision, reply.Result.Rules, envelope.Result
 }
 
-func TestCorrectionRulesFollowTheSharedVectors(t *testing.T) {
+// correctionVectors is spec/correction_vectors.json, the file the worker's
+// validator is held to as well (runtime/native/session/corrections_test.cpp).
+type correctionVectors struct {
+	Valid   []correctionRule `json:"valid"`
+	Invalid []correctionRule `json:"invalid"`
+	Refused []struct {
+		First    string `json:"first"`
+		Last     string `json:"last"`
+		Category string `json:"category"`
+	} `json:"refused_code_points"`
+	Malformed []struct {
+		Hex string `json:"utf8_hex"`
+	} `json:"malformed_utf8_hex"`
+	Joiners []string         `json:"joiners"`
+	Spaces  []codePointRange `json:"spaces"`
+}
+
+func readCorrectionVectors(t *testing.T) correctionVectors {
+	t.Helper()
 	raw, err := os.ReadFile("../../spec/correction_vectors.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var vectors struct {
-		Valid   []correctionRule `json:"valid"`
-		Invalid []correctionRule `json:"invalid"`
-	}
-	if json.Unmarshal(raw, &vectors) != nil || len(vectors.Valid) < 8 || len(vectors.Invalid) < 18 {
+	var vectors correctionVectors
+	if json.Unmarshal(raw, &vectors) != nil || len(vectors.Valid) < 33 || len(vectors.Invalid) < 67 || len(vectors.Malformed) < 14 {
 		t.Fatal("vector file incomplete")
 	}
+	return vectors
+}
+
+// refused is the vectors' table of what neither side of a rule may hold: the
+// general category of each such code point, and nothing for any other.
+func (v correctionVectors) refused(t *testing.T) map[rune]string {
+	t.Helper()
+	table := map[rune]string{}
+	for _, row := range v.Refused {
+		first, ferr := strconv.ParseUint(row.First, 16, 32)
+		last, lerr := strconv.ParseUint(row.Last, 16, 32)
+		if ferr != nil || lerr != nil || first > last || last > unicode.MaxRune {
+			t.Fatalf("refused range %q..%q is unreadable", row.First, row.Last)
+		}
+		for r := rune(first); r <= rune(last); r++ {
+			table[r] = row.Category
+		}
+	}
+	if len(table) != 237 {
+		t.Fatalf("the vectors refuse %d code points, not the 237 of Cc, Cf, Zl and Zp", len(table))
+	}
+	return table
+}
+
+// joined is the vectors' two other tables: the joiners that what was meant
+// takes inside a word, and the spaces a joiner may not stand beside.
+func (v correctionVectors) joined(t *testing.T) (joiners, spaces map[rune]bool) {
+	t.Helper()
+	joiners, spaces = map[rune]bool{}, codePoints(t, v.Spaces)
+	for _, text := range v.Joiners {
+		joiners[rune(mustHex(t, text))] = true
+	}
+	if len(joiners) != 2 || !joiners[0x200C] || !joiners[0x200D] || len(spaces) != 17 {
+		t.Fatalf("the vectors hold %d joiners and %d spaces", len(joiners), len(spaces))
+	}
+	return joiners, spaces
+}
+
+func TestCorrectionRulesFollowTheSharedVectors(t *testing.T) {
+	vectors := readCorrectionVectors(t)
 	for _, rule := range vectors.Valid {
 		if err := validateCorrection(rule); err != nil {
-			t.Errorf("valid rule %q refused: %v", rule.Heard, err)
+			t.Errorf("valid rule %q -> %q refused: %v", rule.Heard, rule.Meant, err)
 		}
 	}
 	for _, rule := range vectors.Invalid {
@@ -136,6 +195,392 @@ func TestCorrectionRulesFollowTheSharedVectors(t *testing.T) {
 	}
 	if validateCorrection(correctionRule{Heard: "a", Meant: "\xff"}) == nil || validateCorrection(correctionRule{Heard: "\xc3", Meant: "b"}) == nil {
 		t.Error("invalid UTF-8 accepted")
+	}
+	// Bytes that are not UTF-8 are refused wherever they stand, not read loosely.
+	for _, row := range vectors.Malformed {
+		raw, err := hex.DecodeString(row.Hex)
+		if err != nil || len(raw) == 0 {
+			t.Fatalf("malformed vector %q is unreadable", row.Hex)
+		}
+		for _, text := range []string{string(raw), "b" + string(raw), "b" + string(raw) + "c"} {
+			if validateCorrection(correctionRule{Heard: "a", Meant: text}) == nil || validateCorrection(correctionRule{Heard: text, Meant: "c"}) == nil {
+				t.Errorf("malformed UTF-8 %s accepted as %q", row.Hex, text)
+			}
+		}
+	}
+}
+
+// A rule is confirmed by an operator reading it, so neither side holds a
+// character that cannot be read where it stands. Every code point there is,
+// on each side, is refused exactly where the vectors' table says; the worker's
+// own list (runtime/native/session/corrections.h) is held to the same table.
+// The one exception is asked about everywhere it could stand: in what was
+// meant a joiner is spelling inside a word, between two characters that are
+// neither a space nor a joiner, and nowhere else.
+func TestNeitherSideOfARuleHoldsWhatAnOperatorCannotRead(t *testing.T) {
+	vectors := readCorrectionVectors(t)
+	refused := vectors.refused(t)
+	joiners, spaces := vectors.joined(t)
+	categories := []struct {
+		name  string
+		table *unicode.RangeTable
+	}{{"Cc", unicode.Cc}, {"Cf", unicode.Cf}, {"Zl", unicode.Zl}, {"Zp", unicode.Zp}}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue // surrogates are not characters: no text holds one
+		}
+		category := ""
+		for _, c := range categories {
+			if unicode.Is(c.table, r) {
+				category = c.name
+			}
+		}
+		if category != refused[r] {
+			t.Fatalf("U+%04X is %q in this toolchain's Unicode %s and %q in the vectors: the worker's list, the vectors and the carrier move together or a list one wrote is refused by the other", r, category, unicode.Version, refused[r])
+		}
+		if spaces[r] != unicode.Is(unicode.Zs, r) {
+			t.Fatalf("U+%04X: this toolchain's Unicode %s and the vectors differ on what a space is", r, unicode.Version)
+		}
+		out := refused[r] != ""
+		// What a heard phrase was made of before this table: a space joins two words.
+		word := r >= 0x80 || r == ' ' || r == '\'' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+		meant := validateCorrection(correctionRule{Heard: "a", Meant: "b" + string(r) + "c"}) != nil
+		heard := validateCorrection(correctionRule{Heard: "a" + string(r) + "b", Meant: "c"}) != nil
+		beside := validateCorrection(correctionRule{Heard: "a", Meant: string(r) + string(rune(0x200D)) + string(r)}) != nil
+		if meant != (out && !joiners[r]) || heard != (out || !word) || beside != (out || spaces[r]) {
+			t.Fatalf("U+%04X: refused in meant %v, in heard %v, on both sides of a joiner %v; the vectors refuse it %v", r, meant, heard, beside, out)
+		}
+	}
+	const unjoined = "meant holds a joiner outside a word; a joiner is taken only inside a word"
+	said := func(meant, want, why string) {
+		t.Helper()
+		err := validateCorrection(correctionRule{Heard: "a", Meant: meant})
+		if (want == "") != (err == nil) || (err != nil && err.Error() != want) {
+			t.Errorf("%s (%+q): %v", why, meant, err)
+		}
+	}
+	for joiner := range joiners {
+		j := string(joiner)
+		said(j+"bc", unjoined, "a joiner first")
+		said("bc"+j, unjoined, "a joiner last")
+		said(j, unjoined, "a joiner alone")
+		for space := range spaces {
+			said("b"+string(space)+j+"c", unjoined, "a joiner after a space")
+			said("b"+j+string(space)+"c", unjoined, "a joiner before a space")
+			said("b"+string(space)+"c"+j+"d", "", "a space, then a joined word")
+		}
+		for other := range joiners {
+			said("b"+j+string(other)+"c", unjoined, "two joiners together")
+			said("b"+j+"c"+string(other)+"d", "", "two joiners, a letter between them")
+		}
+		if err := validateCorrection(correctionRule{Heard: "a" + j + "b", Meant: "c"}); err == nil || err.Error() != "heard must not hold format characters, such as zero-width and direction marks" {
+			t.Errorf("U+%04X in what was heard: %v", joiner, err)
+		}
+	}
+	// The refusal names the side it is about, and says more than "not a letter"
+	// about a character the caller cannot see in what it sent.
+	for side, rule := range map[string]correctionRule{"heard": {"Kw\xe2\x80\x8bin", "Quinn"}, "meant": {"Kwin", "Quinn\xe2\x80\xae"}} {
+		if err := validateCorrection(rule); err == nil || err.Error() != side+" must not hold format characters, such as zero-width and direction marks" {
+			t.Errorf("a format character in %s: %v", side, err)
+		}
+	}
+	for side, rule := range map[string]correctionRule{"heard is words of letters, digits and apostrophes": {"a\xe2\x80\xa8b", "c"}, "meant must be one line of text": {"a", "b\xe2\x80\xa8c"}} {
+		if err := validateCorrection(rule); err == nil || err.Error() != side {
+			t.Errorf("a line separator: %v, not %q", err, side)
+		}
+	}
+}
+
+// The host holds a call to its input schema before the operator is asked, and
+// the carrier sees a change only after it was confirmed. So the schemas are
+// what keeps a confirmation from showing what a rule may not hold, and they
+// refuse the same code points; they never refuse a rule the list would hold.
+// What was meant is held to the pattern a speaker's label has, which takes a
+// joiner inside a word; what was heard to one that takes none.
+func TestAConfirmationIsNeverShownWhatARuleMayNotHold(t *testing.T) {
+	vectors := readCorrectionVectors(t)
+	refused := vectors.refused(t)
+	joiners, spaces := vectors.joined(t)
+	label := labelPatterns(t)["schemas/speaker-enroll.input.json label"].String()
+	for _, shown := range []struct {
+		file, name string
+		joined     bool
+	}{
+		{"schemas/vocabulary-correct.input.json", "heard", false}, {"schemas/vocabulary-correct.input.json", "meant", true}, {"schemas/vocabulary-forget.input.json", "heard", false},
+	} {
+		var document struct {
+			Properties map[string]struct {
+				Type                 string
+				MinLength, MaxLength int
+				Pattern              string
+			}
+		}
+		raw, err := os.ReadFile(shown.file)
+		if err != nil || json.Unmarshal(raw, &document) != nil {
+			t.Fatalf("%s is unreadable: %v", shown.file, err)
+		}
+		text := document.Properties[shown.name]
+		if text.Type != "string" || text.MinLength != 1 || text.MaxLength != maxCorrectionChars || text.Pattern == "" {
+			t.Fatalf("%s %s is not bounded text with a pattern: %+v", shown.file, shown.name, text)
+		}
+		pattern, err := regexp.Compile(text.Pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (text.Pattern == label) != shown.joined {
+			t.Errorf("%s %s: only what was meant is held to the pattern of a speaker's label", shown.file, shown.name)
+		}
+		for r := range refused {
+			for at, held := range []string{string(r), string(r) + "b", "b" + string(r), "b" + string(r) + string(r) + "c", "b " + string(r) + "c", "b" + string(r) + " c", "b" + string(r) + "c"} {
+				// Only a joiner, only in what was meant, only between two letters.
+				if want := shown.joined && joiners[r] && at == 6; pattern.MatchString(held) != want {
+					t.Errorf("%s %s: U+%04X in %+q: shown to the operator %v", shown.file, shown.name, r, held, !want)
+				}
+			}
+		}
+		for joiner := range joiners {
+			for space := range spaces {
+				for _, held := range []string{"b" + string(space) + string(joiner) + "c", "b" + string(joiner) + string(space) + "c"} {
+					if pattern.MatchString(held) {
+						t.Errorf("%s %s lets a joiner beside U+%04X reach the operator in %+q", shown.file, shown.name, space, held)
+					}
+				}
+			}
+			for other := range joiners {
+				if pattern.MatchString("b" + string(joiner) + string(other) + "c") {
+					t.Errorf("%s %s lets two joiners together reach the operator", shown.file, shown.name)
+				}
+			}
+		}
+		// The code points on either side of each refused range are text.
+		for _, row := range vectors.Refused {
+			first, _ := strconv.ParseUint(row.First, 16, 32)
+			last, _ := strconv.ParseUint(row.Last, 16, 32)
+			for _, r := range []rune{rune(first) - 1, rune(last) + 1} {
+				if r < 0 || refused[r] != "" {
+					continue
+				}
+				if !pattern.MatchString("b" + string(r) + "c") {
+					t.Errorf("%s %s refuses U+%04X, which a rule may hold", shown.file, shown.name, r)
+				}
+			}
+		}
+		for _, rule := range vectors.Valid {
+			side := rule.Heard
+			if shown.name == "meant" {
+				side = rule.Meant
+			}
+			if !pattern.MatchString(side) {
+				t.Errorf("%s %s refuses the valid rule %q -> %q", shown.file, shown.name, rule.Heard, rule.Meant)
+			}
+		}
+	}
+}
+
+// What cannot be read as written is not taught, and a stored list holding it
+// is unreadable whole, as the worker finds it: nothing is written either way.
+func TestARuleThatCannotBeReadAsWrittenIsNeitherTaughtNorListed(t *testing.T) {
+	ctx := context.Background()
+	for _, rule := range []correctionRule{{"Kwin", "\xe2\x80\xaenniuQ"}, {"Kwin", "Quinn\xe2\x80\xa8"}, {"Kw\xe2\x80\x8bin", "Quinn"}, {"Kwin\xc2\x85", "Quinn"}} {
+		host := &correctionHost{files: map[string][]byte{}}
+		if _, err := vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": rule.Heard, "meant": rule.Meant, "revision": 0})); err == nil {
+			t.Fatalf("%q -> %q was taught", rule.Heard, rule.Meant)
+		}
+		if len(host.files) != 0 || len(host.calls) != 1 {
+			t.Fatalf("a refused rule reached the store: %v", host.calls)
+		}
+		stored := correctionDocument{Revision: 1, Rules: []correctionRule{{"rowen", "Rowan"}, rule}}.encode()
+		host = &correctionHost{files: map[string][]byte{correctionsPath: stored}}
+		if _, err := vocabularyCall(ctx, host, "vocabulary.list", aiiosdk.Object(`{}`)); err == nil {
+			t.Fatalf("a stored list holding %q -> %q was listed", rule.Heard, rule.Meant)
+		}
+	}
+
+	// Bytes that are not UTF-8 are refused as sent. Decoding would have mended
+	// them into U+FFFD: a rule nobody wrote, and one the worker never sees.
+	sent := bytes.Replace(confirmed(map[string]any{"heard": "Kwin", "meant": "Quinn?", "revision": 0}), []byte("?"), []byte("\xff"), 1)
+	host := &correctionHost{files: map[string][]byte{}}
+	if _, err := vocabularyCall(ctx, host, "vocabulary.correct", aiiosdk.Object(sent)); err == nil || err.Error() != "text must be valid UTF-8" || len(host.files) != 0 {
+		t.Fatalf("a change holding a byte that is not UTF-8 was taken: %v %v", err, host.files)
+	}
+	stored := bytes.Replace(correctionDocument{Revision: 1, Rules: []correctionRule{{"Kwin", "Quinn?"}}}.encode(), []byte("?"), []byte("\xff"), 1)
+	host = &correctionHost{files: map[string][]byte{correctionsPath: stored}}
+	if _, err := vocabularyCall(ctx, host, "vocabulary.list", aiiosdk.Object(`{}`)); err == nil {
+		t.Fatal("a stored list holding a byte that is not UTF-8 was listed with the byte mended")
+	}
+	if _, err := vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": "x", "meant": "y", "revision": 1})); err == nil || !bytes.Equal(host.files[correctionsPath], stored) {
+		t.Fatal("a stored list holding a byte that is not UTF-8 was written over")
+	}
+}
+
+// A side of a rule is counted in characters, as the operations' schemas count
+// it (maxLength), so what an operator is asked to confirm is what the list
+// holds. Four bytes a character bound its bytes: a text beyond that is refused
+// for its length without being read.
+func TestASideIsCountedInCharactersAsTheSchemasCountIt(t *testing.T) {
+	// A CJK character of three bytes and an emoji of four.
+	cjk, emoji := "\xe6\x9d\xb1", "\xf0\x9f\x98\x80"
+	for _, rule := range []correctionRule{
+		{"a", strings.Repeat(cjk, 22)}, {"a", strings.Repeat(cjk, 64)}, {"a", strings.Repeat(emoji, 64)},
+		{strings.Repeat(emoji, 64), "b"}, {strings.Repeat("a", 64), strings.Repeat("b", 64)},
+	} {
+		if err := validateCorrection(rule); err != nil {
+			t.Errorf("a heard of %d characters and a meant of %d refused: %v", len([]rune(rule.Heard)), len([]rune(rule.Meant)), err)
+		}
+	}
+	for _, refused := range []struct {
+		rule correctionRule
+		want string
+	}{
+		{correctionRule{"a", strings.Repeat(cjk, 65)}, "meant must be 1..64 characters"},
+		{correctionRule{strings.Repeat(cjk, 65), "b"}, "heard must be 1..64 characters"},
+		{correctionRule{"a", strings.Repeat(emoji, 65)}, "meant must be 1..64 characters"},
+		{correctionRule{strings.Repeat("a", 65), "b"}, "heard must be 1..64 characters"},
+		{correctionRule{"a", strings.Repeat("\xff", 257)}, "meant must be 1..64 characters"},
+		{correctionRule{strings.Repeat("\xff", 257), "b"}, "heard must be 1..64 characters"},
+		{correctionRule{"a", strings.Repeat("\xff", 256)}, "text must be valid UTF-8"},
+		{correctionRule{strings.Repeat("\xff", 256), "b"}, "text must be valid UTF-8"},
+	} {
+		if err := validateCorrection(refused.rule); err == nil || err.Error() != refused.want {
+			t.Errorf("a heard of %d bytes and a meant of %d: %v, not %q", len(refused.rule.Heard), len(refused.rule.Meant), err, refused.want)
+		}
+	}
+
+	// Every schema that bounds a side counts what the carrier counts, and the
+	// result states its limits in that unit.
+	schema := func(file string) map[string]any {
+		t.Helper()
+		var document map[string]any
+		raw, err := os.ReadFile(file)
+		if err != nil || json.Unmarshal(raw, &document) != nil {
+			t.Fatalf("%s is unreadable: %v", file, err)
+		}
+		return document
+	}
+	at := func(node any, path ...string) any {
+		for _, name := range path {
+			object, _ := node.(map[string]any)
+			node = object[name]
+		}
+		return node
+	}
+	for _, side := range [][]string{
+		{"schemas/vocabulary-correct.input.json", "properties", "heard"},
+		{"schemas/vocabulary-correct.input.json", "properties", "meant"},
+		{"schemas/vocabulary-forget.input.json", "properties", "heard"},
+		{"schemas/vocabulary.output.json", "properties", "rules", "items", "properties", "heard"},
+		{"schemas/vocabulary.output.json", "properties", "rules", "items", "properties", "meant"},
+	} {
+		if got := at(schema(side[0]), append(side[1:], "maxLength")...); got != float64(maxCorrectionChars) {
+			t.Errorf("%v counts %v characters, the carrier %d", side, got, maxCorrectionChars)
+		}
+	}
+	limits, _ := at(schema("schemas/vocabulary.output.json"), "properties", "limits").(map[string]any)
+	stated, _ := limits["properties"].(map[string]any)
+	if len(stated) != 3 || at(stated, "rules", "const") != float64(maxCorrections) || at(stated, "characters", "const") != float64(maxCorrectionChars) || at(stated, "heard_words", "const") != float64(maxCorrectionWords) {
+		t.Errorf("the output schema's limits are not the carrier's: %v", stated)
+	}
+	if required, _ := limits["required"].([]any); len(required) != 3 {
+		t.Errorf("the output schema does not require each of its three limits: %v", limits["required"])
+	}
+
+	// A meant of 22 CJK characters is 66 bytes: taught, stored and listed.
+	host, ctx := &correctionHost{files: map[string][]byte{}}, context.Background()
+	value, err := vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": "Kwin", "meant": strings.Repeat(cjk, 22), "revision": 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, rules, body := listed(t, value)
+	if revision != 1 || len(rules) != 1 || rules[0].Meant != strings.Repeat(cjk, 22) || !bytes.Contains(host.files[correctionsPath], []byte(strings.Repeat(cjk, 22))) {
+		t.Fatalf("a meant of 22 characters in 66 bytes was not taught and stored: %v", value)
+	}
+	said, _ := body["limits"].(map[string]any)
+	if len(said) != 3 || said["rules"] != float64(maxCorrections) || said["characters"] != float64(maxCorrectionChars) || said["heard_words"] != float64(maxCorrectionWords) {
+		t.Fatalf("the result's limits: %v", body["limits"])
+	}
+	if _, err = vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": "rowen", "meant": strings.Repeat(cjk, 65), "revision": 1})); err == nil || err.Error() != "meant must be 1..64 characters" {
+		t.Fatalf("a meant of 65 characters: %v", err)
+	}
+	if _, err = vocabularyCall(ctx, host, "vocabulary.forget", confirmed(map[string]any{"heard": strings.Repeat(cjk, 65), "revision": 1})); err == nil || err.Error() != "heard must be 1..64 characters" {
+		t.Fatalf("forgetting a heard of 65 characters: %v", err)
+	}
+}
+
+// The most a list can hold still fits where a list is kept and answered: its
+// one stored page and the operations' declared result. A full list of sides
+// of 64 four-byte characters is the most bytes stored; a meant of 64
+// ampersands is the most a result spends on a character.
+func TestTheLargestListFitsItsPageAndItsResult(t *testing.T) {
+	stored, answered := correctionDocument{Revision: 1}, correctionDocument{Revision: 1}
+	for i := 0; i < maxCorrections; i++ {
+		heard := strings.Repeat(string(rune(0x1F600+i)), maxCorrectionChars)
+		stored.Rules = append(stored.Rules, correctionRule{heard, strings.Repeat(string(rune(0x1F680+i)), maxCorrectionChars)})
+		answered.Rules = append(answered.Rules, correctionRule{heard, strings.Repeat("&", maxCorrectionChars)})
+	}
+	for _, doc := range []correctionDocument{stored, answered} {
+		encoded := doc.encode()
+		if held, err := parseCorrections(encoded); err != nil || len(held.Rules) != maxCorrections {
+			t.Fatalf("a full list of the longest sides is not a list: %v", err)
+		}
+		if len(encoded) > snapshotPageBytes {
+			t.Fatalf("a full list of the longest sides is %d bytes, more than its page of %d", len(encoded), snapshotPageBytes)
+		}
+		changed := true
+		result, err := json.Marshal(doc.result(&changed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, descriptor := range declaredPlugin().Descriptors() {
+			if vocabularyOperation(descriptor.ID) && descriptor.MaxResultBytes < len(result) {
+				t.Fatalf("%s answers at most %d bytes and a full list is %d", descriptor.ID, descriptor.MaxResultBytes, len(result))
+			}
+		}
+	}
+	if len(stored.Rules[0].Heard) != maxCorrectionBytes || len(stored.encode()) < maxCorrections*2*maxCorrectionBytes {
+		t.Fatal("the fixture is not the longest list")
+	}
+}
+
+// What was meant takes the two joiners where spelling puts them, as a
+// speaker's label does; what was heard takes none. A rule that writes a
+// Persian word with its non-joiner is taught, stored and listed with those
+// exact bytes, and one whose joiner joins nothing is refused and never stored.
+func TestWhatWasMeantIsJoinedAsItsSpellingJoinsIt(t *testing.T) {
+	persian, joiner, nonJoiner := "\xd9\x85\xdb\x8c\xe2\x80\x8c\xd8\xae\xd9\x88\xd8\xa7\xd9\x87\xd9\x85", "\xe2\x80\x8d", "\xe2\x80\x8c"
+	host, ctx := &correctionHost{files: map[string][]byte{}}, context.Background()
+	value, err := vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": "mikhaham", "meant": persian, "revision": 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision, rules, _ := listed(t, value); revision != 1 || len(rules) != 1 || rules[0].Meant != persian || !bytes.Contains(host.files[correctionsPath], []byte(`"meant":"`+persian+`"`)) {
+		t.Fatalf("a word written with its non-joiner was not taught and stored as written: %v %q", value, host.files[correctionsPath])
+	}
+	if value, err = vocabularyCall(ctx, host, "vocabulary.list", aiiosdk.Object(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, rules, _ := listed(t, value); len(rules) != 1 || rules[0].Meant != persian {
+		t.Fatalf("the stored rule was not listed as written: %v", value)
+	}
+	stored := append([]byte(nil), host.files[correctionsPath]...)
+	for _, unjoined := range []string{persian + nonJoiner, joiner + persian, "a " + joiner + "b", "a" + joiner + " b", "a" + joiner + nonJoiner + "b", joiner} {
+		if _, err = vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": "rowen", "meant": unjoined, "revision": 1})); err == nil || err.Error() != "meant holds a joiner outside a word; a joiner is taken only inside a word" {
+			t.Errorf("a meant of %+q: %v", unjoined, err)
+		}
+	}
+	for _, heard := range []string{persian, "a" + joiner + "b", "a" + nonJoiner + "b"} {
+		if _, err = vocabularyCall(ctx, host, "vocabulary.correct", confirmed(map[string]any{"heard": heard, "meant": "x", "revision": 1})); err == nil || err.Error() != "heard must not hold format characters, such as zero-width and direction marks" {
+			t.Errorf("a heard of %+q: %v", heard, err)
+		}
+	}
+	if !bytes.Equal(host.files[correctionsPath], stored) {
+		t.Fatal("a refused rule changed the stored list")
+	}
+	// A stored list is held to the same rule: one whose joiner joins nothing is unreadable whole.
+	for _, rule := range []correctionRule{{"rowen", "a" + joiner}, {"a" + nonJoiner + "b", "x"}} {
+		host = &correctionHost{files: map[string][]byte{correctionsPath: correctionDocument{Revision: 1, Rules: []correctionRule{{"mikhaham", persian}, rule}}.encode()}}
+		if _, err = vocabularyCall(ctx, host, "vocabulary.list", aiiosdk.Object(`{}`)); err == nil {
+			t.Errorf("a stored list holding %+q -> %+q was listed", rule.Heard, rule.Meant)
+		}
 	}
 }
 

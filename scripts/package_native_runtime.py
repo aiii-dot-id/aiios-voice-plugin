@@ -1,36 +1,54 @@
-"""Freeze the actual Mac inference interpreter, dependency closure and engine.
+"""Verify a native runtime against its bound inventory, and bind a carrier to it.
 
-Produces a relocatable native-code payload for the SDK packaging seam. No
-dependency install, model copy, credential copy, download or deployment occurs.
-This is not a signed package and does not grant downloaded models code authority.
+A runtime is a directory whose profile, voice-runtime.json, binds every file
+in it by SHA-256. verify() holds a runtime to its profile; bind_carrier()
+builds the zero-argument carrier that is bound to that profile. No model copy,
+download or deployment occurs here, and a bound carrier is not a signed package.
+
+This module also packed a runtime once: build() froze a CPython interpreter,
+its site-packages and the Python engine into one, under a profile that named
+the interpreter and a bootstrap script. That packer is removed. The engine is
+the native worker, and nothing here packs another or binds a carrier to one.
+verify() still holds such a runtime to its profile: whether the bytes of a
+runtime that exists are intact is a question, not a way to start, ship or
+build it.
 """
 
 import argparse
 import hashlib
 import json
 import os
-import platform
-import shutil
 import stat
 import subprocess
 import sys
-import sysconfig
-from importlib import metadata
 from pathlib import Path, PurePosixPath
 
-from packaging.markers import default_environment
-from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
+from scripts.runtime_limits import profile_limits
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_REQUIREMENTS = (
-    "mlx-audio",
-    "torch",
-    "onnxruntime",
-    "aiohttp",
-    "sentencepiece",
-    "tiktoken",
-)
+
+# NOTHING IS MADE OF A PROFILE THAT DESCRIBES AN INTERPRETER. A Python engine's
+# profile named an interpreter, a bootstrap script and a site directory in
+# these three members; a native profile leaves them out or states them empty.
+# The carrier refuses such a profile at its start (plugin/native/runtime.go,
+# pythonProfileRefused), and nothing packs one any more.
+#
+# verify() does not refuse one. It answers whether a runtime's bytes are what
+# its profile binds, and that may be asked of an old runtime too. What refuses
+# is everything that would make something of it, each where it reads the
+# profile it would build on: bind_carrier() below, and the scripts that
+# rebuild, stage, rebind, restore, package or assemble a runtime.
+INTERPRETER_MEMBERS = ("python", "bootstrap", "site")
+
+
+def refuse_interpreter_profile(profile):
+    """Raise for a parsed profile that describes an interpreter; a native profile passes."""
+    stated = [name for name in INTERPRETER_MEMBERS if profile.get(name) not in (None, "")]
+    if stated:
+        raise ValueError(
+            "this runtime profile describes a Python engine (it states " + ", ".join(stated)
+            + "), and no engine is one: the carrier starts only the native worker a profile "
+            "names, and no script here rebuilds, stages, binds or assembles another")
 
 
 def sha256(path):
@@ -39,33 +57,6 @@ def sha256(path):
         for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
-
-
-def dependency_closure(roots, distribution=metadata.distribution):
-    """Honor active environment markers AND requested transitive extras."""
-    environment = default_environment()
-    resolved, pending, active_extras = {}, list(roots), {}
-    while pending:
-        requirement = Requirement(pending.pop())
-        name = canonicalize_name(requirement.name)
-        dist = distribution(name)
-        if requirement.specifier and dist.version not in requirement.specifier:
-            raise ValueError(
-                f"installed dependency conflicts with {requirement}: {dist.version}"
-            )
-        extras = set(requirement.extras) | {""}
-        more = extras - active_extras.get(name, set())
-        if not more:
-            continue
-        active_extras.setdefault(name, set()).update(more)
-        resolved[name] = dist
-        for value in dist.requires or []:
-            child = Requirement(value)
-            if child.marker is None or any(
-                child.marker.evaluate({**environment, "extra": extra}) for extra in more
-            ):
-                pending.append(str(child))
-    return resolved
 
 
 def safe_relative(name):
@@ -113,121 +104,16 @@ def verify(root, expected):
     # label may be either boolean; neither value bypasses inventory checks.
     if body["schema"] != "aiii.voice.native-runtime" or type(body.get("qualified")) is not bool:
         raise ValueError("unsupported runtime profile")
+    # A table of time limits the carrier would refuse at its start is refused
+    # by every script that reads the profile. One from before the table was
+    # stated is still read here: a parent to rebuild from, a stage to recover.
+    # Staging (stage_qualified_runtime) is where a profile must state it.
+    profile_limits(body, released=False)
     for name in body["files"]:
         safe_relative(name)
     if runtime_inventory(root, target_platform=body["platform"]) != body["files"]:
         raise ValueError("runtime payload differs from bound inventory")
     return body
-
-
-def build(output):
-    if sys.platform != "darwin" or platform.machine() != "arm64":
-        raise ValueError("this first runtime profile is Mac arm64 only")
-    base = Path(sys.base_prefix).resolve()
-    site = Path(sysconfig.get_path("platlib")).resolve()
-    if not (base / "lib/libpython3.11.dylib").is_file():
-        raise ValueError("expected the existing relocatable CPython 3.11 distribution")
-    dependencies = dependency_closure(ROOT_REQUIREMENTS)
-    copies = {}
-
-    def add(name, origin, owner_root):
-        safe_relative(name)
-        source = origin.resolve(strict=True)
-        source.relative_to(owner_root)
-        if not source.is_file():
-            raise ValueError(f"runtime source is not a file: {name}")
-        if name in copies and copies[name] != source:
-            raise ValueError(f"runtime collision: {name}")
-        copies[name] = source
-
-    # Preserve the existing interpreter/stdlib/dylibs, not the development venv.
-    # Internal symlinks are materialized; external links are refused by add().
-    for directory in ("lib", "include", "share"):
-        for path in (base / directory).rglob("*"):
-            if not path.is_file() or any(
-                x in path.parts for x in ("site-packages", "__pycache__")
-            ):
-                continue
-            if path.suffix == ".pyc":
-                continue
-            add("python/" + path.relative_to(base).as_posix(), path, base)
-    add("python/bin/python3.11", base / "bin/python3.11", base)
-    for path in base.glob("*LICENSE*"):
-        add("python/" + path.name, path, base)
-
-    versions = {}
-    for name, dist in sorted(dependencies.items()):
-        if not dist.files:
-            raise ValueError(f"missing installed file inventory: {name}")
-        versions[name] = dist.version
-        for member in dist.files:
-            relative = PurePosixPath(str(member))
-            if ".." in relative.parts:
-                continue  # console entry points outside site-packages are not invoked
-            if (
-                "__pycache__" in relative.parts
-                or relative.suffix == ".pyc"
-                or relative.name == "direct_url.json"
-            ):
-                continue
-            path = Path(dist.locate_file(member))
-            add("python/lib/python3.11/site-packages/" + str(relative), path, site)
-
-    # Closed application-code allowlist; models and personal state are elsewhere.
-    for path in (ROOT / "runtime").rglob("*.py"):
-        add("engine/" + path.relative_to(ROOT).as_posix(), path, ROOT)
-    for name in (
-        "scripts/verify_snapshot.py",
-        "scripts/catalog.py",
-        "plugin/runtime_bootstrap.py",
-    ):
-        add("engine/" + name, ROOT / name, ROOT)
-    output.mkdir(parents=True, exist_ok=False)
-    files = {}
-    for name, source in sorted(copies.items()):
-        target = output / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        digest = sha256(source)
-        executable = bool(source.stat().st_mode & 0o111)
-        shutil.copyfile(source, target)
-        target.chmod(0o755 if executable else 0o644)
-        if sha256(target) != digest or sha256(source) != digest:
-            raise ValueError(f"source changed during copy: {name}")
-        files[name] = {
-            "sha256": digest,
-            "bytes": target.stat().st_size,
-            "executable": executable,
-        }
-    body = {
-        "schema": "aiii.voice.native-runtime",
-        "qualified": False,
-        "platform": "darwin",
-        "arch": "arm64",
-        "backend": "mlx",
-        "python": "python/bin/python3.11",
-        "bootstrap": "engine/plugin/runtime_bootstrap.py",
-        "site": "python/lib/python3.11/site-packages",
-        "python_version": platform.python_version(),
-        "requirements": list(ROOT_REQUIREMENTS),
-        "distributions": versions,
-        "files": files,
-        "scope": "native runtime/code payload; models are host-supplied data, not part of this payload",
-    }
-    manifest = output / "voice-runtime.json"
-    manifest.write_text(json.dumps(body, indent=2) + "\n")
-    digest = sha256(manifest)
-    verify(output, digest)
-    print(
-        json.dumps(
-            {
-                "output": str(output),
-                "manifest_sha256": digest,
-                "files": len(files),
-                "distributions": len(versions),
-                "bytes": sum(x["bytes"] for x in files.values()),
-            }
-        )
-    )
 
 
 def bind_carrier(output, record_path, go):
@@ -237,6 +123,9 @@ def bind_carrier(output, record_path, go):
     manifest_sha = sha256(output / "voice-runtime.json")
     verify(output, manifest_sha)
     profile = json.loads((output / "voice-runtime.json").read_text())
+    # No carrier is bound to a runtime that describes an interpreter: refused
+    # before any toolchain is run, and nothing is written.
+    refuse_interpreter_profile(profile)
     target = (profile["platform"], profile["arch"])
     if target not in {("darwin", "arm64"), ("windows", "amd64"), ("linux", "amd64")}:
         raise ValueError("runtime carrier target has not been implemented")
@@ -315,4 +204,5 @@ if __name__ == "__main__":
         verify(args.output.resolve(), args.verify)
         print("native runtime verified")
     else:
-        build(args.output.resolve())
+        # With neither option this packed a Python engine's runtime. It packs nothing now.
+        p.error("say --verify or --bind-carrier: this tool no longer packs a runtime")

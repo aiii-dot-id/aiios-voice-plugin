@@ -3,6 +3,8 @@
 Not browser, installed identity, physical audio, delayed-ack or release proof.
 Startup spans are fresh-process measurements with existing operating-system caches.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import json
 import os

@@ -4,6 +4,8 @@ Authenticode status comes from the supplied staging receipt, never a filename.
 T3 signing, host UID integration and installed journeys remain separate gates.
 No release upload or installed identity is changed by this command.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 import copy
 import hashlib
@@ -22,7 +24,8 @@ from scripts.repackage_native_schemas import read_package
 from scripts.package_common_native_checkpoint import enrollment_interfaces
 from scripts.stage_qualified_runtime import check_archive, composition_coordinates
 from scripts.verify_release_sdk_compatibility import verify_sdk_source
-from scripts.package_native_runtime import safe_relative
+from scripts.package_native_runtime import refuse_interpreter_profile, safe_relative
+from scripts.runtime_limits import profile_limits, startup_covers_readiness
 from scripts.check_native_binary_privacy import (
     ALWAYS_FAIL, IMAGE_NAME, package_metadata, release_owned_image)
 from scripts.stage_desktop_publication import HEARING_NOTICE_GROUP, separator_model_path
@@ -371,6 +374,30 @@ def release_contract(cfg, minimum_host_version, measured=None):
     cfg['aiios_min_version'] = minimum_host_version
 
 
+def readiness_inside_startup(variants, profiles):
+    """Each set's wait for its worker's readiness ends inside the start it declares.
+
+    A set declares startup_ms to the host as the allowance for its start
+    (release_contract requires it), and its runtime's profile states
+    ready_ms, how long its carrier waits for its worker to report ready
+    before it says, with the number, that it did not. A carrier that waited
+    as long as the allowance would not have said so when the allowance
+    passed. The carrier is not told what its set declares, so a set that
+    pairs the two wrongly is refused here, with both numbers and its name.
+
+    This is called from main, the one place where both are in hand:
+    release_contract is given the declarations and no profile, and runtime
+    reads a stage's profile before any declaration is bound to it.
+    """
+    for v in variants:
+        variant = v['variant_id']
+        try:
+            startup_covers_readiness(profile_limits(profiles[variant], released=True),
+                                     v['accelerator']['startup_ms'])
+        except ValueError as refusal:
+            raise ValueError(str(refusal) + ': ' + variant) from None
+
+
 def image_census(result, profile, variant):
     """The stage receipt must show a default-deny scan of every shipped image.
 
@@ -501,6 +528,15 @@ def runtime(stage):
         if hashlib.sha256(raw).hexdigest()!=result['runtime_manifest_sha256']:
             raise ValueError('runtime manifest binding changed')
         profile=json.loads(raw)
+    # A stage whose profile describes an interpreter is not assembled: the
+    # carrier would refuse to start it, and no package carries one.
+    try:refuse_interpreter_profile(profile)
+    except ValueError as refusal:raise ValueError(str(refusal)+': '+str(stage)) from None
+    # A package states the time limits each of its runtimes ships with. A
+    # stage from before staging required them is not assembled: its
+    # checkpoint is rebuilt so that its profile states them, and staged again.
+    try:profile_limits(profile,released=True)
+    except ValueError as refusal:raise ValueError(str(refusal)+': '+str(stage)) from None
     rows={**profile['files'],'voice-runtime.json':dict(bytes=len(raw),sha256=result['runtime_manifest_sha256'],executable=False)}
     check_archive(archive,result['runtime_archive'],rows,windows=profile['platform']=='windows')
     archive_extent(result['runtime_archive'],rows)
@@ -831,6 +867,7 @@ def main():
     cfg['settings'] = settings
     bind_variants(cfg, bindings, preference)
     release_contract(cfg, a.minimum_host_version, measured_reservations(bindings, bound))
+    readiness_inside_startup(cfg['variants'], profiles)  # only here are a set's profile and its checked declaration both in hand
     # Each declaration carries its stage's extent; refuse before any output.
     declarations={v['variant_id']:runtime_declaration(bound[v['variant_id']]['runtime_archive'],v['variant_id'],cfg['version'])
                   for v in cfg['variants']}

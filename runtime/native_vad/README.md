@@ -27,8 +27,10 @@ Contract:
 Build with explicit `ORT_INCLUDE` and `ORT_LIBRARY` using CMake. The CLI
 `aii_vad_probe model.onnx input.f32` exists for evaluation only. The linked
 library/CLI require no Python, Torch, package manager, PATH discovery or
-development files. Windows/mobile compilation and session integration are
-separate uncompleted gates.
+development files. The resident session engine composes this component on the
+three desktops (`VoiceVad` in `runtime/native/session/native_models.cpp`), and
+every released desktop set since 0.1.0-beta.7 carries it. Mobile is not a
+released target.
 
 Python is used only as the independent evaluation harness/reference, not by
 the child executable.

@@ -37,13 +37,24 @@ std::chrono::milliseconds SeparationBudget::of(size_t samples) const {
 }
 SeparatingRecognizer::SeparatingRecognizer(std::unique_ptr<aii::voice::Recognizer> live,
     std::unique_ptr<aii::voice::Recognizer> source,std::unique_ptr<SourceSeparator> separator,SeparationBudget budget)
-    :live_(std::move(live)),source_(std::move(source)),separator_(std::move(separator)),budget_(budget) {
+    :live_(std::move(live)),source_(std::move(source)),separator_(std::move(separator)),budget_(budget),
+     minimum_ms_(budget.minimum.count()),maximum_ms_(budget.maximum.count()) {
   if(!live_||!source_||!separator_||!live_->separated()||!live_->continuous_input()||
      !source_->separated()||separator_->maximum_samples()<32000||separator_->maximum_samples()>480000)
     throw std::invalid_argument("source separation composition differs");
   if(!budget_.audio_percent||budget_.audio_percent>10000||budget_.minimum.count()<=0||
-     budget_.minimum>budget_.maximum||budget_.maximum>=std::chrono::seconds(30))
+     budget_.minimum>budget_.maximum)
     throw std::invalid_argument("source separation budget");
+}
+// A separation runs inside one recognition call, between two of its completed
+// stages. A budget that did not end inside that call's time would leave the
+// watchdog to end the session over work that is best effort, so it is refused
+// against the time the session states, where it was held under a typed 30 s.
+void SeparatingRecognizer::bound_separation(uint32_t minimum_ms,uint32_t maximum_ms,uint32_t model_call_ms) {
+  if(active_)throw std::runtime_error("previous separating recognizer has not retired");
+  if(!minimum_ms||minimum_ms>maximum_ms||maximum_ms>=model_call_ms)
+    throw std::invalid_argument("source separation budget must be stated and end inside a model call's time");
+  minimum_ms_.store(minimum_ms);maximum_ms_.store(maximum_ms);
 }
 void SeparatingRecognizer::alive() const {
   if(cancelled_.load())throw aii::voice::Cancelled("source separation cancelled");
@@ -57,8 +68,8 @@ std::string SeparatingRecognizer::execution_info() const {
   return "{\"recognizer\":"+live_->execution_info()+",\"source_separator\":\""+
     separator_->provider()+"\",\"separator_maximum_samples\":"+
     std::to_string(separator_->maximum_samples())+",\"separation_budget\":{\"audio_percent\":"+
-    std::to_string(budget_.audio_percent)+",\"minimum_ms\":"+std::to_string(budget_.minimum.count())+
-    ",\"maximum_ms\":"+std::to_string(budget_.maximum.count())+"},\"separation_outcomes\":{"+outcomes+
+    std::to_string(budget_.audio_percent)+",\"minimum_ms\":"+std::to_string(minimum_ms_.load())+
+    ",\"maximum_ms\":"+std::to_string(maximum_ms_.load())+"},\"separation_outcomes\":{"+outcomes+
     "},\"last_separation_outcome\":\""+outcome_names[last_outcome_.load()]+"\",\"hardware_execution_verified\":false}";
 }
 void SeparatingRecognizer::record(SeparationOutcome outcome) {
@@ -130,7 +141,7 @@ std::string SeparatingRecognizer::finish_with_progress(const std::function<void(
     const std::function<void()> stage=[&]{if(completed)try{completed();}catch(...){refused=true;throw;}};
     try {
       alive();
-      const auto waveforms=bounded(budget_.of(pcm_.size()),[&]{return separator_->separate(pcm_);},
+      const auto waveforms=bounded(in_force().of(pcm_.size()),[&]{return separator_->separate(pcm_);},
                                    [this]{separator_->cancel();},expired);
       // A result that arrives after its budget is abandoned with that budget.
       if(expired)throw aii::voice::Cancelled("separation budget expired");

@@ -7,7 +7,10 @@ such words meant. It is taught, never trained: no model changes.
 ## What a rule is
 
 `heard` is one to four words as the recognizer writes them; `meant` is what
-replaces them. At most 64 rules, 64 bytes each side.
+replaces them. At most 64 rules, 64 characters each side. A character here is
+a Unicode code point, which is what the operations' input schemas count, so
+what an operator is asked to confirm is what the list will hold; a side is
+therefore at most 256 bytes.
 
 - A rule matches whole words, without regard to case, joined by spaces only. It
   never matches inside a longer word and never across punctuation.
@@ -22,13 +25,49 @@ for mis-hearings that are never the right words where the engine listens. A
 rule from "queen" to "Quinn" would rewrite every queen. Words that sound alike and
 are both real belong to decoding, not to this list.
 
+## What a rule may hold
+
+A rule is confirmed by an operator reading it, and what it writes is read as a
+speaker's words. So both sides are text that can be read as it is written:
+
+- Well-formed UTF-8. Bytes that are not are refused, never mended.
+- One line: no control character, and neither the line separator nor the
+  paragraph separator (Unicode general categories Cc, Zl and Zp).
+- No format character (category Cf): the zero-width space, the direction
+  marks, embeddings, overrides and isolates, the soft hyphen, the byte order
+  mark, tags. These have no shape of their own. They hide inside a word or
+  turn its neighbours around, so a rule holding one is not the rule that was
+  read.
+
+Two format characters are ordinary spelling, and `meant` takes them where
+spelling puts them: the zero-width non-joiner and joiner (U+200C, U+200D),
+inside a word, between two characters that are neither a space (category Zs)
+nor a joiner. A Persian word is written with its non-joiner, a Sinhala or
+Devanagari conjunct with its joiner, and an emoji made by joining others with
+the joiners between them. A joiner first or last, beside a space or beside
+another joiner joins nothing and is refused. It is the rule a speaker's label
+has.
+
+`heard` takes neither joiner. It is what the recognizer writes, and nothing
+here establishes that the recognizer writes them.
+
+Letters, marks, digits, punctuation, symbols and spaces of every script are
+text and stay.
+
+The worker, the carrier and the input schemas of the two operations that change
+the list refuse the same code points. `spec/correction_vectors.json` lists
+them, and both validators are held to that list over every code point there is
+and, for the joiners, every place one could stand.
+The host holds a proposed change to its schema before it asks the operator, so
+a change refused there is not put to them.
+
 ## What was meant is also preferred
 
 A rule fixes a word after it was written. The recognizer is also told what
 every rule meant, and prefers to write that itself where the sound is close:
-each `meant` that is one to four words of letters, digits and apostrophes, and
-that the model's own word pieces can spell, is a preferred term for the
-session. So teaching "Kwin" → "Quinn" both rewrites "Kwin" and makes the
+each `meant` that is one to four words of letters, digits and apostrophes in at
+most 64 bytes, and that the model's own word pieces can spell, is a preferred
+term for the session. So teaching "Kwin" → "Quinn" both rewrites "Kwin" and makes the
 recognizer more likely to write "Quinn" in the first place, including where it
 would have written something no rule names.
 
@@ -49,13 +88,17 @@ Consequences to know:
   or did not write at all.
 - The session's readback says how many terms the recognizer took:
   `{"revision", "rules", "preferred"}`.
+- A term is at most 64 bytes. A `meant` longer than that (it can be up to 64
+  characters) is a rule like any other and rewrites what was heard, but it is
+  not offered to the recognizer as a term. When a session's list holds any,
+  its readback also says how many: `"too_long_to_prefer"`.
 - The margin and budget are provisional constants, chosen on synthesized
   speech; they are not operator settings.
 
 ## Where it applies
 
-The list travels beside a session's settings and is pinned with them, like the
-voice and the pause. It applies to that session's `transcript_partial` and
+The list travels beside a session's settings and is pinned for the session,
+like the pause. It applies to that session's `transcript_partial` and
 `transcript_final` events, in the worker, as the last step before an event
 leaves the engine. Speaker identification, enrollment evidence and saved
 recordings use audio and are not touched.
@@ -98,7 +141,7 @@ call them; the two that change the list only propose, and the operator confirms.
 
 | Operation | Does |
 | --- | --- |
-| `vocabulary.list {}` | The rules, the list's `revision` and its limits. |
+| `vocabulary.list {}` | The rules, the list's `revision` and its limits: `{"rules": 64, "characters": 64, "heard_words": 4}`. |
 | `vocabulary.correct {heard, meant, revision}` | Adds a rule, or replaces what a held phrase meant. Operator confirms. |
 | `vocabulary.forget {heard, revision}` | Removes the rule for a phrase. Operator confirms. |
 
@@ -107,7 +150,7 @@ call them; the two that change the list only propose, and the operator confirms.
   changes nothing (the same rule again, a phrase with no rule) says
   `changed: false` and writes nothing.
 - A change applies from the next session. A session already open keeps the
-  list it opened with, as it keeps its voice and its pause.
+  list it opened with, as it keeps its pause.
 - Past transcripts are never rewritten.
 
 ## Where the list is kept
@@ -139,3 +182,12 @@ session its corrections, never its open, and the carrier logs one
   still apply.
 - Nothing shows the operator the uncorrected words yet; the engine sends them
   with every corrected transcript for a host that will.
+- `heard` takes no joiner. A phrase that the recognizer would have to write
+  with a zero-width joiner or non-joiner cannot be a rule's `heard`; what it
+  is corrected to (`meant`) can be written with them.
+- A flag made of tag characters cannot be written in a rule: tag characters
+  are format characters and are refused on both sides.
+- A `meant` written with joiners is offered to the recognizer as a term like
+  any other of at most 64 bytes. The recognizer prefers it only if its own
+  word pieces can spell it, and passes it over otherwise; the rule rewrites
+  what was heard either way.

@@ -1,0 +1,117 @@
+Changes to the source of the speech synthesis engine
+
+The speaking libraries of this plugin are built from audio.cpp,
+Copyright 2026 ShugoAI LLC, at revision
+3174e6b26f11a0e39b4f150961dce98f43ba860d, under the Apache License, Version
+2.0, which is this repository's licence too (LICENSE, at its root). The builds
+do not take that revision's source as it stands. The five files in this
+directory stand in place of the engine's own files of the same path, and two
+more of the engine's files are replaced by the two files in
+../windows_resident/overrides, which the notice there states.
+
+Together the five files, and two places of mimi_decoder.cpp there, make the
+transformer blocks of the Pocket speech model compute GELU by its tanh
+approximation, as that model's reference implementation does
+(pocket_tts/modules/transformer.py: F.gelu(..., approximate="tanh")), where
+the engine's transformer blocks compute it by erf. Blocks of the engine's
+other models keep the engine's default.
+
+Each file in this directory is listed here with where it comes from and what
+was changed.
+
+vec.h
+  Upstream: external/ggml/src/ggml-cpu/vec.h
+  Upstream sha256: 9b55ac2d0c79bf7d9dba1a0efe8c8ef9a40a3775c0086841a2d3eb93388ac96c
+  As built sha256: 81a3ed7c862e4c828a5857814776e449b2da5a564c7b23aec836b8038f8aeb1e
+  Changed: four lines added and one removed, in one place. GGML_GELU_FP16 is
+  defined only where GGML_GELU_FORCE_F32 is not. A build that defines
+  GGML_GELU_FORCE_F32, as this plugin's builds of the speaking library do,
+  then computes GELU on 32-bit floats and not through ggml's 16-bit table.
+  Nothing else differs.
+  This file is ggml's, which the engine carries under external/ggml. ggml is
+  distributed under the MIT License reproduced at the end of this notice, and
+  the modified copy stays under that licence.
+
+transformer_blocks.h
+  Upstream: include/engine/framework/modules/attention/transformer_blocks.h
+  Upstream sha256: e3bde0b338e726f92985624084ef532d27e82594a005164c90a832ffb75df12a
+  As built sha256: c303faef82cd5bc0bc5fe216c86e40eaf070683f6eb3102976556462eaf2d862
+  Changed: one line added. TransformerEncoderBlockConfig gains the member
+  gelu_approximation, GeluApproximation::ExactErf where nothing sets it.
+  Nothing else differs.
+
+transformer_blocks.cpp
+  Upstream: src/framework/modules/attention/transformer_blocks.cpp
+  Upstream sha256: ba6c4ec5af6affa3b3f396937d4ce73f002a309c0a3affc065c602708ca2056e
+  As built sha256: 68edfc940d9bce261d5f4c57cb601131f65fb627180978a46ed318ad8a610b07
+  Changed: two lines, in two places. The feed-forward module that
+  TransformerEncoderBlockModule::build and
+  StreamingTransformerEncoderBlockModule::build make is given the
+  configuration's gelu_approximation, where upstream gives it
+  GeluApproximation::ExactErf. Nothing else differs.
+
+flow_lm.cpp
+  Upstream: src/models/pocket_tts/flow_lm.cpp
+  Upstream sha256: 7f60cad2e4a3364c594e94e2ff597f928c40cac7d890b864418f508a90016297
+  As built sha256: 40f55d48971f72fce61be995af4432cc35a201c7c5b2fdc3e15fd726da6a7080
+  Changed: three lines added and four removed, in one place. The streaming
+  transformer block of the flow model is configured through
+  graph_common::pocket_transformer_config, with the hidden size, the heads,
+  the intermediate size and the epsilon upstream writes there. Nothing else
+  differs.
+
+graph_common.h
+  Upstream: src/models/pocket_tts/graph_common.h
+  Upstream sha256: a16717241c8e8e6e18a1ec37aa44c6213a53c140794ebe324e6a2d31de4a40c5
+  As built sha256: 5ebdf6cb7c80e33d389ae5cca5d870afb996a5d524ee88ff24b66fbaee16b9f8
+  Changed: ten lines added in one place, the function
+  pocket_transformer_config. It returns the block configuration upstream
+  writes where it is used (those four values, no bias) with
+  gelu_approximation set to GeluApproximation::Tanh. Nothing else differs.
+
+"As built" is the file that stood in the engine source the Windows and the
+macOS libraries were built from, which is the file here without its four-line
+head comment; a test holds the two to that. "Upstream" is the file of the
+upstream repository at the revision above.
+
+WHAT WAS COMPARED. The engine source the Windows libraries were built from and
+the one the macOS libraries were built from were each compared with the
+upstream revision file by file: 4,524 files, none missing and none added.
+Each differs from upstream in the five files here and in mimi_decoder.cpp; the
+macOS one also in acoustic_model.cpp and in the bundled ggml's Metal backend
+(../metal-library-beside.patch), which that build applies in the source, where
+the Windows build compiles its two replaced files from their own directory. A
+script of the engine's Windows build that no library is compiled from differs
+by its line ends alone. Nothing else differs. The Windows build also compiles
+three files that scripts/stage_native_path_shim.py derives from the engine's
+own.
+
+The Linux library is stated apart, in ../engine_overrides_linux/NOTICE: how
+it was built is not recorded, an engine source of that time is kept, and it
+differs from upstream in the five files here, in three more, and in the three
+files scripts/stage_native_path_shim.py derives.
+
+--------------------------------------------------------------------------
+ggml
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

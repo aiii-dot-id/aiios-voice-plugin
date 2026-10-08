@@ -4,6 +4,18 @@ This is the engine's internal library binding, **not a Plugin SDK extension**.
 Browser audio, receipts, session state, authorization, input completion and
 forced retirement remain with the existing host/carrier/session owners.
 
+This contract was written for the Python owner in `backend.py`. No released
+desktop set since 0.1.0-beta.7 carries that owner or any Python: the shipped
+owner is the C++ session worker (`Pocket` in
+`runtime/native/session/native_models.cpp`), which calls the same library
+through `nv_create_bound`, `nv_configure_voice`, `nv_start`, `nv_next`,
+`nv_cancel`, `nv_reset`, `nv_destroy` and, on Linux, `nv_execution_info`. The
+statements below that belong to the Python owner (its `tts_stream`, `tts_next`
+and `cancel_synthesis` interface, `SpeechOutput`, the GIL, the lifetime lock,
+the generation it assigns, the copy it takes and its 512-character input bound)
+describe that harness only. The library's own rules in the ABI table hold for
+either owner.
+
 The adapter supplies the existing `tts_stream`, `tts_next`, `cancel_synthesis`
 interface. `SpeechOutput` still owns bounded queues and the final delivery
 fence. No function opens an audio device or a network connection.
@@ -33,6 +45,10 @@ playback fence still governs audio already delivered to the browser.
 | Call | Owner and return meaning |
 | --- | --- |
 | `nv_create` | Model owner; loads verified assets and prepares a session; returns a handle or a bounded error. This is not an admission-only control. |
+| `nv_create_bound` | Model owner; as `nv_create`, from a bound model root and its explicit configuration file, which is required. Backend is an explicit `cpu`, `vulkan` or `metal` with 1 to 4 threads; the default preset is bound. |
+| `nv_create_voice_bound` | Model owner; as `nv_create_bound`, with the preset named at creation. |
+| `nv_configure_voice` | Model owner, between generations; selects the preset and sampling temperature (0 to 1) for later generations. Validates before it changes anything, including that the preset's file is present; loads no model and runs no inference. Busy (-3) while a generation is active or computing. |
+| `nv_execution_info` | Linux desktop builds only; copies the backend selection recorded at creation (requested backend and, for Vulkan, the chosen device). It takes no owner lock, so the caller keeps the handle alive across the call. It is not proof of hardware execution. |
 | `nv_start` | Model owner; binds text, seed, noise and frame bound to the prepared request. May compute during preparation. |
 | `nv_next` | Model owner; one <=1,920-sample mono 24 kHz frame, natural EOS, cancellation, or an error. |
 | `nv_cancel` | Control thread; atomic generation fence only, returns immediately. |

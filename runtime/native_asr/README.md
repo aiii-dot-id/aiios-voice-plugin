@@ -8,8 +8,12 @@ executable does not. No model has been retrained, replaced, or converted here.
 The caller supplies the exact, verified immutable model directory and 128×257
 float32 mel coefficients from the existing model catalog. There is no search,
 download, alternate vocabulary, implicit language selection, or provider fallback.
-This first implementation explicitly selects CPU. GPU bindings and device-level
-qualification remain required before it replaces a deployed recognizer.
+This component explicitly selects CPU. A session worker built without
+`AII_MULTITALKER_ASR` composes it as its recognizer (`default_recognizer` in
+`runtime/native/session/native_models.cpp`). The released desktop sets are
+built with that option and carry the speaker-conditioned composition of
+[`runtime/native_multitalker`](../native_multitalker/README.md) instead, whose
+placement is its own.
 
 ## Ownership contract
 
@@ -80,6 +84,10 @@ its feature math and recognition code are unchanged. This is storage/continuity
 qualification, not a speedup: the two native unpaced runs took about 10.8 seconds
 versus 9.74 seconds for that reference.
 
-This is a usable native **STT component**, not the complete Python-free voice
-resident, GPU qualification, the frozen 192-case panel, an installed signed
-plugin, or a human-level claim. Preserve CP1 until the full composition earns it.
+This is a usable native **STT component**. The evidence above is not GPU
+qualification, the frozen 192-case panel, an installed signed plugin, or a
+human-level claim. When it was written the instruction was to preserve the
+frozen Python checkpoint (CP1) until the full native composition earned its
+place. Every released desktop set since 0.1.0-beta.7 is that composition, the
+Python-free resident engine in `runtime/native/session`, qualified by each
+release's own records and not by this component proof.

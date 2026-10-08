@@ -3,10 +3,12 @@
 The .invalid URLs intentionally require operator-managed preseeding. This is
 not catalog publication, a T3 signature, an installed gate or a mobile release.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse,hashlib,json,os,shutil,subprocess,tarfile
 from pathlib import Path
 from scripts.build_plugin_carrier import SDK_SOURCE,PIN
-from scripts.package_native_runtime import verify
+from scripts.package_native_runtime import refuse_interpreter_profile,verify
 ROOT=Path(__file__).resolve().parents[1];GO='/usr/local/go1.27/bin/go'
 SPEAKER_OPERATIONS={'speaker.enroll','speaker.list','speaker.remove','speaker.reset',
                     'speaker.discard_capture','speaker.upgrade_policy','speaker.buckets','speaker.associate','speaker.forget','speaker.link'}
@@ -64,6 +66,9 @@ def main():
     a.checkpoint=a.checkpoint.resolve();a.proof=a.proof.resolve();a.out=a.out.resolve();a.out.mkdir(parents=True,exist_ok=False)
     frozen=json.loads((a.checkpoint/'freeze.json').read_text());assert frozen['passed']
     runtime=a.checkpoint/'runtime';profile=verify(runtime,frozen['runtime_manifest_sha256'])
+    # A checkpoint whose profile describes an interpreter is verified like any
+    # other and no package is assembled from it; the output directory stays empty.
+    refuse_interpreter_profile(profile)
     target=platform_spec(profile);carrier=runtime/('aii-voice-t3'+target['suffix'])
     assert not a.enrollment_proof or a.enrollment,'an enrollment proof requires enrollment mode'
     uid_dir=a.enrollment_proof.resolve() if a.enrollment_proof else a.proof/('enrollment' if a.enrollment else 'uid')

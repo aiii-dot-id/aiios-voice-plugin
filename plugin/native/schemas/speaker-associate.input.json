@@ -4,7 +4,7 @@
   "properties":{
     "speaker_uuid":{"type":"string","description":"Exact persistent UUID returned by speaker.buckets; never a track number.","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
     "registry_revision":{"type":"string","description":"Exact decimal revision returned by speaker.buckets; stale writes refuse.","pattern":"^(0|[1-9][0-9]{0,15})$"},
-    "display_label":{"type":"string","description":"Human-chosen display name; empty clears it. Not an authority grant.","maxLength":128},
+    "display_label":{"type":"string","description":"Human-chosen display name in any script, as the operator will read it; empty clears it. No control or format characters; the zero-width joiner and non-joiner are taken only inside a word. Not an authority grant.","maxLength":128,"pattern":"^[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]*(?:[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Zs}](?:[\u200c\u200d][^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Zs}])+[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]*)*$"},
     "external_id":{"type":"string","description":"Optional operator-chosen external identifier; omission clears it.","maxLength":128},
     "session_id":{"type":"string","description":"Optional exact current session ID; omit for management after microphone close.","minLength":1,"maxLength":128}
   },

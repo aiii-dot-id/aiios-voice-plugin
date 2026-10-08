@@ -119,6 +119,7 @@ std::string NativeSpeaker::identify_track_at(uint64_t final,uint64_t utterance,c
   // The separated, speaker-specific span is the only valid enrollment
   // evidence for this final. Never substitute the pooled microphone signal.
   if(sample)p_->evidence.retain(epoch,final,*sample);
+  if(model_part_done)model_part_done(); // the inference is over; the registry's storage follows
   const auto result=p_->observe_at(p_->session_epoch,utterance,sample,pcm.size());
   if(p_->cancelled)throw Cancelled("UID cancelled");
   return result;
@@ -131,6 +132,7 @@ std::string NativeSpeaker::identify_track(uint64_t final,const std::vector<float
   if(!pcm.empty())sample=recording(pcm);
   if(p_->cancelled)throw Cancelled("UID cancelled");
   if(sample)p_->evidence.retain(epoch,final,*sample);
+  if(model_part_done)model_part_done(); // the inference is over; the registry's storage follows
   const auto result=p_->observe(sample,pcm.size());
   if(p_->cancelled)throw Cancelled("UID cancelled");
   return result;
@@ -219,9 +221,11 @@ std::string NativeSpeaker::identify(uint64_t final,const std::vector<float>& pcm
   // Missing enrollment must not lose the recording needed to create the first
   // profile. No file write occurs and abort/new-open retire these vectors.
   p_->evidence.retain(epoch,final,sample);
+  if(model_part_done)model_part_done(); // the inference is over; the enrollment's read follows
   const auto snapshot=[&] {
     try{return p_->read();}
     catch(const Cancelled&){throw;}
+    catch(const SpeakerStorageLate&){throw;} // late is said as late
     catch(const std::exception&){throw EnrollmentUnavailable("authoritative enrollment unavailable");}
   }();
   if(p_->cancelled)throw Cancelled("UID cancelled");

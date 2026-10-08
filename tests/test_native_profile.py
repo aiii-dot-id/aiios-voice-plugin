@@ -1,8 +1,12 @@
+"""The Python double's choice of its recognizer's model catalog from a runtime profile.
+
+Two cases that were here went with what they tested, the packaged interpreter's
+bootstrap, which is removed. What stays is the double's own reading of a profile.
+"""
 import json
 
 import pytest
 
-from plugin import runtime_bootstrap as boot
 from runtime.stt.profile import native_catalog
 from runtime.model_assets import read_json
 
@@ -67,52 +71,3 @@ def test_native_selection_refuses_other_backend_or_catalog(tmp_path, damage):
         catalog.symlink_to(tmp_path / "voice-runtime.json")
     with pytest.raises(ValueError):
         native_catalog(tmp_path, value)
-
-
-def test_bootstrap_native_lane_uses_profile_only(monkeypatch, tmp_path):
-    value, catalog = profile(tmp_path)
-    data = tmp_path / "host-models"
-    data.mkdir()
-    called = []
-    monkeypatch.setattr(boot, "prepare", lambda **kw: (tmp_path, value, data))
-    monkeypatch.setattr(boot.sys, "argv", ["bootstrap", "--stt"])
-    monkeypatch.setattr(
-        boot.runpy,
-        "run_module",
-        lambda module, **kw: called.append((module, boot.sys.argv[:], kw)),
-    )
-    boot.main()
-    assert called == [
-        (
-            "runtime.stt.native_resident",
-            ["packaged-stt", "--model-assets", str(catalog), "--root", str(data)],
-            {"run_name": "__main__"},
-        )
-    ]
-    monkeypatch.setattr(
-        boot.sys, "argv", ["bootstrap", "--stt", "--native-root", "other-model"]
-    )
-    with pytest.raises(RuntimeError, match="no external selection"):
-        boot.main()
-    assert len(called) == 1
-
-
-def test_native_inspection_never_imports_torch_or_transformers(
-    monkeypatch, tmp_path, capsys
-):
-    value, _ = profile(tmp_path)
-    imported = []
-    monkeypatch.setattr(boot, "prepare", lambda **kw: (tmp_path, value, tmp_path))
-    monkeypatch.setattr(boot.sys, "argv", ["bootstrap", "--inspect-stt"])
-    monkeypatch.setattr(
-        boot.importlib, "import_module", lambda name: imported.append(name)
-    )
-    monkeypatch.setattr(boot.importlib.metadata, "version", lambda name: name)
-    monkeypatch.setattr(boot, "module_files", lambda *a: {})
-    monkeypatch.setattr(boot, "native_images", lambda *a: [])
-    boot.main()
-    assert imported == ["numpy", "onnxruntime"]
-    assert set(json.loads(capsys.readouterr().out)["versions"]) == {
-        "numpy",
-        "onnxruntime-directml",
-    }

@@ -34,6 +34,8 @@ PreparedEnrollment prepare_enrollment(const std::string& current,const PolicyDoc
     const std::string& embedding_binding) {
   auto next=read_snapshot(current,policy); // failure is NEVER empty enrollment
   valid_id(speaker_id);
+  // A label is judged when it is given; one already stored is read as stored.
+  require(readable_label(label),"speaker label holds a control or format character; a joiner is taken only inside a word");
   require(embedding_binding==policy.policy.embedding_binding,"embedding model/frontend binding differs");
   require(!recordings.empty()&&recordings.size()<=8,"bounded enrollment recordings required");
   auto selected=std::lower_bound(next.speakers.begin(),next.speakers.end(),speaker_id,

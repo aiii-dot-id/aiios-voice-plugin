@@ -5,6 +5,9 @@
 #include <atomic>
 #include <future>
 #include <iostream>
+#include <mutex>
+#include <thread>
+#include <vector>
 using namespace aii::voice;
 using namespace aii::voice::wire;
 using namespace std::chrono_literals;
@@ -159,7 +162,136 @@ static void cancel_storage_waiters() {
   bridge.sender([&](Json q){auto r=response(field(q.get(),"snapshot_request"),"recovered");bridge.accept(r.get());});
   check(bridge.read()=="recovered","cancellation poisoned successor");
 }
+// A WRITE WAITS A WRITE'S TIME, A READ A READ'S. The host answers a durable
+// write later than a read: a file synced, a rename, a directory synced, a
+// record synced. The bridge gave both two seconds, and its carrier gave the
+// host 1.5 s for either; on a slow disk a publication could not fit and the
+// speaker was reported unavailable. With a table that gives a read 300 ms
+// and a write 1.5 s: a publication whose stage and publish each answer after
+// 700 ms is taken and read back; a page that answers after 700 ms is late.
+// And a table that does not hold is refused before it is used.
+static void a_write_waits_a_writes_time() {
+  WorkerLimits limits;
+  limits.exchange_read=300ms;limits.exchange_write=1500ms;limits.opening=1500ms;limits.whole_read=5000ms;limits.whole_publication=9000ms;
+  const std::string candidate(1000,'c'),upload(64,'a');
+  std::mutex m;std::string staged,current="prior";std::atomic<int> read_delay{0},write_delay{700};
+  std::vector<std::thread> answers; // each answer is given later, off the caller, as a host's is
+  SnapshotBridge b;b.limits(limits);
+  // Joined before the bridge goes, on every way out: a check that fails says
+  // its own words and is not lost to a thread still running.
+  struct Join {std::vector<std::thread>& t;~Join(){for(auto& x:t)if(x.joinable())x.join();}} join{answers};
+  b.sender([&](Json j){
+    auto query=std::make_shared<Json>(std::move(j));
+    answers.emplace_back([&,query]{
+      const auto* q=field(query->get(),"snapshot_request");const auto* action=field(q,"action");
+      std::this_thread::sleep_for(std::chrono::milliseconds(action?write_delay.load():read_delay.load()));
+      Json r=object();
+      {
+        std::lock_guard<std::mutex> lock(m);
+        if(!action)r=response(q,current);
+        else {
+          put(r,"id",clone(field(q,"id")));put(r,"session_id",clone(field(q,"session_id")));auto v=object();
+          if(str(action)=="stage") {
+            const auto chunk=aii::uid::decode_base64(str(field(q,"data_b64"),100000),65536);
+            if(!flag(field(q,"append")))staged.clear();staged+=chunk;
+            put(v,"bytes",number(chunk.size()));put(v,"size",number(staged.size()));
+          } else {
+            put(v,"size",number(staged.size()));put(v,"sha256",clone(field(q,"sha256")));put(v,"replaced",boolean(true));
+            put(v,"durable",boolean(true));put(v,"durability",string("synced"));current=staged;
+          }
+          put(r,"value",std::move(v));
+        }
+      }
+      try{b.accept(r.get());}catch(const std::exception&){} // an answer to a wait already given up is not this test's
+    });
+  });
+  b.begin("slow-disk");
+  const auto began=std::chrono::steady_clock::now();
+  auto receipt=b.publish(candidate,picosha2::hash256_hex_string(std::string("prior")),false,upload,Store::Enrollment);
+  const auto took=std::chrono::steady_clock::now()-began;
+  check(flag(field(receipt.get(),"readback_verified")),"a publication whose writes each took 700 ms was not taken");
+  check(took>=1400ms,"the writes did not take the time the test gave them");
+  {std::lock_guard<std::mutex> lock(m);check(current==candidate,"the slow publication did not become the file");}
+  // A read held to the same 700 ms is past a read's 300 ms: late, said so, and nothing invented.
+  read_delay=700;
+  try{(void)b.read(nullptr,Store::Enrollment);throw 42;}
+  catch(const std::exception&){}catch(...){throw std::runtime_error("a page 400 ms past a read's time was waited for");}
+  for(auto& t:answers)t.join();
+  answers.clear();
+  // A table that does not nest is refused, and the bridge keeps the one it had.
+  WorkerLimits bad=limits;bad.exchange_write=100ms;
+  try{b.limits(bad);throw 42;}catch(const std::exception&){}catch(...){throw std::runtime_error("a table that does not nest was taken");}
+  check(b.limits().exchange_write==1500ms,"a refused table replaced the one in force");
+}
+// LATE IS SAID AS LATE, AND ONLY LATE. The carrier marks a query the host did
+// not answer inside its time (HOST_STORAGE_NO_ANSWER); the bridge raises that
+// as StorageLate, the model's reader gets BUSY and not FAILED, a stage that
+// was late says nothing was published, a publish that was late says its
+// outcome is unresolved, and a refusal with any other reason stays what it
+// was. And storage says what it is doing: busy while an operation is in
+// flight, one more ended when it is over.
+static void late_storage_is_said_as_late() {
+  const std::string candidate(1000,'c'),upload(64,'a'),prior="prior";
+  std::string current=prior; // what a read gives: the file as the host has it
+  std::string late; // "", "read", "stage", "publish", or "refused" (an error with no reason)
+  bool busy_seen=false;
+  SnapshotBridge b;
+  b.sender([&](Json j){
+    busy_seen=b.activity().busy;
+    const auto* q=field(j.get(),"snapshot_request");const auto* action=field(q,"action");
+    const std::string kind=action?str(action):"read";
+    Json r=object();put(r,"id",clone(field(q,"id")));put(r,"session_id",clone(field(q,"session_id")));
+    if(late==kind||late=="refused") {
+      put(r,"error",string("host UID snapshot unavailable or invalid"));
+      if(late!="refused")put(r,"reason_code",string(kHostStorageNoAnswer));
+    } else if(!action) r=response(q,current);
+    else {
+      auto v=object();
+      if(kind=="stage"){put(v,"bytes",number(candidate.size()));put(v,"size",number(candidate.size()));}
+      else {put(v,"size",number(candidate.size()));put(v,"sha256",clone(field(q,"sha256")));put(v,"replaced",boolean(true));
+        put(v,"durable",boolean(true));put(v,"durability",string("synced"));current=candidate;}
+      put(r,"value",std::move(v));
+    }
+    b.accept(r.get());
+  });
+  b.begin("late");
+  const auto before=b.activity();
+  check(!before.busy,"storage is busy with nothing asked of it");
+  check(b.read(nullptr,Store::Enrollment)==prior&&busy_seen,"a read in flight was not seen as storage at work");
+  check(!b.activity().busy&&b.activity().completed==before.completed+1,"a read that ended was not counted as ended, once");
+
+  const auto raised=[&](const std::function<void()>& f)->std::string {
+    try{f();}catch(const StorageLate& e){return std::string("late: ")+e.what();}
+    catch(const std::exception& e){return std::string("other: ")+e.what();}
+    return "nothing";
+  };
+  char output[4096]{};size_t written=99;
+  late="read";
+  check(raised([&]{(void)b.read(nullptr,Store::Enrollment);}).rfind("late: ",0)==0,"a read the host did not answer in time was not raised as late");
+  check(SnapshotBridge::callback(&b,output,sizeof output,&written)==AII_VOICE_BUSY&&written==0,"the model's reader was not told the storage was late");
+  late="refused";
+  check(raised([&]{(void)b.read(nullptr,Store::Enrollment);}).rfind("other: ",0)==0,"a refusal with no reason was raised as late");
+  check(SnapshotBridge::callback(&b,output,sizeof output,&written)==AII_VOICE_FAILED&&written==0,"a refused read reached the model's reader as late");
+
+  const auto publish=[&]{(void)b.publish(candidate,picosha2::hash256_hex_string(prior),false,upload,Store::Enrollment);};
+  late="stage";
+  auto said=raised(publish);
+  check(said.rfind("late: ",0)==0&&said.find("no publication requested")!=std::string::npos&&said.find("unresolved")==std::string::npos,
+        "a stage that was late did not say that nothing was published");
+  late="publish";
+  said=raised(publish);
+  check(said.rfind("late: ",0)==0&&said.find("unresolved")!=std::string::npos,"a publish that was late did not say its outcome is unresolved");
+  late="refused";
+  said=raised(publish);
+  check(said.rfind("other: ",0)==0,"a refused upload was raised as late");
+  late.clear();
+  const auto ended=b.activity().completed;
+  publish();
+  check(!b.activity().busy&&b.activity().completed==ended+1,"a publication that ended was not counted as ended, once");
+}
 int main(){try{
+  a_write_waits_a_writes_time();
+  late_storage_is_said_as_late();
   concurrent_recording_and_uid(false);concurrent_recording_and_uid(true);
   concurrent_recording_and_uid(false,true);concurrent_recording_and_uid(true,true);
   cancel_storage_waiters();

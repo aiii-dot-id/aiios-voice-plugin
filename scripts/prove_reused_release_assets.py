@@ -4,6 +4,8 @@ The unauthenticated GitHub release API reports the complete asset size and
 SHA-256 digest. This is metadata evidence, not a fresh body download; the host
 still hashes the complete body during every installation.
 """
+from scripts._assertions import require_assertions
+require_assertions()
 import argparse
 from datetime import datetime, timezone
 import json

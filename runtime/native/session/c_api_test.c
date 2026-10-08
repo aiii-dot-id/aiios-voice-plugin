@@ -5,6 +5,7 @@
 extern aii_voice_models* aii_test_models(void);
 extern unsigned aii_test_cancel_count(void);
 extern void aii_test_yield(void);
+extern void aii_test_warm_took(uint32_t milliseconds);
 #define REQUIRE(x) do { if(!(x)) { fprintf(stderr,"line %d: %s\n",__LINE__,#x);abort(); } } while(0)
 static aii_voice_error error;
 #define OK(x) do { aii_voice_result result=(x); if(result!=AII_VOICE_OK) { fprintf(stderr,"line %d: result=%d %s\n",__LINE__,result,error.message);abort(); } } while(0)
@@ -40,6 +41,42 @@ int main(void) {
   REQUIRE(aii_voice_models_warm(NULL,&ready,&error)==AII_VOICE_INVALID);
   REQUIRE(aii_voice_models_warm(m,NULL,&error)==AII_VOICE_INVALID);
   OK(aii_voice_models_warm(m,&ready,&error));REQUIRE(ready.models_loaded==4 && ready.probe_ms==1 && !strcmp(ready.accelerator,"cpu"));
+  /* WHAT A WARM INFERENCE MAY TAKE IS ITS CALLER'S TO STATE. One that took
+   * exactly that is taken. One that took a millisecond more fails the start,
+   * says both numbers and the member of the limits table, and gives the
+   * models back. The entry that states none gives it the header's default. */
+  REQUIRE(aii_voice_models_warm_within(m,0,&ready,&error)==AII_VOICE_INVALID);
+  aii_test_warm_took(250);
+  OK(aii_voice_models_warm_within(m,250,&ready,&error));REQUIRE(ready.probe_ms==250);
+  aii_test_warm_took(251);
+  REQUIRE(aii_voice_models_warm_within(m,250,&ready,&error)==AII_VOICE_FAILED);
+  REQUIRE(!strcmp(error.message,"native warm inference took 251 ms, more than the 250 ms the limits table gives it (warm_probe_ms)"));
+  OK(aii_voice_models_warm_within(m,251,&ready,&error));REQUIRE(ready.probe_ms==251);
+  aii_test_warm_took(40001);
+  REQUIRE(aii_voice_models_warm(m,&ready,&error)==AII_VOICE_FAILED && strstr(error.message,"more than the 40000 ms"));
+  aii_test_warm_took(1);
+  {
+    /* THE SESSION'S OWN WAITS ARE ITS CALLER'S TO STATE TOO: every one, each
+     * in range, or the open is refused and the models are given back. */
+    const aii_voice_open_options options={NULL,NULL,30,1};
+    aii_voice_session_limits waits={1500,800,1200,1000,2000,300,1000};
+    REQUIRE(aii_voice_open_bounded(m,&options,NULL,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"limits are required"));
+    waits.model_call_ms=0;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"model deadline"));
+    waits.model_call_ms=1500;waits.input_tail_ms=600001;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"tail deadline"));
+    waits.input_tail_ms=800;waits.output_take_ms=0;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"output deadline"));
+    waits.output_take_ms=1200;waits.endpoint_decision_ms=0;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"endpoint decision wait"));
+    waits.endpoint_decision_ms=1000;waits.endpoint_retire_ms=600001;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"endpoint retirement wait"));
+    waits.endpoint_retire_ms=2000;waits.separation_min_ms=0;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"bounds are required"));
+    waits.separation_min_ms=1001;
+    REQUIRE(aii_voice_open_bounded(m,&options,&waits,&s,&error)==AII_VOICE_INVALID && !s && strstr(error.message,"the minimum the lesser"));
+    /* A table that holds opens every session of the worker's tests. */
+  }
   aii_voice_settings bad={0,3000,.5f};
   REQUIRE(aii_voice_open(m,&bad,&s,&error)==AII_VOICE_INVALID && !s && *error.message);
   aii_voice_speech_settings unsupported={"alba","fr","en",.3f,20260908};

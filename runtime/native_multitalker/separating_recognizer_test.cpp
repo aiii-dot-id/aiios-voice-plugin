@@ -159,7 +159,8 @@ int main(){try{
   }
   {
     // Separation is best effort under a latency budget: 5 x the separated
-    // audio, clamped to 4..25 s, injectable for tests and below the watchdog.
+    // audio, clamped to 4..25 s where its owner states no other bounds, and
+    // inside the time its owner states for a model call.
     using aii::multitalker::SeparationBudget;using std::chrono::milliseconds;
     check(SeparationBudget::default_audio_percent==500&&SeparationBudget::default_minimum==milliseconds(4000)&&
       SeparationBudget::default_maximum==milliseconds(25000),"separation budget constants");
@@ -167,9 +168,17 @@ int main(){try{
     check(production.of(80003)==milliseconds(25000)&&production.of(32000)==milliseconds(10000)&&
       production.of(16000)==milliseconds(5000)&&production.of(480000)==milliseconds(25000),"separation budget rule");
     for(const SeparationBudget& invalid:{SeparationBudget{0,milliseconds(4000),milliseconds(15000)},
-        SeparationBudget{250,milliseconds(0),milliseconds(15000)},SeparationBudget{250,milliseconds(5000),milliseconds(4000)},
-        SeparationBudget{250,milliseconds(4000),milliseconds(30000)}})
+        SeparationBudget{250,milliseconds(0),milliseconds(15000)},SeparationBudget{250,milliseconds(5000),milliseconds(4000)}})
       refuses([&]{Fixture refused(invalid);},"invalid separation budget admitted");
+    // Its owner restates the two bounds before a turn, and the ratio stays.
+    Fixture stated;
+    refuses([&]{stated.recognizer.bound_separation(0,15000,30000);},"a budget with no least time admitted");
+    refuses([&]{stated.recognizer.bound_separation(5000,4000,30000);},"a budget whose most is the less admitted");
+    refuses([&]{stated.recognizer.bound_separation(4000,30000,30000);},"a budget as long as a model call admitted");
+    refuses([&]{stated.recognizer.bound_separation(4000,25000,10000);},"a budget longer than the stated model call admitted");
+    stated.recognizer.bound_separation(700,9000,9001);
+    check(stated.recognizer.execution_info().find(R"("separation_budget":{"audio_percent":500,"minimum_ms":700,"maximum_ms":9000})")!=std::string::npos,
+      "restated bounds not reported");
   }
   Fixture f;f.recognizer.open();
   check(f.last()=="none"&&f.count("replaced")==0,"separation outcome invented before a turn");
