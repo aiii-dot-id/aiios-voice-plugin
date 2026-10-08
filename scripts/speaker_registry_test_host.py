@@ -50,7 +50,8 @@ class RegistryBroker:
         op, target, args = params['operation'], params['target'], params['arguments']
         name = target['path']
         assert target['root'] == 'private'
-        regular = name in ('uid/speakers.json', 'uid/enrollment.json', 'uid/captures.json')
+        # The carrier reads the correction list at every session open; a host that holds none says so.
+        regular = name in ('uid/speakers.json', 'uid/enrollment.json', 'uid/captures.json', 'uid/corrections.json')
         stage = re.fullmatch(r'uid/\.speakers-[0-9a-f]{64}\.pending', name)
         assert regular or stage, 'unexpected private-store target'
         if op == 'fs.read':
