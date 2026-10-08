@@ -31,6 +31,7 @@ TESTS = (
     "test_native_corrections",
     "test_native_lifetime",
     "test_native_input_gap",
+    "test_native_early_finish",
     "test_native_fault_scope",
     "test_plugin_sdk_declaration",
     "test_native_output_only",

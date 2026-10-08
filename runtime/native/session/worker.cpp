@@ -189,6 +189,8 @@ class Worker {
   uint32_t stream_counter_ = 0, input_stream_ = 0, input_seq_ = 0;
   bool input_enabled_ = true, input_started_ = false, end_seen_ = false;
   uint64_t input_limit_ = 0;
+  // A finish taken while the session was still opening, applied when it opens.
+  std::optional<uint64_t> early_finish_;
   bool capture_limit_reached_ = false;
   // A gap the host declared (AUD1 kind 2) is being filled with the silence it
   // replaced; gap_target_ is the sample the stream resumes at.
@@ -827,6 +829,7 @@ class Worker {
     capture_=std::move(capture);capture_result_=null();capture_cancelled_=false;
     effective_ = object();
     corrections_ = {}; corrections_state_ = null();
+    early_finish_.reset();
     lifecycle_ = "opening";
     waiting_settings_ = !capture_;
     opening_deadline_ = Clock::now() + std::chrono::seconds(2);
@@ -1180,6 +1183,23 @@ class Worker {
       if(first)capture_tail_deadline_=Clock::now()+std::chrono::seconds(2);
       auto r=accepted();put(r,"stream_id",string(input_handle_));put(r,"end_sample",number(end));return r;
     }
+    // A finish that arrives while the session is still opening is the page's
+    // real end of speech. The audio admitted so far is held, not yet heard;
+    // refusing the finish here lost those words when the session then closed.
+    // Take it, and apply it when the open completes.
+    if (op == "speech.session.finish_input" && lifecycle_ == "opening" && !session_) {
+      require(input_enabled_, "session has no input direction");
+      require(str(field(a, "stream_id")) == input_handle_,
+              "foreign input handle");
+      const auto end = integer(field(a, "end_sample"), aii::voice::input_clock_max);
+      require(!early_finish_ || *early_finish_ == static_cast<uint64_t>(end),
+              "finish refused: another end is already admitted");
+      early_finish_ = static_cast<uint64_t>(end);
+      auto r = accepted();
+      put(r, "stream_id", string(input_handle_));
+      put(r, "end_sample", number(end));
+      return r;
+    }
     require(session_ && (lifecycle_ == "open" || lifecycle_ == "draining"),
             "session not ready");
     if (op == "speech.session.finish_input") {
@@ -1388,6 +1408,17 @@ class Worker {
         if(!cJSON_IsNull(corrections_state_.get()))put(models,"corrections",clone(corrections_state_.get()));
         put(e, "models", std::move(models));
         emit("session_ready", std::move(e));
+        if (early_finish_) {
+          // The capture limit read with the settings bounds the end, as it
+          // bounds a finish that arrives after the open.
+          const uint64_t end = input_limit_ ? std::min<uint64_t>(*early_finish_, input_limit_) : *early_finish_;
+          early_finish_.reset();
+          core(aii_voice_finish_input(session_, end, &error_), error_);
+#ifdef AII_WITH_ECHO
+          if(echo_) echo_cutoff_=end;
+#endif
+          core(aii_voice_status(session_, &snapshot_, &error_), error_);
+        }
       }
     }
     if (waiting_settings_ && Clock::now() > opening_deadline_)
