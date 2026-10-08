@@ -17,7 +17,7 @@ def described_properties(schema, path):
         described_properties(items, path + '[]')
 
 
-@pytest.mark.parametrize('path', sorted(SCHEMAS.glob('speaker-*.input.json')), ids=lambda p: p.name)
+@pytest.mark.parametrize('path', sorted(SCHEMAS.glob('speaker-*.input.json')) + sorted(SCHEMAS.glob('vocabulary-*.input.json')), ids=lambda p: p.name)
 def test_every_speaker_argument_explains_its_input(path):
     described_properties(json.loads(path.read_text()), path.stem)
 

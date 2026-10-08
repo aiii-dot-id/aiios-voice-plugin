@@ -95,6 +95,17 @@ int64_t OnnxBackend::classify(const float* frame, const Prediction& prediction) 
   const auto values = checked(results[0],{1,1,1,1025});
   return std::max_element(values,values+1025)-values;
 }
+bool OnnxBackend::scores(const float* frame, const Prediction& prediction, std::array<float, blank_token + 1>& out) {
+  std::vector<Ort::Value> inputs;
+  inputs.push_back(floats(frame,encoder_width,{1,1024,1},p_->memory));
+  inputs.push_back(floats(prediction.values.data(),prediction_width,{1,640,1},p_->memory));
+  const char* in[]{"encoded","predicted"};
+  const char* names[]{"logits"};
+  auto results = p_->joiner.Run(p_->run,in,inputs.data(),inputs.size(),names,1);
+  const auto values = checked(results[0],{1,1,1,1025});
+  std::copy(values,values+1025,out.begin());
+  return true;
+}
 void OnnxBackend::cancel() noexcept { try { p_->run.SetTerminate(); } catch (...) {} }
 void OnnxBackend::reopen() { p_->run.UnsetTerminate(); }
 

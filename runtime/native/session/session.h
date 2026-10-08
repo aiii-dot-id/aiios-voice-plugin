@@ -45,6 +45,13 @@ struct Recognizer {
   // bookkeeping, not inference; it never moves the capture or segment clock.
   virtual void speech_onset(uint64_t) {}
   virtual std::vector<RecognizedSegment> segments() const { return {}; }
+  // Terms to prefer where the sound is close (names the recognizer does not
+  // know), from the next utterance on and until replaced; an empty list is
+  // plain recognition. Returns how many this recognizer can prefer: a term
+  // it cannot spell or is not a short phrase is passed over, never an
+  // error. Initialization owner only, like open(). A recognizer with no
+  // such ability prefers none.
+  virtual size_t prefer(const std::vector<std::string>& terms) { (void)terms; return 0; }
   virtual void reset() = 0;
   virtual void cancel() noexcept = 0;
 };

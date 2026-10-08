@@ -120,6 +120,11 @@ aii_voice_result aii_voice_models_load_uid_policies(const aii_voice_paths*, cons
 /* Immutable configuration readback; required includes NUL, never truncated.
  * Registration/selection is NOT a hardware-kernel placement attestation. */
 aii_voice_result aii_voice_models_execution(aii_voice_models*,char*,size_t,size_t*,aii_voice_error*);
+/* Terms the recognizer prefers where the sound is close, from the next
+   session on and until replaced; count 0 is plain recognition. Refused BUSY
+   while a session holds the models. `accepted` is how many the recognizer
+   can prefer; the rest are passed over, never an error. Additive entry. */
+aii_voice_result aii_voice_models_prefer(aii_voice_models*,const char* const* terms,uint32_t count,uint32_t* accepted,aii_voice_error*);
 /* Explicit blocking warm inference, before public readiness and without an
  * active session. Does not capture audio or claim acoustic/quality evidence. */
 aii_voice_result aii_voice_models_warm(aii_voice_models*, aii_voice_readiness*, aii_voice_error*);

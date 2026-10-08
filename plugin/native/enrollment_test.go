@@ -30,7 +30,7 @@ func TestEnrollmentRequiresOperatorAndPreservesSpeechDeadline(t *testing.T) {
 		t.Fatal("discovery needs no caller knowledge of a session ID", err)
 	}
 	p := declaredPlugin()
-	if len(p.Operations()) != 23 {
+	if len(p.Operations()) != 26 {
 		t.Fatal("enrollment operations absent")
 	}
 	for _, d := range p.Descriptors() {

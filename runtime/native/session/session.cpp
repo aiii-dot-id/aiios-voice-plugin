@@ -1,4 +1,5 @@
 #include "session.h"
+#include "speech_languages.h"
 #include "speaker_limits.h"
 #include "text.h"
 #include "../../native_endpoint/pause_gate.h"
@@ -138,7 +139,8 @@ struct Session::Impl {
     require(s.model_call_timeout_ms>=1 && s.model_call_timeout_ms<=30000,"model deadline must be 1..30000 ms");
     require(std::isfinite(s.speech_threshold) && s.speech_threshold>0 && s.speech_threshold<1,
             "speech threshold must be finite and inside (0,1)");
-    require(s.speech.tts_language=="en" && s.speech.stt_language=="en","this native model profile supports English only");
+    require(speech_language(s.speech.tts_language),"unsupported speaking language");
+    require(s.speech.stt_language=="en","this recognition model supports English only");
     require(std::isfinite(s.speech.temperature) && s.speech.temperature>=0 && s.speech.temperature<=1,"temperature must be finite and inside [0,1]");
     require(!s.speech.voice.empty() && s.speech.voice.size()<=64,"bounded preset name required");
     tts.configure(s.speech);

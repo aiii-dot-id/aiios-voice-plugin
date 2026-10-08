@@ -10,6 +10,7 @@ EXPORTS
     aii_voice_models_load_configured
     aii_voice_models_load_uid_policies
     aii_voice_models_execution
+    aii_voice_models_prefer
     aii_voice_models_warm
     aii_voice_models_release
   aii_voice_open

@@ -27,6 +27,8 @@ TESTS = (
     "test_native_capture_duration", "test_native_settings_packaging", "test_beta3_release_contract",
     "test_native_drain_progress",
     "test_native_drain_order",
+    "test_native_unserved_settings",
+    "test_native_corrections",
     "test_native_lifetime",
     "test_native_input_gap",
     "test_native_fault_scope",

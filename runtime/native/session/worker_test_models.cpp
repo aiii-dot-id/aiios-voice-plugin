@@ -60,12 +60,28 @@ namespace {
 struct Asr : aii::voice::Recognizer {
   bool separated_track=false;
   std::vector<float> selected;
+  // The fixture's stand-in for preferring a term: a one-word term is written
+  // as given wherever the fixture's own words hold it without regard to case.
+  std::vector<std::string> terms;
+  size_t prefer(const std::vector<std::string>& list) override {
+    terms.clear();
+    for(const auto& term:list)if(!term.empty()&&term.find_first_of(" ,.")==std::string::npos)terms.push_back(term);
+    return terms.size();
+  }
+  std::string written(std::string text) const {
+    for(const auto& term:terms) {
+      std::string lower=term;for(auto& c:lower)if(c>='A'&&c<='Z')c=char(c-'A'+'a');
+      for(size_t at=0;(at=text.find(lower,at))!=std::string::npos;at+=term.size())
+        if((!at||text[at-1]==' ')&&(at+lower.size()==text.size()||text[at+lower.size()]==' '))text.replace(at,lower.size(),term);
+    }
+    return text;
+  }
   void begin() override {selected.clear();}
   std::string push(const float *pcm, size_t count) override {
     if(separated_track){selected.insert(selected.end(),pcm,pcm+count);return {};}
-    return "opening words";
+    return written("opening words");
   }
-  std::string finish() override { return separated_track?"":"opening words retained"; }
+  std::string finish() override { return separated_track?"":written("opening words retained"); }
   bool separated() const override {return separated_track;}
   std::vector<aii::voice::RecognizedSegment> segments() const override {
     if(!separated_track)return {};

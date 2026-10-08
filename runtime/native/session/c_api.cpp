@@ -57,6 +57,21 @@ aii_voice_result aii_voice_models_execution(aii_voice_models* m,char* out,size_t
     *required=text.size()+1;if(capacity<*required)return AII_VOICE_CAPACITY;
     std::memcpy(out,text.c_str(),*required);return AII_VOICE_OK;});
 }
+aii_voice_result aii_voice_models_prefer(aii_voice_models* m,const char* const* terms,uint32_t count,uint32_t* accepted,aii_voice_error* e) {
+  if(accepted)*accepted=0;
+  return call(e,[&]{need(m && accepted && (terms||!count) && count<=64,"models, accepted count and at most 64 terms required");
+    std::vector<std::string> list;
+    for(uint32_t i=0;i<count;++i) {
+      need(terms[i]!=nullptr,"term required");
+      size_t n=0;while(n<=64 && terms[i][n])++n;
+      need(n<=64,"a term of at most 64 bytes required");
+      list.emplace_back(terms[i],n);
+    }
+    bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;
+    try { *accepted=uint32_t(m->owner->recognizer().prefer(list));m->leased=false;return AII_VOICE_OK; }
+    catch(...) { m->leased=false;throw; }
+  });
+}
 aii_voice_result aii_voice_models_warm(aii_voice_models* m,aii_voice_readiness* out,aii_voice_error* e) {
   return call(e,[&]{need(m && out,"models and readiness output required");
     bool expected=false;if(!m->leased.compare_exchange_strong(expected,true))return AII_VOICE_BUSY;

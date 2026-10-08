@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -71,6 +72,9 @@ type nativeHost struct {
 	mu       sync.Mutex
 	replies  map[int]json.RawMessage
 	events   []json.RawMessage
+	// store, when set, is the host's private store for the three file calls
+	// (vocabulary_test.go); without it every call but settings.get is refused.
+	store *correctionHost
 }
 
 func startNativeCarrier(t *testing.T, fixture string, env ...string) *nativeHost {
@@ -163,8 +167,23 @@ func (h *nativeHost) read(public *os.File) {
 		}
 		switch {
 		case m.Method == "invoke.call" && len(m.ID) != 0:
+			var call struct {
+				Operation string         `json:"operation"`
+				Target    map[string]any `json:"target"`
+				Arguments map[string]any `json:"arguments"`
+			}
+			_ = json.Unmarshal(m.Params, &call)
 			if bytes.Contains(m.Params, []byte(`"settings.get"`)) {
 				h.write(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"status":"succeeded","operation_result":{"values":{"turn_pause_ms":768}}}}`, m.ID))
+			} else if store := h.privateStore(); store != nil && strings.HasPrefix(call.Operation, "fs.") {
+				h.mu.Lock()
+				result, err := store.HostCallTo(context.Background(), call.Operation, call.Target, call.Arguments)
+				h.mu.Unlock()
+				if err != nil {
+					h.write(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":%q}}`, m.ID, err.Error()))
+				} else {
+					h.write(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":%s}`, m.ID, result))
+				}
 			} else {
 				h.write(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"not offered by this test host"}}`, m.ID))
 			}
@@ -181,6 +200,12 @@ func (h *nativeHost) read(public *os.File) {
 			}
 		}
 	}
+}
+
+func (h *nativeHost) privateStore() *correctionHost {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.store
 }
 
 // await polls what the host has observed; every wait is on something the
@@ -264,4 +289,78 @@ func TestUnframedAudioWriteRetiresWorkerAndCarrier(t *testing.T) {
 		t.Fatalf("after the first frame the pipe held %d byte(s) (%v), want exactly the frame the expired write began", len(rest), err)
 	}
 	t.Logf("%s; carrier %v; then %d of %d bytes of the next frame and the end of the pipe", reason.Reason, h.err, len(rest), 28+binary.BigEndian.Uint32(rest[24:28]))
+}
+
+// The whole path of a taught correction, with the carrier and the worker's
+// own code: the operator-confirmed operation stores the rule in the host's
+// private store; the next session is handed the list beside its settings; its
+// transcript says what was meant and carries what was recognized. The fixture
+// recognizer writes the final "opening words retained".
+func TestATaughtCorrectionReachesTheNextSessionsTranscripts(t *testing.T) {
+	fixture := os.Getenv("AII_NATIVE_INTERRUPT_FIXTURE")
+	if fixture == "" {
+		t.Skip("AII_NATIVE_INTERRUPT_FIXTURE names no aii_voice_worker_fixture (-DAII_WORKER_FIXTURE=ON)")
+	}
+	h := startNativeCarrier(t, fixture)
+	h.mu.Lock()
+	h.store = &correctionHost{files: map[string][]byte{}}
+	h.mu.Unlock()
+	reply := func(id int) string {
+		h.await(fmt.Sprintf("reply %d", id), func() bool { return h.replies[id] != nil })
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return string(h.replies[id])
+	}
+
+	h.control(1, "vocabulary.list", `{}`)
+	if got := reply(1); !strings.Contains(got, `"revision":0`) || !strings.Contains(got, `"rules":[]`) {
+		t.Fatalf("an untaught engine did not list an empty revision 0: %s", got)
+	}
+	h.control(2, "vocabulary.correct", string(confirmed(map[string]any{"heard": "Opening", "meant": "Quinn", "revision": 0})))
+	if got := reply(2); !strings.Contains(got, `"revision":1`) || !strings.Contains(got, `"changed":true`) {
+		t.Fatalf("the correction was not taken: %s", got)
+	}
+	h.control(3, "vocabulary.correct", `{"heard":"words","meant":"x","revision":1}`)
+	if got := reply(3); !strings.Contains(got, "host invocation time required") {
+		t.Fatalf("a change without the host's confirmation was not refused: %s", got)
+	}
+	h.mu.Lock()
+	stored := string(h.store.files[correctionsPath])
+	h.mu.Unlock()
+	if stored != `{"schema":"aiii.voice.corrections","revision":1,"rules":[{"heard":"Opening","meant":"Quinn"}]}` {
+		t.Fatalf("the private store holds %q", stored)
+	}
+
+	h.control(4, aiiosdk.OpSessionOpen, `{"session_id":"taught","input_handle":"capture","output_handle":"playback","audio":{"format":"s16le","input":{"rate":48000,"channels":1},"output":{"rate":48000,"channels":2}}}`)
+	ready := h.event("session_ready")
+	if !bytes.Contains(ready, []byte(`"corrections":{"revision":1,"rules":1,"preferred":1}`)) {
+		t.Fatalf("the session was not handed the stored list: %s", ready)
+	}
+	frame := func(kind byte, seq uint32, start uint64, payload []byte) {
+		head := make([]byte, 28)
+		copy(head, "AUD1")
+		head[4] = kind
+		binary.BigEndian.PutUint32(head[8:], 1) // the first session's input stream
+		binary.BigEndian.PutUint32(head[12:], seq)
+		binary.BigEndian.PutUint64(head[16:], start)
+		binary.BigEndian.PutUint32(head[24:], uint32(len(payload)))
+		if _, err := h.audioIn.Write(append(head, payload...)); err != nil {
+			t.Fatalf("audio frame: %v", err)
+		}
+	}
+	speech := bytes.Repeat([]byte{0x00, 0x20}, 1024)
+	for i := 0; i < 4; i++ {
+		frame(1, uint32(i+1), uint64(i*1024), speech)
+	}
+	h.control(5, "speech.session.finish_input", `{"session_id":"taught","stream_id":"capture","end_sample":4096}`)
+	frame(3, 5, 4096, nil)
+	final := h.event("transcript_final")
+	var heard struct {
+		Text        string `json:"text"`
+		Recognized  string `json:"recognized_text"`
+		Corrections int    `json:"corrections"`
+	}
+	if json.Unmarshal(final, &heard) != nil || heard.Text != "Quinn words retained" || heard.Recognized != "opening words retained" || heard.Corrections != 1 {
+		t.Fatalf("the transcript was not corrected with what was recognized beside it: %s", final)
+	}
 }

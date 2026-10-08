@@ -39,7 +39,7 @@ func hexDigest(s string) bool {
 	return e == nil && len(b) == 32 && hex.EncodeToString(b) == s
 }
 func (q snapshotQuery) valid() bool {
-	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && q.Resource != "speaker_registry" && !q.recovery() && !q.waveform()) || q.Offset > q.limit() {
+	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && q.Resource != "speaker_registry" && q.Resource != correctionsResource && !q.recovery() && !q.waveform()) || q.Offset > q.limit() {
 		return false
 	}
 	if q.waveform() && q.Action != "" && q.Upload != strings.TrimPrefix(q.Resource, "waveform:") {
@@ -75,7 +75,7 @@ func (q snapshotQuery) limit() uint64 {
 	if q.recovery() {
 		return 12 << 20
 	}
-	if q.Resource == "captures" {
+	if q.Resource == "captures" || q.Resource == correctionsResource {
 		return snapshotPageBytes
 	}
 	return 8 << 20
@@ -92,6 +92,9 @@ func (q snapshotQuery) stagePath() string {
 	}
 	if q.Resource == "captures" {
 		return "uid/.captures-" + q.Upload + ".pending"
+	}
+	if q.Resource == correctionsResource {
+		return "uid/.corrections-" + q.Upload + ".pending"
 	}
 	return "uid/.enrollment-" + q.Upload + ".pending"
 }
@@ -110,6 +113,9 @@ func (q snapshotQuery) target() string {
 	}
 	if q.Resource == "captures" {
 		return pendingCapturesPath
+	}
+	if q.Resource == correctionsResource {
+		return correctionsPath
 	}
 	return snapshotPath
 }

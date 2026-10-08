@@ -8,7 +8,7 @@ browser owns microphone and playback; AII OS owns the session, containment,
 downloads, integrity checking and permissions. The engine runs locally, not
 in a cloud speech service. Initial acquisition requires internet access.
 
-The desktop beta contains English STT and TTS, ten selectable voices, active
+The desktop beta contains English STT and TTS, twenty selectable voices, active
 VAD and conversational pause handling, interruption/recovery, guided speaker
 enrollment and UID. Meeting input and output-only speech are native session
 capabilities; their use in the UI depends on matching host routing. A package's
@@ -56,8 +56,8 @@ there is no promise of applying them mid-utterance.
 
 | Setting | Meaning |
 | --- | --- |
-| TTS voice | Select one of the ten declared reference voices. All segments reuse it. |
-| Speaking language | English in this release. No unsupported locale is advertised. |
+| TTS voice | Select one of the twenty declared reference voices. All segments reuse it. |
+| Speaking language | English, and six more where their models are installed; see [speaking languages](SPEAKING_LANGUAGES.md). No unsupported locale is advertised. |
 | Recognition language | English in this release. |
 | Turn pause | Silence allowance before committing a conversational turn. |
 | Capture limit, minutes | Default 30; **0 means no automatic stop**. Counts accepted audio, including silence. |
@@ -120,7 +120,7 @@ used, and the timing/error evidence. Do not attach enrollment data, raw voice,
 transcripts or credentials without deliberate consent. A session that faults
 or omits words is a bug to investigate, not a normal beta limitation.
 
-See the [delivery contract](BETA1_VOICE_RELEASE.md) and the current release's
+See the current release's
 notes for the exact signed hash and passed gates. Native model/SDK checks with
 simulated render receipts do not establish that a browser or physical speaker
 played every sample. A recorded-speech installed pass is not a human listening

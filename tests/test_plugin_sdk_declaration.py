@@ -47,6 +47,7 @@ def test_carrier_declares_playback_control_without_starting_a_worker(carrier):
     expected |= {"speaker." + name for name in
                  ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget", "link")}
     expected |= {"recording.record", "recording.status", "recording.list", "recording.delete", "recording.prune"}
+    expected |= {"vocabulary.list", "vocabulary.correct", "vocabulary.forget"}
     assert set(operations) == expected and len(operations) == len(expected)
     assert "AII_VOICE_READY" not in result.stderr, "Describe must not load models"
 
@@ -57,11 +58,12 @@ def test_proof_binds_the_actual_carrier_declaration(carrier):
     validate_description(declaration["operations"])
     root = Path(__file__).resolve().parents[1] / "plugin/native"
     for row in declaration["operations"]:
-        if row["id"].startswith(("speaker.", "recording.")):
+        if row["id"].startswith(("speaker.", "recording.", "vocabulary.")):
             for field in ("input", "output"):
                 schema = json.loads((root / row[field]).read_text())
                 assert schema["type"] == "object"
-                if not (row["id"].startswith("recording.") and field == "input"):
+                takes_nothing = field == "input" and (row["id"].startswith("recording.") or row["id"] == "vocabulary.list")
+                if not takes_nothing:
                     assert schema["properties"], "empty, undiscoverable callable contract"
 
 

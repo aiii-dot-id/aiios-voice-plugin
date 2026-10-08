@@ -28,6 +28,15 @@ int main(void) {
     REQUIRE(strstr(execution,"unspecified model owner")); /* no invented accelerator */
     REQUIRE(aii_voice_models_execution(m,NULL,1,&needed,&error)==AII_VOICE_INVALID && needed==0);
   }
+  {
+    uint32_t kept=7; const char* names[]={"Quinn","Rowan"};
+    REQUIRE(aii_voice_models_prefer(NULL,names,2,&kept,&error)==AII_VOICE_INVALID && kept==0);
+    REQUIRE(aii_voice_models_prefer(m,names,2,NULL,&error)==AII_VOICE_INVALID);
+    REQUIRE(aii_voice_models_prefer(m,NULL,2,&kept,&error)==AII_VOICE_INVALID);
+    REQUIRE(aii_voice_models_prefer(m,names,65,&kept,&error)==AII_VOICE_INVALID);
+    kept=7;OK(aii_voice_models_prefer(m,names,2,&kept,&error));REQUIRE(kept==0); /* this recognizer prefers none, and says so */
+    OK(aii_voice_models_prefer(m,NULL,0,&kept,&error));
+  }
   REQUIRE(aii_voice_models_warm(NULL,&ready,&error)==AII_VOICE_INVALID);
   REQUIRE(aii_voice_models_warm(m,NULL,&error)==AII_VOICE_INVALID);
   OK(aii_voice_models_warm(m,&ready,&error));REQUIRE(ready.models_loaded==4 && ready.probe_ms==1 && !strcmp(ready.accelerator,"cpu"));
@@ -53,6 +62,7 @@ int main(void) {
     REQUIRE(aii_voice_enroll_selected(s,"fixture",7,"person","Chosen",finals,0,candidate,sizeof candidate,&needed,&error)==AII_VOICE_INVALID);
   }
   REQUIRE(aii_voice_models_warm(m,&ready,&error)==AII_VOICE_BUSY);
+  { uint32_t kept=0; const char* names[]={"Quinn"}; REQUIRE(aii_voice_models_prefer(m,names,1,&kept,&error)==AII_VOICE_BUSY); } /* terms never change under a session */
   REQUIRE(aii_voice_open(m,NULL,&second,&error)==AII_VOICE_BUSY && !second);
   REQUIRE(aii_voice_models_release(&m,&error)==AII_VOICE_BUSY && m);
   REQUIRE(aii_voice_release(&s,&error)==AII_VOICE_BUSY && s);

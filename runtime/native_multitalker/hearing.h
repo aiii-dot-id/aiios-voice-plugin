@@ -21,7 +21,14 @@ class Hearing {
   CaptureEmbeddings preencode(const float* features,size_t frames,size_t valid,size_t drop);
   std::vector<TrackUpdate> push_conditioned(uint64_t epoch,const CaptureEmbeddings& shared,
                                bool final_chunk,const std::vector<float>& targets);
+  // Nothing more will be heard in this epoch. An utterance can end on a
+  // tail too short to make another chunk, so no push carried final_chunk:
+  // this releases what a term still being weighed withheld. After a final
+  // chunk it returns nothing.
+  std::vector<TrackUpdate> finish(uint64_t epoch);
   void cancel() noexcept;
+  // Terms the decoder leans toward, from the next reset on (decoder.h).
+  void boost(std::shared_ptr<const TermBoost> terms) { decoder_.boost(std::move(terms)); }
   size_t retained_diarization_frames() const { return diar_.frames(); }
   const std::vector<float>& activity() const { return activity_; }
  private:

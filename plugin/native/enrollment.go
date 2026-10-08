@@ -219,6 +219,30 @@ func declaredPlugin() *aiiosdk.Plugin {
 			Examples: recordingExamples(name),
 		})
 	}
+	for _, name := range []string{"list", "correct", "forget"} {
+		op := "vocabulary." + name
+		effect := aiiosdk.EffectsWriteLocal
+		if name == "list" {
+			effect = aiiosdk.EffectsReadInternal
+		}
+		p.Handle(op, func(aiiosdk.Call) (any, error) {
+			return nil, errors.New("vocabulary operations require the resident plugin transport")
+		}).Describe(op, aiiosdk.Descriptor{
+			Summary: map[string]string{
+				"list":    "List the recognizer's correction rules (what it writes, and what was meant), the list's revision and its limits. No microphone required.",
+				"correct": "After operator confirmation, teach one correction: whole words the recognizer writes (heard) are rewritten to what was meant, in every transcript from the next session on, and the recognizer itself prefers to write what was meant where the sound is close. For mis-heard names; a rule is blind to context. Needs the exact revision from vocabulary.list.",
+				"forget":  "After operator confirmation, forget the correction for one heard phrase at the exact revision from vocabulary.list. Past transcripts are not changed.",
+			}[name],
+			Input: "schemas/vocabulary-" + name + ".input.json", Output: "schemas/vocabulary.output.json", Effects: effect,
+			Capabilities: []string{"fs.private"}, OperatorConfirms: name != "list", MaxResultBytes: 65536,
+			Family: "vocabulary", Keywords: []string{"voice", "speech recognition", "names", "corrections", "transcript"},
+			Examples: map[string][]string{
+				"list":    {`{}`},
+				"correct": {`{"heard":"Kwin","meant":"Quinn","revision":0}`},
+				"forget":  {`{"heard":"Kwin","revision":1}`},
+			}[name],
+		})
+	}
 	return p
 }
 

@@ -18,7 +18,10 @@ type settingsQuery struct {
 type settingsReply struct {
 	settingsQuery
 	Values json.RawMessage `json:"values,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	// Corrections is the stored correction list's exact bytes, present only
+	// when a list is stored and the store yielded it (vocabulary.go).
+	Corrections json.RawMessage `json:"corrections,omitempty"`
+	Error       string          `json:"error,omitempty"`
 }
 
 func (q settingsQuery) valid() bool { return q.ID > 0 && q.SessionID != "" && len(q.SessionID) <= 128 }
@@ -60,11 +63,16 @@ func (c *carrier) startSettings() {
 				c.mu.Lock()
 				s := c.session
 				c.mu.Unlock()
-				c.readSettings(q, func(ctx context.Context) (aiiosdk.Object, error) {
+				c.readSettingsWith(q, func(ctx context.Context) (aiiosdk.Object, error) {
 					if s == nil {
 						return nil, errors.New("settings requested before session admission")
 					}
 					return s.HostCall(ctx, "settings.get", map[string]any{})
+				}, func(ctx context.Context) json.RawMessage {
+					if s == nil {
+						return nil
+					}
+					return sessionCorrections(ctx, s)
 				})
 			}
 		}
@@ -72,6 +80,13 @@ func (c *carrier) startSettings() {
 }
 
 func (c *carrier) readSettings(q settingsQuery, get func(context.Context) (aiiosdk.Object, error)) {
+	c.readSettingsWith(q, get, nil)
+}
+
+// readSettingsWith also hands the session its correction list, read inside
+// the same bound as the settings: a store that does not answer in what is
+// left of it costs the session its corrections, never its open.
+func (c *carrier) readSettingsWith(q settingsQuery, get func(context.Context) (aiiosdk.Object, error), corrections func(context.Context) json.RawMessage) {
 	// Neither the private reply reader nor SDK admission waits for the host.
 	// The worker has a two-second preparation bound; this retires before it.
 	ctx, cancel := context.WithTimeout(c.ctx, 1500*time.Millisecond)
@@ -80,6 +95,9 @@ func (c *carrier) readSettings(q settingsQuery, get func(context.Context) (aiios
 	reply := &settingsReply{settingsQuery: q}
 	if err == nil {
 		reply.Values, err = settingsValues(result)
+	}
+	if err == nil && corrections != nil {
+		reply.Corrections = corrections(ctx)
 	}
 	if err != nil {
 		// No raw host payload/error is echoed: settings may contain private text.

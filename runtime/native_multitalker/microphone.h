@@ -26,6 +26,7 @@ class Microphone {
   std::vector<MicrophoneUpdate> accept(const float*,size_t);
   std::vector<MicrophoneUpdate> finish(const std::function<void()>& completed={});
   void cancel() noexcept { cancelled_.store(true);hearing_.cancel(); }
+  void boost(std::shared_ptr<const TermBoost> terms) { hearing_.boost(std::move(terms)); }
   // Experimental, opt-in. One bounded diarization-only replay after finish.
   // A changed ASR mask retains the original evidence; no text is relabelled.
   std::optional<RefinedEvidence> refine_evidence(bool needed=true,const std::function<void()>& completed={});

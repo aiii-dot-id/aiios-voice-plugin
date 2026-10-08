@@ -12,6 +12,23 @@ void Hearing::reset(uint64_t epoch,bool continue_capture) {
   recent_.clear(); activity_.clear(); clocks_={}; epoch_=epoch;faulted_=ended_=false;cancelled_.store(false);
   activated_={};dormant_tokens_.clear();
 }
+std::vector<TrackUpdate> Hearing::finish(uint64_t epoch) {
+  if(!epoch || epoch!=epoch_)throw std::invalid_argument("hearing epoch differs");
+  if(faulted_ || cancelled_.load())throw std::runtime_error("hearing epoch retired");
+  try {
+    std::vector<TrackUpdate> updates;
+    for(uint32_t track=0;track<state_count;++track) {
+      auto tokens=decoder_.finish(epoch,track);
+      if(tokens.empty())continue;
+      if(track<track_count){updates.push_back({track,std::move(tokens)});continue;}
+      // The shared decoder of speakers not yet taken up: its words belong to
+      // its history, which reaches those speakers exactly as it did before.
+      if(tokens.size()>65536-dormant_tokens_.size())throw std::runtime_error("dormant token extent");
+      dormant_tokens_.insert(dormant_tokens_.end(),tokens.begin(),tokens.end());
+    }
+    return updates;
+  } catch(...) { faulted_=true;throw; }
+}
 void Hearing::cancel() noexcept {
   cancelled_.store(true);capture_.cancel();encoder_.cancel();decoder_.cancel();
 }
@@ -50,8 +67,13 @@ std::vector<TrackUpdate> Hearing::push(uint64_t epoch,const float* features,size
                                  foreground.data(),background.data(),final_chunk);
       if(cancelled_.load())throw std::runtime_error("hearing cancelled");
       const size_t count=encoded.size()/encoder_width;
-      auto tokens=decoder_.push(epoch,track,clocks_[track],encoded.data(),count);
+      auto tokens=decoder_.push(epoch,track,clocks_[track],encoded.data(),count,final_chunk);
       clocks_[track]+=count;updates.push_back({track,std::move(tokens)});
+    }
+    // A speaker silent in the last chunk still gets what a followed term withheld.
+    if(final_chunk)for(uint32_t track=0;track<4;++track)if(!active[track]) {
+      auto tokens=decoder_.finish(epoch,track);
+      if(!tokens.empty())updates.push_back({track,std::move(tokens)});
     }
     ended_=final_chunk;
     return updates;
@@ -97,7 +119,7 @@ std::vector<TrackUpdate> Hearing::push_conditioned(uint64_t epoch,const CaptureE
                                 foreground.data(),background.data(),final_chunk);
       if(cancelled_.load())throw std::runtime_error("hearing cancelled");
       const auto count=encoded.size()/encoder_width;
-      auto tokens=decoder_.push(epoch,track,clocks_[track],encoded.data(),count);
+      auto tokens=decoder_.push(epoch,track,clocks_[track],encoded.data(),count,final_chunk);
       clocks_[track]+=count;
       if(track==dormant_track) {
         if(tokens.size()>65536-dormant_tokens_.size())throw std::runtime_error("dormant token extent");

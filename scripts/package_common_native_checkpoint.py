@@ -10,6 +10,7 @@ from scripts.package_native_runtime import verify
 ROOT=Path(__file__).resolve().parents[1];GO='/usr/local/go1.27/bin/go'
 SPEAKER_OPERATIONS={'speaker.enroll','speaker.list','speaker.remove','speaker.reset',
                     'speaker.discard_capture','speaker.upgrade_policy','speaker.buckets','speaker.associate','speaker.forget','speaker.link'}
+VOCABULARY_OPERATIONS={'vocabulary.list','vocabulary.correct','vocabulary.forget'}
 
 def enrollment_interfaces(descriptors):
     """Current enrollment surface must ship whole, never a silently reduced kit."""
@@ -18,15 +19,19 @@ def enrollment_interfaces(descriptors):
     speech=[n for n in ids if n.startswith('speech.session.')]
     speaker=[n for n in ids if n.startswith('speaker.')]
     recording=[n for n in ids if n.startswith('recording.')]
-    if len(speech)!=8 or set(speaker)!=SPEAKER_OPERATIONS or set(recording)!={'recording.record','recording.status','recording.list','recording.delete','recording.prune'} or len(ids)!=23:
+    vocabulary=[n for n in ids if n.startswith('vocabulary.')]
+    if len(speech)!=8 or set(speaker)!=SPEAKER_OPERATIONS or set(recording)!={'recording.record','recording.status','recording.list','recording.delete','recording.prune'} or set(vocabulary)!=VOCABULARY_OPERATIONS or len(ids)!=26:
         raise ValueError('incomplete guided enrollment interface')
     for descriptor in descriptors:
         if descriptor['id'] in SPEAKER_OPERATIONS:
             if descriptor.get('operator_confirms',False)!=(descriptor['id'] not in ('speaker.list','speaker.buckets')):
                 raise ValueError('speaker confirmation declaration differs')
+        if descriptor['id'] in VOCABULARY_OPERATIONS and descriptor.get('operator_confirms',False)!=(descriptor['id']!='vocabulary.list'):
+            raise ValueError('vocabulary confirmation declaration differs')
     return [{'id':'speech.session','version':1,'methods':speech},
             {'id':'speaker.uid','version':1,'methods':speaker},
-            {'id':'recording.waveform','version':1,'methods':recording}]
+            {'id':'recording.waveform','version':1,'methods':recording},
+            {'id':'vocabulary.corrections','version':1,'methods':vocabulary}]
 
 def platform_spec(profile):
     key=(profile['platform'],profile['arch'])
@@ -110,7 +115,7 @@ def main():
     # Execute the platform-named original. The assembler's input basename is
     # intentionally common; its emitted entrypoint comes from the variant.
     desc=subprocess.run([str(carrier)],env={'PATH':'','AIISDK_DESCRIBE':'1'},capture_output=True,check=True,timeout=10)
-    descriptors=json.loads(desc.stdout);assert not desc.stderr and len(descriptors)==23
+    descriptors=json.loads(desc.stdout);assert not desc.stderr and len(descriptors)==26
     (a.out/'descriptors.json').write_bytes(desc.stdout)
     schema_files={}
     schema_root=a.schema_root.resolve() if a.schema_root else ROOT/'plugin/native'

@@ -1,12 +1,15 @@
 #pragma once
 #include "c_api.h"
 #include "capture_limit.h"
+#include "speech_languages.h"
 #include "worker_json.h"
 #include <array>
 namespace aii::voice::wire {
 // Values match the native preset filenames, not voice IDs from another model.
-inline constexpr std::array<const char*,10> native_voices={"alba","marius","javert","fantine","eponine","azelma","bill_boerst","peter_yearsley","stuart_bell","caro_davy"};
-inline constexpr std::array<const char*,10> native_voice_labels={"Alba - casual dialogue","Marius","Javert","Fantine","Éponine","Azelma","Bill Boerst - audiobook narrator","Peter Yearsley - audiobook narrator","Stuart Bell - audiobook narrator","Caro Davy - audiobook narrator"};
+inline constexpr std::array<const char*,20> native_voices={"alba","marius","javert","fantine","eponine","azelma","bill_boerst","peter_yearsley","stuart_bell","caro_davy",
+  "anna","charles","eve","george","jane","mary","michael","paul","vera","estelle"};
+inline constexpr std::array<const char*,20> native_voice_labels={"Alba - casual dialogue","Marius","Javert","Fantine","Éponine","Azelma","Bill Boerst - audiobook narrator","Peter Yearsley - audiobook narrator","Stuart Bell - audiobook narrator","Caro Davy - audiobook narrator",
+  "Anna","Charles","Eve","George","Jane","Mary","Michael","Paul","Vera","Estelle - French speaker"};
 struct OperatorSettings {
   aii_voice_settings control{768,3000,.5f};
   std::string voice="alba",tts_language="en",stt_language="en";
@@ -29,9 +32,10 @@ struct OperatorSettings {
       else if(key=="tts_voice") {
         result.voice=str(v,64);bool present=false;for(const char* name:native_voices)present|=result.voice==name;
         require(present,"unsupported native voice preset");
-      } else if(key=="tts_language" || key=="stt_language") {
-        auto language=str(v,16);require(language=="en","this native model profile supports English only");
-        (key=="tts_language"?result.tts_language:result.stt_language)=language;
+      } else if(key=="tts_language") {
+        result.tts_language=str(v,16);require(aii::voice::speech_language(result.tts_language),"unsupported speaking language");
+      } else if(key=="stt_language") {
+        result.stt_language=str(v,16);require(result.stt_language=="en","this recognition model supports English only");
       } else throw Refused("setting unsupported by this explicit native profile");
     }
     return result;
@@ -54,8 +58,14 @@ struct OperatorSettings {
     auto choices=own(cJSON_CreateArray()),labels=object();
     for(size_t i=0;i<native_voices.size();++i){cJSON_AddItemToArray(choices.get(),string(native_voices[i]).release());put(labels,native_voices[i],string(native_voice_labels[i]));}
     put(voice,"values",std::move(choices));put(voice,"labels",std::move(labels));cJSON_AddItemToArray(out.get(),voice.release());
-    for(const char* key:{"tts_language","stt_language"}) {
-      auto row=add(key,std::string(key)=="tts_language"?"speaking":"hearing","enum",std::string(key)=="tts_language"?"Speaking language":"Recognition language","This compact native model profile supports English only. No automatic language fallback.");
+    {
+      auto row=add("tts_language","speaking","enum","Speaking language","Each language is its own speech model. Applies next session. A language whose model is not installed refuses the session. No automatic language fallback.");
+      auto values=own(cJSON_CreateArray()),names=object();
+      for(const auto& language:aii::voice::speech_languages){cJSON_AddItemToArray(values.get(),string(language.code).release());put(names,language.code,string(language.label));}
+      put(row,"values",std::move(values));put(row,"labels",std::move(names));cJSON_AddItemToArray(out.get(),row.release());
+    }
+    {
+      auto row=add("stt_language","hearing","enum","Recognition language","This recognition model supports English only. No automatic language fallback.");
       auto values=own(cJSON_CreateArray()),names=object();cJSON_AddItemToArray(values.get(),string("en").release());put(names,"en",string("English"));put(row,"values",std::move(values));put(row,"labels",std::move(names));cJSON_AddItemToArray(out.get(),row.release());
     }
     auto numeric=[&](const char* key,const char* scope,const char* type,const char* title,double low,double high,const char* description){

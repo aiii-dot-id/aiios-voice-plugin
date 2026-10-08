@@ -84,6 +84,9 @@ type carrier struct {
 	snapshots chan snapshotQuery
 	ctx       context.Context
 	cancel    context.CancelFunc
+
+	// vocabulary serializes confirmed changes to the correction list.
+	vocabulary sync.Mutex
 }
 
 type privateRequest struct {
@@ -382,6 +385,14 @@ func (c *carrier) admit(control *aiiosdk.Control) {
 	}
 	if err := validateWaveform(control.Op, control.Args); err != nil {
 		control.Answer(nil, err)
+		return
+	}
+	if err := validateVocabulary(control.Op, control.Args); err != nil {
+		control.Answer(nil, err)
+		return
+	}
+	if vocabularyOperation(control.Op) {
+		c.vocabularyStore(control)
 		return
 	}
 	if control.Op == "recording.list" || control.Op == "recording.delete" || control.Op == "recording.prune" {

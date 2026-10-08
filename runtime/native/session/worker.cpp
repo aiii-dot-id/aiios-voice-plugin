@@ -19,6 +19,7 @@
 #include "../../native_uid/bound_policies.h"
 #include "../vendor/picosha2/picosha2.h"
 #include "operator_settings.h"
+#include "corrections_wire.h"
 #include "installed_profile.h"
 #include "confirmed_acts.h"
 #ifdef AII_WITH_ECHO
@@ -233,6 +234,11 @@ class Worker {
   std::optional<Output> active_output_;
   AudioScratch<> audio_scratch_;
   Json processing_ = null(), effective_ = object();
+  // The session's correction list, pinned with its settings. corrections_state_
+  // is null unless the settings reply carried a list, so a host that sends
+  // none sees exactly the readback it saw before.
+  aii::voice::Corrections corrections_;
+  Json corrections_state_ = null();
   aii_voice_snapshot snapshot_{};
   aii_voice_error error_{};
 
@@ -558,6 +564,7 @@ class Worker {
     put(r, "lifecycle", string(lifecycle_));
     put(r, "reason", failure_.empty() ? null() : string(failure_));
     put(r, "operator_settings", clone(effective_.get()));
+    if(!cJSON_IsNull(corrections_state_.get()))put(r,"corrections",clone(corrections_state_.get()));
     put(r,"purpose",string(capture_?"enrollment_capture":"conversation"));
     put(r,"enrollment_capture",clone(capture_result_.get()));
     auto input = object();
@@ -819,6 +826,7 @@ class Worker {
     snapshot_ = {};
     capture_=std::move(capture);capture_result_=null();capture_cancelled_=false;
     effective_ = object();
+    corrections_ = {}; corrections_state_ = null();
     lifecycle_ = "opening";
     waiting_settings_ = !capture_;
     opening_deadline_ = Clock::now() + std::chrono::seconds(2);
@@ -872,6 +880,35 @@ class Worker {
     const auto config=OperatorSettings::read(values);
     input_limit_=aii::voice::capture_samples(config.capture_limit_minutes);
     effective_=config.effective();
+    // What a rule says was meant is also what the recognizer should prefer
+    // to write where the sound is close: every meant is handed to it as a
+    // term, for this session. It keeps those it can spell as short phrases
+    // and passes over the rest; the readback says how many it kept.
+    std::vector<const char*> preferred;
+    // A list that cannot be held does not take speech away: the session runs
+    // uncorrected and says why, in its readback and in the lifecycle log.
+    if(const auto* stored=field(p,"corrections")) {
+      corrections_state_=object();
+      try {
+        auto document=aii::voice::wire::read_corrections(stored);
+        put(corrections_state_,"revision",number(document.revision));
+        put(corrections_state_,"rules",number(document.list.rules().size()));
+        corrections_=std::move(document.list);
+        for(const auto& rule:corrections_.rules())preferred.push_back(rule.meant.c_str());
+      } catch(const Refused& e) {
+        corrections_={};
+        put(corrections_state_,"unreadable",string(std::string(e.what()).substr(0,256)));
+        auto diagnostic=object();
+        put(diagnostic,"component",string("voice-worker"));put(diagnostic,"event",string("corrections_unreadable"));
+        put(diagnostic,"session_id",string(sid_));put(diagnostic,"reason",string(std::string(e.what()).substr(0,256)));
+        std::cerr<<"AII_VOICE_CORRECTIONS "<<encode(diagnostic)<<'\n';
+      }
+    }
+    // Every session sets the recognizer's terms, an empty list included, so
+    // one session's names never reach the next.
+    uint32_t kept=0;
+    core(aii_voice_models_prefer(models_,preferred.empty()?nullptr:preferred.data(),uint32_t(preferred.size()),&kept,&error_),error_);
+    if(cJSON_IsObject(corrections_state_.get())&&!field(corrections_state_.get(),"unreadable"))put(corrections_state_,"preferred",number(kept));
     waiting_settings_ = false;
     opening_ = std::async(std::launch::async, [this, config, input_enabled=input_enabled_] {
       aii_voice_error e{};
@@ -1330,14 +1367,25 @@ class Worker {
     }
     if (opening_.valid() && opening_.wait_for(std::chrono::milliseconds(0)) ==
                                 std::future_status::ready) {
-      session_ = opening_.get();
-      if (abort_ || !failure_.empty())
+      // Settings the engine cannot serve (a speaking language that is not
+      // installed, a preset this backend does not hold) are that session's:
+      // it fails with the reason and the engine stays ready for the next.
+      // Any other failure to open is still the engine's own.
+      try {
+        session_ = opening_.get();
+      } catch (const Refused &e) {
+        session_ = nullptr;
+        fail_session(e.what());
+      }
+      if (!session_) {
+      } else if (abort_ || !failure_.empty())
         core(aii_voice_close(session_, 1, &error_), error_);
       else {
         lifecycle_ = "open";
         auto e = object(), models = object();
         put(models, "backend", string(backend_name(readiness_)));
         put(models, "operator_settings", clone(effective_.get()));
+        if(!cJSON_IsNull(corrections_state_.get()))put(models,"corrections",clone(corrections_state_.get()));
         put(e, "models", std::move(models));
         emit("session_ready", std::move(e));
       }
@@ -1451,8 +1499,19 @@ class Worker {
       } else if (!e.generation) {
         put(data, "start_sample", number(e.start));
         put(data, "end_sample", number(e.end));
-        if (*text)
-          put(data, "text", string(text));
+        if (*text) {
+          // Only a transcript's words are corrected; other events carry a
+          // reason in this slot. A corrected transcript also carries what
+          // was recognized, and both together stay within the one bound a
+          // transcript's text has always had.
+          const bool transcript=kind=="transcript_partial"||kind=="transcript_final";
+          const auto corrected=transcript?corrections_.apply(text):aii::voice::Corrected{};
+          if(corrected.applied && corrected.text.size()+std::strlen(text)<sizeof text) {
+            put(data, "text", string(corrected.text));
+            put(data, "recognized_text", string(text));
+            put(data, "corrections", number(corrected.applied));
+          } else put(data, "text", string(text));
+        }
       }
       if (kind == "pause_query" || kind == "pause_resolved")
         continue;

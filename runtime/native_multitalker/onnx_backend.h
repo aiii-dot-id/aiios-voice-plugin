@@ -21,6 +21,7 @@ class OnnxBackend final : public Backend {
   ~OnnxBackend() override;
   Prediction predict(int64_t, const State&) override;
   int64_t classify(const float*, const Prediction&) override;
+  bool scores(const float*, const Prediction&, std::array<float, blank_token + 1>&) override;
   void cancel() noexcept override;
   void reopen() override;
  private:

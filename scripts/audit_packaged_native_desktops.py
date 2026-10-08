@@ -29,9 +29,10 @@ def bound_result(result, frozen, carrier, retirement):
 
 def settings_evidence(read, prefix, result):
     cases = result['cases']
-    assert len(cases) == 13 and len({c['name'] for c in cases}) == 13
+    assert len(cases) == 23 and len({c['name'] for c in cases}) == 23
     voices = {'alba', 'marius', 'javert', 'fantine', 'eponine', 'azelma',
-              'bill_boerst', 'peter_yearsley', 'stuart_bell', 'caro_davy'}
+              'bill_boerst', 'peter_yearsley', 'stuart_bell', 'caro_davy',
+              'anna', 'charles', 'eve', 'george', 'jane', 'mary', 'michael', 'paul', 'vera', 'estelle'}
     assert {c['name'] for c in cases} == voices | {'alba-repeat', 'alba-new-seed', 'alba-new-temperature'}
     outputs = {}
     for case in cases:
@@ -54,11 +55,11 @@ def settings_evidence(read, prefix, result):
         assert abs(settings['vad_threshold'] - (.5 if modified else .65)) < 1e-6
         assert abs(settings['tts_temperature'] - (.7 if case['name'] == 'alba-new-temperature' else .3)) < 1e-6
         assert settings['tts_seed'] == (7 if case['name'] == 'alba-new-seed' else 20260908)
-    assert len({outputs[v] for v in voices}) == 10
+    assert len({outputs[v] for v in voices}) == 20
     assert outputs['alba'] == outputs['alba-repeat']
     assert outputs['alba'] != outputs['alba-new-seed'] != outputs['alba-new-temperature']
     assert outputs['alba'] != outputs['alba-new-temperature']
-    return {'voices': 10, 'cases': 13, 'languages': ['en'],
+    return {'voices': 20, 'cases': 23, 'languages': ['en'],
             'warm_short_reply_rtf_range': [min(c['rtf'] for c in cases), max(c['rtf'] for c in cases)]}
 
 

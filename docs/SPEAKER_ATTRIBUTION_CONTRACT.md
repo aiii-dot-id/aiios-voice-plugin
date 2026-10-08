@@ -18,7 +18,9 @@ stateful validation. The vector file is not an installed consumer receipt.
 The existing event envelope supplies `type`, `session_id`, `sequence`, `id`
 and `observed_monotonic_ns`. A `transcript_final` includes `text`,
 `start_sample`, `end_sample` and an `attribution` object. It includes
-`track_id` only when a separated acoustic track exists. The final's public
+`track_id` only when a separated acoustic track exists, and `recognized_text`
+with `corrections` only when a [correction rule](RECOGNIZER_CORRECTIONS.md)
+changed its words. The final's public
 `sequence` is the immutable final reference; an amendment's own event sequence
 is not the final reference. A conversation database number is neither of these.
 

@@ -1,4 +1,5 @@
 #include "native_models.h"
+#include "speech_languages.h"
 #include "startup_trace.h"
 #include "tts_phase_trace.h"
 #include "../../native_asr/asr.h"
@@ -167,18 +168,83 @@ struct Pocket final:Synthesizer {
   TtsPhaseTrace phase_trace;
   std::mutex control;
   uint64_t generation=0,client=0,cancelled=0;
-  bool started=false;
+  bool started=false,silent=false;
   uint32_t seed=20260908;
-  explicit Pocket(const ModelPaths& p) {
+  // English is the model at the bound root. Another language is its own model
+  // under languages/<directory>; one speech model is resident at a time.
+  const std::filesystem::path english_root,english_config;
+  const std::string backend;
+  std::string language="en";
+  SpeechReplacements replacements;
+  explicit Pocket(const ModelPaths& p)
+      :english_root(std::filesystem::u8path(p.pocket)),english_config(std::filesystem::u8path(p.pocket_config)),backend(p.tts_backend) {
     StartupSpan profile("load_tts");
     char error[1024]{};
     model=nv_create_bound(p.pocket.c_str(),p.pocket_config.c_str(),p.tts_backend.c_str(),4,error,sizeof error);
     if(!model) throw std::runtime_error(error);
   }
   ~Pocket() override { if(model && nv_destroy(model)) std::terminate(); }
+  struct Location { std::filesystem::path root,config; };
+  Location location(const SpeechLanguage& next) const {
+    if(!*next.directory) return {english_root,english_config};
+    const auto root=english_root/"languages"/next.directory;
+    return {root,root/"config.yaml"};
+  }
+  static std::string read_config(const std::filesystem::path& file) {
+    std::ifstream in(file,std::ios::binary); std::string bytes(65537,'\0');
+    in.read(bytes.data(),std::streamsize(bytes.size()));
+    if(in.bad() || !in.eof() || in.gcount()<=0 || in.gcount()>65536) throw std::runtime_error("speech model configuration read/size bound");
+    bytes.resize(size_t(in.gcount())); return bytes;
+  }
+  void* create(const Location& at,char* error,size_t capacity) const {
+    return nv_create_bound(at.root.u8string().c_str(),at.config.u8string().c_str(),backend.c_str(),4,error,capacity);
+  }
+  // Initialization owner only. A language that is not installed, or whose
+  // configuration this engine cannot read, is refused before the resident
+  // model is touched, so that session fails and the next one still speaks.
+  // After that point the old model is released first (two never share the
+  // device); if the new one does not load, the old one is put back and the
+  // session is refused. Only when neither loads is the engine without speech,
+  // which is a failure and is reported as one.
+  // What a session asks for has to be on disk before anything resident is
+  // touched: the language's model, tokenizer and configuration, and the one
+  // preset the session names. A language still being fetched has some of its
+  // files and not others; that is "not installed" for this session, not a
+  // fault of the engine.
+  static void require_installed(const SpeechLanguage& next,const Location& at,const std::string& voice) {
+    namespace fs=std::filesystem;
+    if(!fs::is_regular_file(at.root/"model.safetensors") || !fs::is_regular_file(at.root/"tokenizer.model") ||
+       !fs::is_regular_file(at.config))
+      throw std::invalid_argument(std::string("speaking language ")+next.label+" is not installed");
+    if(voice.empty() || voice.size()>64 || voice.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_-")!=std::string::npos)
+      throw std::invalid_argument("voice name is not a preset name");
+    if(!fs::is_regular_file(at.root/"embeddings"/(voice+".safetensors")))
+      throw std::invalid_argument("voice "+voice+" is not installed for "+next.label);
+  }
+  void select(const SpeechLanguage* next,const Location& at) {
+    const std::string code=next->code;
+    SpeechReplacements table;
+    try { table=speech_replacements(read_config(at.config)); }
+    catch(const std::exception& e) { throw std::invalid_argument(std::string("speaking language ")+next->label+" has an unreadable configuration: "+e.what()); }
+    if(model) { if(nv_destroy(model)) throw std::runtime_error("speech model is busy; language unchanged"); model=nullptr; }
+    char error[1024]{};
+    model=create(at,error,sizeof error);
+    if(model) { language=code; replacements=std::move(table); return; }
+    const std::string first=error;
+    const auto* previous=speech_language(language);
+    char second[1024]{};
+    if(previous && previous!=next) model=create(location(*previous),second,sizeof second);
+    if(!model) throw std::runtime_error(std::string("speech model for ")+next->label+" did not load ("+first+") and the previous one could not be restored ("+second+")");
+    throw std::invalid_argument(std::string("speech model for ")+next->label+" did not load: "+first);
+  }
   void configure(const SpeechSettings& settings) override {
     std::lock_guard<std::mutex> lock(control);
     if(started)throw std::runtime_error("previous TTS generation not retired");
+    const auto* next=speech_language(settings.tts_language);
+    if(!next) throw std::invalid_argument("unsupported speaking language");
+    const auto at=location(*next);
+    require_installed(*next,at,settings.voice);
+    if(!model || settings.tts_language!=language) select(next,at);
     char error[1024]{};
     check(nv_configure_voice(model,settings.voice.c_str(),settings.temperature,error,sizeof error),error);
     seed=settings.seed;
@@ -195,14 +261,21 @@ struct Pocket final:Synthesizer {
       if(cancelled>=id) throw Cancelled("synthesis already cancelled");
       client=id; ++generation;
     }
+    // What the language's model never saw in training is replaced as its own
+    // configuration says. A segment that was nothing else has nothing to say:
+    // it completes naturally without audio instead of failing the model.
+    const auto spoken=replace_speech_characters(replacements,text);
+    silent=spoken.find_first_not_of(" \t\r\n")==std::string::npos;
+    if(silent) return;
     char error[1024]{}; started=true;
     phase_trace.begin(id,generation);
-    const auto rc=nv_start(model,generation,text.c_str(),seed,750,nullptr,error,sizeof error);
+    const auto rc=nv_start(model,generation,spoken.c_str(),seed,750,nullptr,error,sizeof error);
     phase_trace.started(rc);
     if(rc==-2) throw Cancelled("synthesis cancelled at start");
     check(rc,error);
   }
   std::vector<float> next() override {
+    if(silent) return {};
     std::vector<float> result(120000); size_t n=0; char error[1024]{};
     const auto rc=nv_next(model,generation,result.data(),result.size(),&n,error,sizeof error);
     if(rc==-2) throw Cancelled("synthesis cancelled during inference");

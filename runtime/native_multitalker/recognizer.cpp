@@ -1,4 +1,5 @@
 #include "recognizer.h"
+#include <algorithm>
 #include <limits>
 
 namespace aii::multitalker {
@@ -15,6 +16,23 @@ std::string Recognizer::execution_info() const {
   return std::string("{\"encoder_provider\":\"")+(encoder_cuda_?"CUDAExecutionProvider":"CPUExecutionProvider")+
     "\",\"diarization_provider\":\""+(nemotron_?"NeMo-Speech.cpp":"CPUExecutionProvider")+
     "\",\"speaker_conditioned\":true,\"hardware_execution_verified\":false}";
+}
+size_t Recognizer::prefer(const std::vector<std::string>& terms) {
+  if(active_)throw std::runtime_error("previous hearing has not retired");
+  // Each term is tried alone: one the pieces cannot spell, one that is not a
+  // short phrase, or one already listed is passed over and the rest stand.
+  std::vector<std::string> kept,seen;
+  for(const auto& term:terms) {
+    if(kept.size()==TermBoost::max_terms)break;
+    try {
+      const auto normal=TermBoost::normal(term);
+      if(std::find(seen.begin(),seen.end(),normal)!=seen.end())continue;
+      TermBoost alone(vocabulary_,{term},TermBoost::default_margin,TermBoost::default_budget);
+      kept.push_back(term);seen.push_back(normal);
+    } catch(const std::invalid_argument&) {}
+  }
+  microphone_.boost(kept.empty()?nullptr:std::make_shared<const TermBoost>(vocabulary_,kept,TermBoost::default_margin,TermBoost::default_budget));
+  return kept.size();
 }
 void Recognizer::open() {
   if(active_)throw std::runtime_error("previous hearing has not retired");

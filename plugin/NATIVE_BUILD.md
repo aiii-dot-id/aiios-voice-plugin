@@ -103,8 +103,8 @@ repository write, installation or audio-device access happens during build.
 
 ## Launch boundary
 
-The carrier declares eight session controls, ten speaker-management operations
-and five recording operations
+The carrier declares eight session controls, ten speaker-management operations,
+five recording operations and three vocabulary operations
 without loading a worker when `AIISDK_DESCRIBE=1`. Installed native activation
 is zero-argument and binds its worker from the sealed runtime manifest; explicit
 worker commands are a development-proof path, not an installed requirement.

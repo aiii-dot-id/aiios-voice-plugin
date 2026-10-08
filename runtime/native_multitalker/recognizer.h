@@ -20,6 +20,7 @@ class Recognizer final:public aii::voice::Recognizer {
   std::vector<aii::voice::RecognizedSegment> segments() const override;
   void reset() override;
   void cancel() noexcept override;
+  size_t prefer(const std::vector<std::string>& terms) override;
  private:
   Microphone microphone_;
   SpeakerEvidence evidence_;

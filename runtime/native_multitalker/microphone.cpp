@@ -113,6 +113,13 @@ std::vector<MicrophoneUpdate> Microphone::consume(bool final) {
     const size_t retain=next>257?next-257:0;
     frontend_.discard_before(std::min(retain,frontend_.samples()));
   }
+  if(final) {
+    // The utterance can end on a tail too short for another chunk, and then
+    // no chunk was the last one: release what a term being weighed withheld.
+    auto rest=hearing_.finish(epoch_);
+    if(!rest.empty())updates.push_back({frontend_.samples(),frontend_.samples(),std::move(rest),activity_frames_,{},
+                                        v3?size_t(8):size_t(4),v3?uint64_t(160):uint64_t(1280)});
+  }
 #ifdef AII_NEMOTRON_DIAR
   if(final && nemotron_ && activity_frames_<nemotron_->frames()) {
     // A sub-convolution tail still has real diarization evidence, even when

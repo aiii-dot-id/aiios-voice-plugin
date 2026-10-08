@@ -1,0 +1,49 @@
+{
+  "about": "Rules the correction list holds and refuses, and what a list does to recognized text. The worker (runtime/native/session/corrections.h) and the carrier (plugin/native/vocabulary.go) are both held to this file.",
+  "valid": [
+    {"heard": "Kwin", "meant": "Quinn"},
+    {"heard": "rowen", "meant": "Rowan"},
+    {"heard": "say of", "meant": "Quinn"},
+    {"heard": "rowan", "meant": "Rowan"},
+    {"heard": "a b c d", "meant": "four words"},
+    {"heard": "o'neal", "meant": "O’Neill"},
+    {"heard": "été", "meant": "summer, in French"},
+    {"heard": "7", "meant": "seven"}
+  ],
+  "invalid": [
+    {"heard": "", "meant": "x"},
+    {"heard": "a", "meant": ""},
+    {"heard": "a", "meant": "a"},
+    {"heard": " a", "meant": "b"},
+    {"heard": "a ", "meant": "b"},
+    {"heard": "a  b", "meant": "c"},
+    {"heard": "a b c d e", "meant": "f"},
+    {"heard": "a,b", "meant": "c"},
+    {"heard": "a-b", "meant": "c"},
+    {"heard": "a.", "meant": "b"},
+    {"heard": "'", "meant": "b"},
+    {"heard": "a '", "meant": "b"},
+    {"heard": "a", "meant": " b"},
+    {"heard": "a", "meant": "b "},
+    {"heard": "a", "meant": "b\nc"},
+    {"heard": "a", "meant": "b\tc"},
+    {"heard": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "meant": "b"},
+    {"heard": "a", "meant": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  ],
+  "apply": [
+    {"rules": [{"heard": "Kwin", "meant": "Quinn"}, {"heard": "rowen", "meant": "Rowan"}],
+     "text": "Kwin, tell Rowen that KWIN's notes are done. Kwintet and rowenna stay.",
+     "corrected": "Quinn, tell Rowan that Quinn's notes are done. Kwintet and rowenna stay.", "applied": 3},
+    {"rules": [{"heard": "say of", "meant": "Quinn"}, {"heard": "say", "meant": "SAY"}],
+     "text": "I say of course. Say, of all people. say of",
+     "corrected": "I Quinn course. SAY, of all people. Quinn", "applied": 3},
+    {"rules": [{"heard": "Kwin", "meant": "Quinn"}, {"heard": "Quinn", "meant": "Seven"}],
+     "text": "Kwin and Quinn", "corrected": "Quinn and Seven", "applied": 2},
+    {"rules": [{"heard": "rowan", "meant": "Rowan"}],
+     "text": "Rowan and rowan and ROWAN.", "corrected": "Rowan and Rowan and Rowan.", "applied": 2},
+    {"rules": [{"heard": "rowen", "meant": "Rowan"}],
+     "text": "That is Rowen’s idea", "corrected": "That is Rowan’s idea", "applied": 1},
+    {"rules": [{"heard": "Kwin", "meant": "Quinn"}],
+     "text": "nothing to change here", "corrected": "nothing to change here", "applied": 0}
+  ]
+}

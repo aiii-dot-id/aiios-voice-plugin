@@ -102,8 +102,9 @@ def validate_description(description):
     enrollment = {"speaker." + name for name in
                   ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget", "link")}
     recording = {"recording." + name for name in ("record", "status", "list", "delete", "prune")}
-    if set(ids) != expected | enrollment | recording or len(ids) != 23:
-        raise ValueError("The carrier must declare eight controls, ten speaker operations and five recording operations")
+    vocabulary = {"vocabulary." + name for name in ("list", "correct", "forget")}
+    if set(ids) != expected | enrollment | recording | vocabulary or len(ids) != 26:
+        raise ValueError("The carrier must declare eight controls, ten speaker operations, five recording operations and three vocabulary operations")
     for row in description:
         if row["id"] in enrollment:
             # The SDK's eight controls are host lifecycle operations, not
@@ -131,6 +132,18 @@ def validate_description(description):
                     or row.get("input") != f"schemas/recording-{name}.input.json"
                     or row.get("output") != output):
                 raise ValueError("Recording contract differs")
+        if row["id"] in vocabulary:
+            # A correction changes what a speaker is recorded as saying: both
+            # operations that change the list are the operator's to confirm.
+            name = row["id"].split(".")[1]
+            write = name != "list"
+            if (not isinstance(row.get("summary"), str) or not row["summary"].strip()
+                    or row.get("operator_confirms", False) is not write
+                    or row.get("capabilities") != ["fs.private"]
+                    or row.get("effects") != ("write.local" if write else "read.internal")
+                    or row.get("input") != f"schemas/vocabulary-{name}.input.json"
+                    or row.get("output") != "schemas/vocabulary.output.json"):
+                raise ValueError("Vocabulary contract differs")
 
 
 class SDKHost:

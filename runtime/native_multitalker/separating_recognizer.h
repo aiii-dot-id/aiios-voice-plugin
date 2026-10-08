@@ -46,6 +46,11 @@ class SeparatingRecognizer final:public aii::voice::Recognizer {
   std::vector<aii::voice::RecognizedSegment> segments() const override;
   void reset() override;
   void cancel() noexcept override;
+  // Both recognizers hear the same speakers and prefer the same terms.
+  size_t prefer(const std::vector<std::string>& terms) override {
+    if(active_)throw std::runtime_error("previous separating recognizer has not retired");
+    source_->prefer(terms);return live_->prefer(terms);
+  }
  private:
   std::unique_ptr<aii::voice::Recognizer> live_,source_;
   std::unique_ptr<SourceSeparator> separator_;

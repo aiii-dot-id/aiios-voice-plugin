@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"List the recognizer's correction rules: the words it writes (heard) and what was meant, with the list's revision and limits. Takes no arguments and needs no open microphone. Read this before vocabulary.correct or vocabulary.forget and copy its exact revision.",
+  "properties":{},
+  "additionalProperties":false
+}
