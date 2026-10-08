@@ -283,6 +283,66 @@ def replace_hearing_models(frozen, runtime, graphs, frontend, out, bindings):
                   hearing_frontend_sha256=sha(frontend / 'result.json'))
 
 
+def add_voice_presets(frozen, runtime, presets, declared, out, bindings):
+    """Add the voice presets a replacement worker declares and the parent lacks.
+
+    After the addition the inventory's presets and the worker's declared
+    voices are the same set: a declared voice without its preset would be
+    refused at every session that chose it, and an undeclared preset is bytes
+    no setting can reach. Every parent model is carried unchanged."""
+    presets = Path(presets)
+    if presets.is_symlink() or not presets.is_dir():
+        raise ValueError('regular voice preset directory required')
+    native = json.loads((runtime / 'native-profile.json').read_text())
+    bank = native['models'].get('tts')
+    if not isinstance(bank, str) or not bank:
+        raise ValueError('runtime profile names no speech model directory')
+    bank += '/embeddings/'
+    added = {}
+    for source in sorted(presets.iterdir()):
+        if (source.is_symlink() or not source.is_file() or source.suffix != '.safetensors'
+                or not source.stat().st_size):
+            raise ValueError('voice preset must be a regular nonempty .safetensors file: ' + source.name)
+        name = bank + source.name
+        safe_relative(name)
+        if name in frozen['models']:
+            raise ValueError('voice preset is already in the parent inventory: ' + source.stem)
+        added[name] = source
+    if not added:
+        raise ValueError('no voice preset to add')
+    held = {Path(name).stem for name in frozen['models'] if name.startswith(bank)}
+    voices = held | {source.stem for source in added.values()}
+    if not isinstance(declared, list) or len(set(declared)) != len(declared) or voices != set(declared):
+        raise ValueError('voice presets differ from the declared voices: missing '
+                         + ','.join(sorted(set(declared) - voices)) + '; undeclared '
+                         + ','.join(sorted(voices - set(declared))))
+    selected = {name: Path(frozen['models_root']) / name for name in frozen['models']}
+    selected.update(added)
+    # The SDK owns this bound; adding voices does not waive admission.
+    if len(selected) > 128:
+        raise ValueError('model inventory exceeds accelerator profile bound')
+    target = out / 'data'
+    target.mkdir(exist_ok=False)
+    rows = {}
+    for name, source in selected.items():
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('regular model source required')
+        binding = sha(source)
+        if name in frozen['models'] and binding != frozen['models'][name]['sha256']:
+            raise ValueError('parent model bytes differ: ' + name)
+        bindings[str(source)] = binding
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        if sha(destination) != binding:
+            raise ValueError('model changed during copy')
+        rows[name] = dict(sha256=binding, bytes=destination.stat().st_size)
+    frozen.update(models_root=str(target), models=rows,
+                  model_bytes=sum(row['bytes'] for row in rows.values()),
+                  models_copied=len(rows),
+                  voice_presets_added=sorted(source.stem for source in added.values()))
+
+
 def select_hearing_execution(runtime, execution):
     """Never carry a previous recognizer's placement promise into new graphs."""
     path = runtime/'native-profile.json'
@@ -438,6 +498,8 @@ def main():
                         help='Pinned native frontend paired with --hearing-graphs')
     parser.add_argument('--hearing-execution', choices=('cpu',),
                         help='Explicit new recognizer placement; does not change TTS or inherit GPU qualification')
+    parser.add_argument('--voice-presets', type=Path, metavar='DIR',
+                        help='Voice presets the replacement worker declares and the parent lacks; added to the model inventory')
     parser.add_argument('--uid-model', type=Path, help='Exact ECAPA graph; candidate only, no installed profile migration')
     parser.add_argument('--uid-policy', type=Path, help='Explicit model-bound calibration policy')
     parser.add_argument('--uid-policy-sha256', help='Exact policy bytes selected for this candidate')
@@ -450,6 +512,8 @@ def main():
         parser.error('hearing graphs and frontend must be selected together')
     if args.hearing_execution and args.hearing_graphs is None:
         parser.error('hearing execution requires explicit hearing model replacement')
+    if args.voice_presets is not None and (args.hearing_graphs is not None or args.uid_model is not None):
+        parser.error('add voice presets in a rebuild of their own: one model change at a time')
     parent, out = args.parent.resolve(), args.out.resolve()
     frozen, profile, bindings = parent_bytes(parent, args.parent_sha256, args.parent_models_root)
     platform = profile['platform']
@@ -521,6 +585,14 @@ def main():
     if args.uid_model is not None:
         added_notices.update(replace_uid_models(result, runtime, args.uid_model.resolve(), args.uid_policy.resolve(),
                            args.uid_policy_sha256, out, bindings))
+    if args.voice_presets is not None:
+        declared = [row for row in json.loads((out / 'settings.json').read_text()) if row.get('key') == 'tts_voice']
+        if len(declared) != 1:
+            raise ValueError('worker declares no voice setting')
+        add_voice_presets(result, runtime, args.voice_presets.resolve(), declared[0].get('values'), out, bindings)
+    else:
+        # What a parent's rebuild added is not what this one adds.
+        result.pop('voice_presets_added', None)
     updated = copy.deepcopy(profile)
     updated['files'] = runtime_inventory(runtime, target_platform=platform)
     updated['qualified'] = False
@@ -555,7 +627,8 @@ def main():
                   runtime_manifest_sha256=binding, worker_sha256=sha(runtime / worker_name),
                   carrier_sha256=json.loads((out / 'carrier-build.json').read_text())['carrier_sha256'],
                   changed_images=sorted(n for n in delta if n in replacements),
-                  models_copied=result.get('models_copied', 0) if args.hearing_graphs is not None or args.uid_model is not None else 0,
+                  models_copied=result.get('models_copied', 0) if (args.hearing_graphs is not None or args.uid_model is not None
+                                                               or args.voice_presets is not None) else 0,
                   execution_profile_changed='native-profile.json' in delta,
                   settings_changed='resources/settings.json' in delta,
                   settings_sha256=sha(out / 'settings.json'),

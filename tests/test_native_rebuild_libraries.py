@@ -509,3 +509,135 @@ def test_rebuild_refuses_a_ggml_set_that_changes_nothing(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='ggml replacement leaves the parent bytes unchanged'):
         darwin_rebuild(tmp_path, monkeypatch, change_ggml=False)
     assert not (tmp_path / 'candidate/freeze.json').exists()
+
+
+# Voice presets a replacement worker newly declares: added to the inventory,
+# never substituted, and afterwards exactly the voices the worker declares.
+def voice_fixture(tmp_path):
+    from scripts import rebuild_native_checkpoint as rebuild
+    parent, runtime, presets, out = [tmp_path / name for name in ('models', 'runtime', 'presets', 'out')]
+    for path in (parent / 'tts/embeddings', parent / 'uid', runtime, presets, out):
+        path.mkdir(parents=True)
+    held = {'tts/model.safetensors': b'speech model', 'tts/embeddings/first.safetensors': b'first preset',
+            'uid/model.onnx': b'speaker model'}
+    for name, raw in held.items():
+        (parent / name).write_bytes(raw)
+    (presets / 'second.safetensors').write_bytes(b'second preset')
+    (presets / 'third.safetensors').write_bytes(b'third preset, longer')
+    (runtime / 'native-profile.json').write_text(json.dumps({'models': {'tts': 'tts'}}))
+    frozen = dict(models_root=str(parent), model_bytes=sum(map(len, held.values())),
+                  models={name: dict(sha256=rebuild.sha(parent / name), bytes=len(raw)) for name, raw in held.items()})
+    return frozen, runtime, presets, out, parent, held
+
+
+def test_declared_voice_presets_are_added_and_every_parent_model_is_carried(tmp_path):
+    from scripts.rebuild_native_checkpoint import add_voice_presets, sha
+    frozen, runtime, presets, out, parent, held = voice_fixture(tmp_path)
+    before = {p: p.read_bytes() for p in parent.rglob('*') if p.is_file()}
+    bindings = {}
+    add_voice_presets(frozen, runtime, presets, ['first', 'second', 'third'], out, bindings)
+    assert set(frozen['models']) == set(held) | {'tts/embeddings/second.safetensors', 'tts/embeddings/third.safetensors'}
+    assert frozen['models_root'] == str(out / 'data') and frozen['models_copied'] == 5
+    assert frozen['voice_presets_added'] == ['second', 'third']
+    for name, row in frozen['models'].items():
+        assert sha(out / 'data' / name) == row['sha256'] and (out / 'data' / name).stat().st_size == row['bytes']
+    for name, raw in held.items():
+        assert (out / 'data' / name).read_bytes() == raw
+    assert frozen['model_bytes'] == sum(row['bytes'] for row in frozen['models'].values())
+    assert bindings[str(presets / 'second.safetensors')] == sha(presets / 'second.safetensors')
+    assert {p: p.read_bytes() for p in parent.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('fault,match', [
+    ('undeclared', 'undeclared third'),
+    ('missing', 'missing fourth'),
+    ('repeated', 'differ from the declared voices'),
+    ('held', 'already in the parent inventory: first'),
+    ('other-file', 'regular nonempty .safetensors file: notes.txt'),
+    ('empty', 'regular nonempty .safetensors file: third.safetensors'),
+    ('link', 'regular nonempty .safetensors file: linked.safetensors'),
+    ('nothing', 'no voice preset to add'),
+    ('directory-link', 'regular voice preset directory required'),
+    ('parent-changed', 'parent model bytes differ: uid/model.onnx'),
+    ('bound', 'exceeds accelerator profile bound'),
+    ('no-bank', 'names no speech model directory'),
+])
+def test_voice_presets_that_do_not_match_the_declaration_are_refused_before_a_checkpoint_exists(tmp_path, fault, match):
+    from scripts.rebuild_native_checkpoint import add_voice_presets
+    frozen, runtime, presets, out, parent, held = voice_fixture(tmp_path)
+    declared = ['first', 'second', 'third']
+    if fault == 'undeclared':
+        declared = ['first', 'second']
+    elif fault == 'missing':
+        declared = ['first', 'second', 'third', 'fourth']
+    elif fault == 'repeated':
+        declared = ['first', 'second', 'third', 'third']
+    elif fault == 'held':
+        (presets / 'first.safetensors').write_bytes(b'another first')
+    elif fault == 'other-file':
+        (presets / 'notes.txt').write_text('not a preset')
+    elif fault == 'empty':
+        (presets / 'third.safetensors').write_bytes(b'')
+    elif fault == 'link':
+        (presets / 'linked.safetensors').symlink_to(presets / 'second.safetensors')
+    elif fault == 'nothing':
+        for path in presets.iterdir():
+            path.unlink()
+    elif fault == 'directory-link':
+        (tmp_path / 'elsewhere').symlink_to(presets, target_is_directory=True)
+        presets = tmp_path / 'elsewhere'
+    elif fault == 'parent-changed':
+        (parent / 'uid/model.onnx').write_bytes(b'another model')
+    elif fault == 'bound':
+        for index in range(126):
+            frozen['models'][f'uid/extra-{index}.bin'] = dict(sha256='0' * 64, bytes=1)
+    elif fault == 'no-bank':
+        (runtime / 'native-profile.json').write_text(json.dumps({'models': {}}))
+    with pytest.raises(ValueError, match=match):
+        add_voice_presets(frozen, runtime, presets, declared, out, {})
+    # Refusals that need no file read happen before anything is written.
+    if fault not in ('parent-changed',):
+        assert not (out / 'data').exists()
+
+
+def test_rebuild_adds_the_presets_its_worker_declares(tmp_path, monkeypatch):
+    from scripts import rebuild_native_checkpoint as rebuild
+    parent, images = sealed_windows_parent(tmp_path)
+    runtime = parent / 'runtime'
+    # A parent whose speech model and one preset are in its inventory, and a worker that now declares two voices.
+    models = tmp_path / 'models'
+    (models / 'tts/embeddings').mkdir(parents=True)
+    (models / 'tts/embeddings/first.safetensors').write_bytes(b'first preset')
+    (runtime / 'native-profile.json').write_text(json.dumps({'models': {'tts': 'tts'}}))
+    (runtime / 'resources/settings.json').write_text(json.dumps([{'key': 'tts_voice', 'values': ['first', 'second']}]) + '\n')
+    (runtime / 'bin/aii_voice_worker.exe').write_bytes(b'worker that declares two voices')
+    from scripts.package_native_runtime import runtime_inventory
+    profile = json.loads((runtime / 'voice-runtime.json').read_text())
+    profile['files'] = runtime_inventory(runtime, target_platform='windows')
+    (runtime / 'voice-runtime.json').write_text(json.dumps(profile))
+    frozen = json.loads((parent / 'freeze.json').read_text())
+    manifest = rebuild.sha(runtime / 'voice-runtime.json')
+    frozen.update(runtime_manifest_sha256=manifest)
+    frozen['models']['tts/embeddings/first.safetensors'] = dict(bytes=12, sha256=rebuild.sha(models / 'tts/embeddings/first.safetensors'))
+    (parent / 'freeze.json').write_text(json.dumps(frozen))
+    record = json.loads((parent / 'carrier-build.json').read_text()); record['runtime_manifest_sha256'] = manifest
+    (parent / 'carrier-build.json').write_text(json.dumps(record))
+    presets = tmp_path / 'presets'; presets.mkdir()
+    (presets / 'second.safetensors').write_bytes(b'second preset')
+    worker = tmp_path / 'new-worker.exe'; worker.write_bytes(b'rebuilt worker that declares two voices')
+    out, result = run_rebuild(tmp_path, monkeypatch, parent, ['--worker', str(worker), '--voice-presets', str(presets)])
+    assert result['voice_presets_added'] == ['second'] and result['models_copied'] == 3
+    assert set(result['models']) == {'model.bin', 'tts/embeddings/first.safetensors', 'tts/embeddings/second.safetensors'}
+    assert result['models_root'] == str(out / 'data')
+    assert (out / 'data/tts/embeddings/second.safetensors').read_bytes() == b'second preset'
+    assert result['changed_images'] == ['bin/aii_voice_worker.exe']
+
+
+def test_a_rebuild_that_adds_no_preset_does_not_repeat_what_its_parent_added(tmp_path, monkeypatch):
+    parent, images = sealed_windows_parent(tmp_path)
+    frozen = json.loads((parent / 'freeze.json').read_text())
+    frozen['voice_presets_added'] = ['second']
+    (parent / 'freeze.json').write_text(json.dumps(frozen))
+    sources = nemo_sources(tmp_path, NEMO['windows'])
+    out, result = run_rebuild(tmp_path, monkeypatch, parent, [a for s in sources for a in ('--nemo', str(s))])
+    assert 'voice_presets_added' not in result and result['models_copied'] == 0
