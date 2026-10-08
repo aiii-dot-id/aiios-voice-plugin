@@ -80,8 +80,10 @@ std::vector<std::string> pieces() {
   return v;
 }
 std::vector<int64_t> ids(const std::vector<Token>& tokens){std::vector<int64_t> v;for(const auto& t:tokens)v.push_back(t.id);return v;}
+// A Decoder is about 400 KB: every one here is held on the heap. Several in one frame overflow a 1 MB stack,
+// which is what a Windows thread has.
 std::vector<Token> run(Scripted& model,std::shared_ptr<const TermBoost> terms,int frames,bool one_call=false) {
-  Decoder d(model); d.boost(std::move(terms)); d.reset(1);
+  auto d_held=std::make_unique<Decoder>(model); Decoder& d=*d_held; d.boost(std::move(terms)); d.reset(1);
   std::vector<Token> all; std::vector<float> data(size_t(frames)*encoder_width,0);
   for(int f=0;f<frames;++f)data[size_t(f)*encoder_width]=float(f);
   if(one_call){auto part=d.push(1,0,0,data.data(),size_t(frames),true);return part;}
@@ -126,7 +128,7 @@ void terms() {
   // begins another word (here) or is punctuation.
   for(const int64_t after:{int64_t(10),int64_t(17)}) {
     Scripted then=heard; then.script[{2,8}]={{after,5.f}};
-    Decoder d(then); d.boost(list({"Dale"})); d.reset(1);
+    auto d_held=std::make_unique<Decoder>(then); Decoder& d=*d_held; d.boost(list({"Dale"})); d.reset(1);
     std::array<float,encoder_width> f0{},f1{},f2{}; f1[0]=1; f2[0]=2;
     require(d.push(1,0,0,f0.data(),1).empty() && d.push(1,0,1,f1.data(),1).empty());
     require(ids(d.push(1,0,2,f2.data(),1))==std::vector<int64_t>({5,6,7,after}));
@@ -174,7 +176,7 @@ void terms() {
   // leaves is the plain decoder's output.
   require(ids(run(heard,list({"Dale"}),1))==ids(run(heard,nullptr,1)));
   {
-    Decoder d(heard); d.boost(list({"Dale"})); d.reset(1);
+    auto d_held=std::make_unique<Decoder>(heard); Decoder& d=*d_held; d.boost(list({"Dale"})); d.reset(1);
     std::array<float,encoder_width> f0{};
     require(d.push(1,0,0,f0.data(),1).empty());
     require(ids(d.finish(1,0))==std::vector<int64_t>{8} && d.finish(1,0).empty() && d.finish(1,3).empty());
@@ -182,7 +184,7 @@ void terms() {
   }
   // A term nobody finishes is given up after the bound, at plain output.
   {
-    Decoder d(heard); d.boost(list({"Dale"})); d.reset(1);
+    auto d_held=std::make_unique<Decoder>(heard); Decoder& d=*d_held; d.boost(list({"Dale"})); d.reset(1);
     std::vector<Token> all; std::array<float,encoder_width> f{};
     for(uint64_t i=0;i<Decoder::match_frames+2;++i){f[0]=i?9.f:0.f;auto part=d.push(1,0,i,f.data(),1);all.insert(all.end(),part.begin(),part.end());if(i<Decoder::match_frames)require(part.empty());}
     require(ids(all)==std::vector<int64_t>{8} && all[0].frame==0);
@@ -204,7 +206,7 @@ void terms() {
   require(ids(run(apart,list({"new york"}),4))==ids(run(apart,nullptr,4)));
   // A speaker taken up while a term is being followed keeps it.
   {
-    Decoder d(heard); d.boost(list({"Dale"})); d.reset(1);
+    auto d_held=std::make_unique<Decoder>(heard); Decoder& d=*d_held; d.boost(list({"Dale"})); d.reset(1);
     std::array<float,encoder_width> f0{},f1{}; f1[0]=1;
     require(d.push(1,dormant_track,0,f0.data(),1).empty());
     d.clone_track(1,dormant_track,7);
@@ -213,7 +215,7 @@ void terms() {
   }
   // The list takes effect at a reset, never inside an utterance.
   {
-    Decoder d(heard); d.reset(1);
+    auto d_held=std::make_unique<Decoder>(heard); Decoder& d=*d_held; d.reset(1);
     std::array<float,encoder_width> f0{};
     d.boost(list({"Dale"}));
     require(ids(d.push(1,0,0,f0.data(),1,true))==std::vector<int64_t>{8});
@@ -228,7 +230,7 @@ int main() {
   try {
     terms();
     std::array<float,encoder_width> frame{};
-    Mock m; Decoder d(m);
+    Mock m; auto d_held=std::make_unique<Decoder>(m); Decoder& d=*d_held;
     refuses([&]{ d.push(0,0,0,frame.data(),1); });
     d.reset(1);
     auto a=d.push(1,0,0,frame.data(),1);
@@ -273,7 +275,7 @@ int main() {
     refuses([&]{d.clone_track(4,dormant_track,6);});
     refuses([&]{d.clone_track(5,dormant_track,dormant_track);});
     d.cancel();refuses([&]{d.clone_track(5,dormant_track,6);});
-    Stalled stalled; Decoder live(stalled);live.reset(1);
+    Stalled stalled; auto live_held=std::make_unique<Decoder>(stalled); Decoder& live=*live_held;live.reset(1);
     auto worker=std::async(std::launch::async,[&]{
       refuses([&]{live.push(1,0,0,frame.data(),1);});
     });
