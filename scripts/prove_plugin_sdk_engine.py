@@ -310,21 +310,25 @@ class SDKHost:
                     if body["params"].get("operation") in self.extra_host_operations:
                         self.host_requests.put_nowait(body)
                     elif self.operator_settings is not None:
-                        if body["params"] != {
+                        params = body["params"]
+                        if (params.get("operation") == "fs.read"
+                                and params.get("target") == {"root": "private", "path": "uid/corrections.json"}):
+                            # The carrier reads the correction list at every
+                            # session open; this host holds none and says so.
+                            result = {"status": "failed", "reasonCode": "FS_NOT_FOUND"}
+                        elif params != {
                             "operation": "settings.get",
                             "arguments": {},
                         }:
                             raise ValueError(
                                 "unexpected upstream call in settings proof"
                             )
-                        reply = {
-                            "jsonrpc": "2.0",
-                            "id": body["id"],
-                            "result": {
+                        else:
+                            result = {
                                 "status": "succeeded",
                                 "operation_result": {"values": self.operator_settings},
-                            },
-                        }
+                            }
+                        reply = {"jsonrpc": "2.0", "id": body["id"], "result": result}
                         raw = json.dumps(reply, allow_nan=False).encode()
                         with self.write_lock:
                             self.process.stdin.write(struct.pack(">I", len(raw)) + raw)
