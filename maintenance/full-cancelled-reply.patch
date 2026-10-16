@@ -1,0 +1,170 @@
+--- a/runtime/native/session/session.cpp
++++ b/runtime/native/session/session.cpp
+@@ -65,6 +65,10 @@
+   std::deque<std::shared_ptr<Query>> queries;
+   std::map<uint64_t,std::shared_ptr<Job>> jobs;
+   std::shared_ptr<Job> current;
++  // running is the job the synthesis loop has taken and not yet retired. It
++  // differs from current only while a reply admitted behind a cancelled one
++  // waits for that one to retire (synthesize).
++  std::shared_ptr<Job> running;
+   // The voice in force and the one asked for the next reply (session.h).
+   SpeechState speech;
+   std::optional<SpeechSettings> next_speech;
+@@ -232,6 +236,20 @@
+       queued_output=0;
+     }
+     changed.notify_all(); cancel_models();
++  }
++  // retire_locked ends one job: no more compute runs for it, its END is
++  // queued and the engine says how it ended. The synthesis loop calls it when
++  // a job's compute ends; synthesize calls it for a cancelled job that a newer
++  // reply replaced before the loop ever took it.
++  void retire_locked(Job& job) {
++    job.retired=true;
++    job.segments.clear();
++    if(!stopping) {
++      const auto end=job.fenced?job.delivered:job.generated;
++      job.audio.push_back(Audio{job.id,end,true,{}});
++      emit_locked(Event{0,0,job.id,0,end,job.cancelled?"synthesis_cancelled":"synthesis_end",""});
++      maybe_close_locked();
++    }
+   }
+   void maybe_close_locked() {
+     if(!closing || (hearing && !input_done) || speaker_busy) return;
+@@ -681,7 +699,7 @@
+         std::unique_lock<std::mutex> lock(mutex);
+         changed.wait(lock,[&]{return stopping || (current && !current->retired);});
+         if(stopping) return;
+-        job=current;
++        job=current; running=job;
+       }
+       try {
+         take_speech(*job);
+@@ -730,14 +748,8 @@
+       }
+       {
+         std::lock_guard<std::mutex> lock(mutex);
+-        job->retired=true;
+-        job->segments.clear();
+-        if(!stopping) {
+-          const auto end=job->fenced?job->delivered:job->generated;
+-          job->audio.push_back(Audio{job->id,end,true,{}});
+-          emit_locked(Event{0,0,job->id,0,end,job->cancelled?"synthesis_cancelled":"synthesis_end",""});
+-          maybe_close_locked();
+-        }
++        retire_locked(*job);
++        running.reset();
+       }
+       changed.notify_all();
+     }
+@@ -813,7 +825,16 @@
+   std::lock_guard<std::mutex> lock(p_->mutex);
+   require(!p_->stopping && !p_->closing,"synthesis admission closed");
+   require(generation>p_->last_generation && p_->jobs.size()<64,"new generation and unresolved-work capacity required");
+-  require(!p_->current || p_->current->retired,"prior synthesis has not retired");
++  // A reply may follow a cancelled one at once. The host cancels the reply
++  // a newer one replaces and sends the newer one when the engine has ADMITTED
++  // the cancel; the cancelled job stops only at its next chunk. Refusing the
++  // newer reply until then lost it to text. It is admitted here, and the loop
++  // takes it when the cancelled job retires: one speaking model, never two
++  // replies at once. A cancelled job the loop never took is retired now, so
++  // nothing waits on it. A stop alone (fenced, not cancelled) leaves its
++  // compute running by design, and is still refused.
++  require(!p_->current || p_->current->retired || p_->current->cancelled,"prior synthesis has not retired");
++  if(p_->current && !p_->current->retired && p_->current!=p_->running) p_->retire_locked(*p_->current);
+   auto j=std::make_shared<Job>(); j->id=generation;j->segments=std::move(parts);
+   for(const auto& part:j->segments)j->segment_count+=!strip_text(part).empty();
+   p_->emit_locked(Event{0,0,generation,0,0,"synthesis_start",""});
+--- a/runtime/native/session/session_test.cpp
++++ b/runtime/native/session/session_test.cpp
+@@ -60,6 +60,9 @@
+   std::vector<std::string> texts;
+   int chunks=0;
+   int chunk_count=2;
++  // notice is how long a cancelled reply takes to see its cancel (a chunk in
++  // progress): the window in which a replacement can arrive.
++  std::chrono::milliseconds notice{0};
+   size_t reserve_samples=0;
+   size_t playback_reserve_samples() const override { return reserve_samples; }
+   void start(uint64_t id,const std::string& text) override {
+@@ -68,6 +71,7 @@
+   std::vector<float> next() override {
+     if(chunks==1 && (hold || (hold_segment && starts==hold_segment))) { blocked=true; until([&]{return through>=generation || release.load();}); }
+     if(through>=generation) {
++      if(notice.count()) std::this_thread::sleep_for(notice);
+       if(fault_on_cancel) throw std::runtime_error("inference failure, not cancellation");
+       throw Cancelled("TTS fenced");
+     }
+@@ -452,6 +456,62 @@
+   check(s.generation(1).delivered==0,"refused audio was marked delivered");
+   s.stop_playback(1);check(s.audio_bounded(out,0,required) && out.end,"capacity retry revived detached stale PCM");
+   s.playback(1,0,true,true);s.finish_input(0);s.close(false);check(s.wait_closed(1000),"bounded read stranded owner");
++}
++// The host cancels the reply a newer one replaces and sends the newer one as
++// soon as the cancel is admitted, before its compute necessarily retires.
++void replacement_follows_an_admitted_cancel() {
++  Asr a;Detector v;End e;Tts t;t.hold=true;t.notice=300ms;Session s(a,v,e,t);
++  s.synthesize(1,"The reply being replaced.");until([&]{return t.blocked.load();});
++  s.interrupt(1);
++  check(!s.generation(1).retired,"the test needs the cancelled reply still computing");
++  s.synthesize(2,"The newer reply.");
++  check(t.starts==1,"a second reply started beside the first");
++  t.hold=false;until([&]{return !s.status().synthesizing;});
++  check(t.starts==2 && t.texts.back()=="The newer reply.","the newer reply was not spoken after the first");
++  check(s.generation(1).cancelled && s.generation(1).retired && s.generation(2).retired && !s.generation(2).cancelled,
++        "the replaced reply did not retire as cancelled, or the newer one did not end");
++  Audio out;uint64_t samples=0;size_t ends1=0,ends2=0;while(s.audio(out)){
++    if(out.generation==1){check(out.pcm.empty(),"the cancelled reply's PCM escaped");ends1+=out.end;}
++    else{ if(out.end)++ends2; else samples+=out.pcm.size(); }
++  }
++  check(ends1==1 && ends2==1 && samples==1920,"each reply needs one END, and the newer one all its audio");
++  bool cancelled1=false,ended2=false;Event event;while(s.event(event)){
++    cancelled1|=event.kind=="synthesis_cancelled" && event.generation==1;
++    ended2|=event.kind=="synthesis_end" && event.generation==2;
++  }
++  check(cancelled1 && ended2,"the engine did not say how each reply ended");
++  s.playback(1,0,true,true);s.playback(2,samples,true,false);
++  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
++  check(s.wait_closed(1000),"the session did not close after both replies");
++}
++// A replacement replaced before the loop took it never runs, and retires at
++// once: the session's close never waits on it.
++void a_reply_replaced_before_it_started_retires() {
++  Asr a;Detector v;End e;Tts t;t.hold=true;t.notice=300ms;Session s(a,v,e,t);
++  s.synthesize(1,"First.");until([&]{return t.blocked.load();});
++  s.interrupt(1);s.synthesize(2,"Second, never spoken.");s.interrupt(2);s.synthesize(3,"Third.");
++  check(s.generation(2).retired && s.generation(2).cancelled,"the never-started reply was left for the loop");
++  t.hold=false;until([&]{return !s.status().synthesizing;});
++  check(t.starts==2 && t.texts.back()=="Third.","the never-started reply was spoken, or the last one was not");
++  Audio out;uint64_t samples=0;while(s.audio(out))if(out.generation==3 && !out.end)samples+=out.pcm.size();
++  bool cancelled2=false;Event event;while(s.event(event))cancelled2|=event.kind=="synthesis_cancelled" && event.generation==2;
++  check(cancelled2,"the never-started reply was not said as cancelled");
++  s.playback(1,0,true,true);s.playback(2,0,true,true);s.playback(3,samples,true,false);
++  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
++  check(s.wait_closed(1000),"a never-started reply held the session open");
++}
++// A stop alone leaves compute running: a newer reply still waits for it.
++void a_stopped_reply_still_holds_the_next() {
++  Asr a;Detector v;End e;Tts t;t.hold=true;Session s(a,v,e,t);
++  s.synthesize(1,"Stopped, still computing.");until([&]{return t.blocked.load();});
++  s.stop_playback(1);
++  refuses([&]{s.synthesize(2,"Too early.");},"a newer reply was admitted beside running compute");
++  t.release=true;until([&]{return !s.status().synthesizing;});
++  s.synthesize(3,"After it.");until([&]{return !s.status().synthesizing;});
++  Audio out;uint64_t samples=0;while(s.audio(out))if(out.generation==3 && !out.end)samples+=out.pcm.size();
++  s.playback(1,0,true,true);s.playback(3,samples,true,false);
++  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
++  check(s.wait_closed(1000),"the stopped reply's session did not close");
+ }
+ int main() {
+   try {
+@@ -483,5 +543,8 @@
+     std::cout<<"an admitted cutoff repeated after the drain released is not a late finish PASS\n";
+     std::cout<<"backpressure suspends only the missing-tail wait; deadline resumes on capacity PASS\n";
+     bounded_read_keeps_custody();std::cout<<"capacity refusal keeps event/audio custody under control fences PASS\n";
++    replacement_follows_an_admitted_cancel();std::cout<<"a reply sent once its predecessor's cancel is admitted is spoken after it PASS\n";
++    a_reply_replaced_before_it_started_retires();std::cout<<"a reply replaced before it started retires at once PASS\n";
++    a_stopped_reply_still_holds_the_next();std::cout<<"a stop without a cancel still holds the next reply PASS\n";
+   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
+ }

@@ -1,0 +1,29 @@
+name: AiiVoiceWespeakerGPU
+options:
+  deploymentTarget:
+    iOS: "17.4"
+settings:
+  base:
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    CODE_SIGN_STYLE: Automatic
+targets:
+  AiiVoiceWespeakerGPU:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+    dependencies:
+      - framework: Frameworks/onnxruntime.xcframework
+      - sdk: CoreML.framework
+      - sdk: UIKit.framework
+    settings:
+      base:
+        # The existing pinned development profile is bound to this bundle ID.
+        # The GPU probe replaces the older model-only probe on the test phone.
+        PRODUCT_BUNDLE_IDENTIFIER: id.aiii.voice.portability.wespeaker
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Frameworks/Headers"

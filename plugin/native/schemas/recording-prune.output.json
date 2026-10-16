@@ -1,0 +1,7 @@
+{
+  "type":"object",
+  "description":"Receipt for expired private upload-stage cleanup. listed_bytes_freed is based on the host inventory immediately before deletion and is not a filesystem quota receipt. truncated means unexamined entries remain; repeat after successful deletions. If no eligible stages were deleted, remove unwanted saved recordings by exact ID or ask the operator to inspect private storage rather than looping.",
+  "properties":{"truncated":{"type":"boolean"},"deleted":{"type":"integer","minimum":0,"maximum":2048},"listed_bytes_freed":{"type":"integer","minimum":0,"maximum":9007199254740991}},
+  "required":["deleted","listed_bytes_freed","truncated"],
+  "additionalProperties":false
+}

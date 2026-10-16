@@ -1,0 +1,7 @@
+{
+  "type":"object",
+  "description":"Discard exactly one pending, explicitly requested enrollment capture. It does not remove enrolled speakers or require a microphone/session. Call speaker.list and copy its pending_captures[].capture_id. The host asks the operator to confirm the exact selection. No audio, embedding or path is accepted.",
+  "properties":{"capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Exact opaque handle returned by speaker.list; never invent it or reuse the illustrative hexadecimal ID in examples."}},
+  "required":["capture_id"],
+  "additionalProperties":false
+}

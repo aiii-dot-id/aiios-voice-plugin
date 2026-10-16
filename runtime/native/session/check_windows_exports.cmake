@@ -1,0 +1,15 @@
+# Keep the Windows export list in step with this project's public C ABI.
+# Run on every build platform; native Windows linking remains a separate gate.
+file(READ "${HEADER}" declarations)
+file(READ "${EXPORTS}" exports)
+string(REGEX MATCHALL "aii_voice_result[ \t\r\n]+aii_voice_[a-z_]+[ \t\r\n]*\\(" functions "${declarations}")
+if(NOT functions)
+  message(FATAL_ERROR "No public voice declarations found; export check did not execute")
+endif()
+foreach(declaration IN LISTS functions)
+  string(REGEX MATCH "aii_voice_[a-z_]+[ \t\r\n]*\\(" function "${declaration}")
+  string(REGEX REPLACE "[ \t\r\n]*\\($" "" function "${function}")
+  if(NOT exports MATCHES "(^|[\r\n])[ \t]*${function}([ \t]*[\r\n]|$)")
+    message(FATAL_ERROR "Windows native ABI export missing: ${function}")
+  endif()
+endforeach()

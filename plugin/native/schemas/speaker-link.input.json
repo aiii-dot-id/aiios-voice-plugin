@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "description": "Confirmed correction for two acoustic UUIDs independently verified as the same person. Read speaker.buckets and copy its exact revision. Future accepted matches to speaker_uuid resolve to target_uuid and its label. Profiles remain separate and unchanged; thresholds, ambiguity rejection and historical transcripts are unchanged. This is NOT automatic speaker verification, permission or authentication. Both UUIDs need acoustic profiles; target must not be an alias. A target with referring aliases cannot itself be linked or forgotten. Set target_uuid equal to speaker_uuid to undo its link. No microphone needed.",
+  "properties": {
+    "speaker_uuid": {"type":"string", "description":"Source UUID to correct, or to unlink with a self-target.", "pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "target_uuid": {"type":"string", "description":"Canonical UUID to report for future accepted source matches. Copy from speaker.buckets, never guess from names.", "pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "registry_revision": {"type":"string", "description":"Exact revision from speaker.buckets; stale writes refuse.", "pattern":"^(0|[1-9][0-9]{0,15})$"},
+    "session_id": {"type":"string", "description":"Optional exact current session reference; omit for post-session management.", "minLength":1,"maxLength":128}
+  },
+  "required": ["speaker_uuid", "target_uuid", "registry_revision"],
+  "additionalProperties": false
+}

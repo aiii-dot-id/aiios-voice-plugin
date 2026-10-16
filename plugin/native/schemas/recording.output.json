@@ -1,0 +1,22 @@
+{
+  "type":"object",
+  "description":"Metadata for the most recent identity-requested local WAV of buffered microphone audio. It may include playback from a public video; it is not a separated speaker track or proof of identity. The caller cannot select or read a private path through this operation.",
+  "properties":{
+    "state":{"enum":["none","publishing","saved","failed"]},
+    "recording_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "buffered_audio_available":{"type":"boolean"},
+    "samples":{"type":"integer","minimum":0,"maximum":480000},
+    "sample_rate":{"const":16000},
+    "channels":{"const":1},
+    "format":{"const":"wav_pcm16le"},
+    "speaker_separated":{"const":false},
+    "source_session_id":{"type":"string"},
+    "source_start_sample":{"type":"integer","minimum":0},
+    "source_end_sample":{"type":"integer","minimum":1},
+    "private_path":{"type":"string","description":"Host-private plugin-relative path returned only after verified durable publication."},
+    "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "reason":{"type":"string"}
+  },
+  "required":["state"],
+  "additionalProperties":false
+}

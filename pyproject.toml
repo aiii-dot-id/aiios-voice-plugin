@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "cleanup_errors(*fragments): engine shutdown errors a test provokes on purpose",
+]
+norecursedirs = [
+  ".git",
+  ".pytest_cache",
+  "__pycache__",
+  "artifacts",
+  "baselines",
+  "models",
+  "research",
+  "third_party",
+]

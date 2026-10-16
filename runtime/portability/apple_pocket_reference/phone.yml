@@ -1,0 +1,27 @@
+name: AiiPocketCoreMLReference
+options:
+  deploymentTarget:
+    iOS: "18.0"
+packages:
+  FluidAudio:
+    path: ../../../artifacts/sources/fluidaudio-stage-isolation-r1
+targets:
+  AiiPocketCoreMLReference:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/pocket-coreml-reference
+    dependencies:
+      - package: FluidAudio
+        product: FluidAudio
+      - sdk: CoreML.framework
+      - sdk: UIKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: id.aiii.voice.portability.pocketstate
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "6.0"
+        OTHER_SWIFT_FLAGS: ["$(inherited)", "-parse-as-library"]
+        CODE_SIGNING_ALLOWED: NO

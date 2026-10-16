@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AII Voice · Native loop</title><link rel="stylesheet" href="/style.css"></head>
+<body><main><div class="eyebrow">AII VOICE / NATIVE AUDIO</div><h1>Speak. Interrupt. Continue.</h1>
+<p class="notice">The signed Mac audio host owns the microphone and speaker. This page only sends controls and displays evidence—no browser audio routing. Recordings and traces stay local. Input ends automatically after 30 minutes, then the final reply drains. This is a qualification build, not a human-level claim.</p>
+<button id="devices">List native devices</button><label>Microphone<select id="input"></select></label><label>Speaker<select id="output"></select></label>
+<label>Application reply template (editable between turns; not a reasoning model)<textarea id="reply">You said: {transcript} This is reply number {turn}. The application supplies a different response for each turn. You can interrupt this paragraph naturally, and I will keep listening. The final words are cobalt lantern seventeen.</textarea></label>
+<label>Reply delivery<select id="reply-mode"><option value="automatic">Automatic template with this turn's transcript</option><option value="manual">Wait for my application reply</option></select></label>
+<button id="send-reply" disabled>Send reply to pending turn</button><p id="pending-reply">No application reply pending.</p>
+<button id="start" disabled>Start native conversation</button><button id="interrupt" disabled>Manual stop reply</button><button id="end" disabled>Finish input and drain reply</button>
+<p id="status">Not recording. List devices first.</p><h2>Live transcript</h2><div id="transcript"></div>
+<h2>Physical test</h2><p>First speak a sentence and let the entire reply finish. On the next reply, speak over it: “Please stop now. Keep the words cobalt lantern seventeen.” Continue your sentence naturally, then let the recovery reply finish. Click Finish. The distinctive words let us check the interrupted turn; a manual stop does not count as speech interruption.</p>
+<h2>Events</h2><pre id="events"></pre><a href="/browser.html">Browser audio alternative (known echo defect)</a></main><script src="/native.js"></script></body></html>

@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"Read the receipt of the last recording.record call. The record call itself returns the saved-file receipt; this status call never starts or extends recording and never returns audio bytes.",
+  "properties":{},
+  "additionalProperties":false
+}

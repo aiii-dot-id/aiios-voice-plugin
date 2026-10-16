@@ -1,0 +1,43 @@
+                    val pcmTrials = JSONArray()
+                    check(nativeAudio.size == 4)
+                    nativeAudio.forEachIndexed { index, pcm ->
+                        val nativeFeatures = NativeSpeech.frontend(pcm)
+                        val expected = nativeInputs[index]
+                        check(nativeFeatures.size == 64000 && expected.size == nativeFeatures.size)
+                        var maxError = 0.0
+                        var squaredError = 0.0
+                        var changed = 0
+                        for (i in nativeFeatures.indices) {
+                            check(nativeFeatures[i].isFinite())
+                            val difference = nativeFeatures[i].toDouble() - expected[i].toDouble()
+                            maxError = maxOf(maxError, kotlin.math.abs(difference))
+                            squaredError += difference * difference
+                            if (nativeFeatures[i].toRawBits() != expected[i].toRawBits()) changed++
+                        }
+                        val rmsError = kotlin.math.sqrt(squaredError / nativeFeatures.size)
+                        // Declared before this build/run; not inferred from its results.
+                        check(maxError <= 1e-5 && rmsError <= 1e-6) { "Native PCM feature difference: max=$maxError rms=$rmsError" }
+                        val result = JSONObject(nativeModel.pcm(10L + index, pcm))
+                        val original = prior.getJSONObject(index)
+                        check(result.getBoolean("complete") && result.getLong("input_samples") == pcm.size.toLong())
+                        check(result.getJSONArray("tokens").toString() == original.getJSONArray("tokens").toString()) { "Native PCM token/frame decisions differ" }
+                        check(result.getInt("model_calls") == original.getJSONObject("decode_profile").getInt("model_calls"))
+                        check(result.getLong("diagnostic_retained_bytes") == 0L && nativeModel.trace().isEmpty())
+                        result.put("id", original.getString("id")).put("repeat", original.getInt("repeat"))
+                            .put("pcm_sha256", original.getString("pcm_sha256")).put("samples", pcm.size)
+                            .put("feature_max_abs_error", maxError).put("feature_rms_error", rmsError)
+                            .put("feature_changed_values", changed).put("feature_values", nativeFeatures.size)
+                        pcmTrials.put(result);report.put("native_pcm_trials", pcmTrials)
+                    }
+                    var pcmRefused = 0
+                    for (bad in listOf(FloatArray(0), FloatArray(257), FloatArray(80001),
+                        FloatArray(512).also { it[256] = Float.NaN }, FloatArray(512).also { it[256] = Float.POSITIVE_INFINITY })) {
+                        try { nativeModel.pcm(20L, bad) }
+                        catch (wanted: IllegalStateException) { pcmRefused++ }
+                    }
+                    check(pcmRefused == 5) { "Invalid PCM was accepted or silently truncated" }
+                    val afterInvalid = JSONObject(nativeModel.pcm(20L, nativeAudio[0]))
+                    check(afterInvalid.getJSONArray("tokens").toString() == prior.getJSONObject(0).getJSONArray("tokens").toString())
+                    report.put("native_pcm_invalid_refusals", pcmRefused)
+                        .put("native_pcm_recovery_after_invalid", afterInvalid)
+                        .put("native_pcm_passed", true)
