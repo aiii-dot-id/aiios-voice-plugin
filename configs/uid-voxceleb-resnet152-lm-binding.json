@@ -1,0 +1,24 @@
+{
+  "model_sha256": "5b734353b4b410e222bbd124dd095537642237ad895727d18a3b9fee330262a8",
+  "model_bytes": 79158228,
+  "frontend": {
+    "sample_rate": 16000,
+    "pcm_format": "signed_pcm16_little_endian_mono",
+    "bins": 80,
+    "frame_samples": 400,
+    "shift_samples": 160,
+    "window": "hamming",
+    "dither": 0,
+    "snip_edges": true,
+    "cmn": "whole_utterance",
+    "temporal_context": "one_unpadded_whole_utterance",
+    "minimum_samples": 31920,
+    "maximum_samples": 480000
+  },
+  "output": {
+    "dimensions": 256,
+    "normalization": "float64_l2_unit",
+    "pooling": "exported_model_temporal_statistics_pooling"
+  },
+  "enrollment_compatibility": "exact_embedding_binding_only"
+}

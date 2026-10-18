@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"List enrolled speakers and durable pending_captures with {} while the microphone is closed, including after restart. Nothing is enrolled or changed. Read guided_capture_available and any policy_upgrade_required before proposing capture. Copy pending_captures[].capture_id to speaker.enroll with the chosen speaker_id and label; host operator confirmation is required, not an open microphone. If no capture exists, ask the human to make an explicitly consented Add speaker recording; never use ambient speech or invent a handle. session_open and eligible_final_sequences describe only the alternative live-final path, whose minimum_recordings_per_speaker still applies. Speaker matching grants no authority. Never invent confirmation stamps.",
+  "properties":{"session_id":{"type":"string","minLength":1,"maxLength":128,"description":"Optional previously observed session ID as a consistency check. Omit for initial discovery or microphone-independent management. A different session ID is refused."}},
+  "additionalProperties":false
+}

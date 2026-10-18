@@ -1,0 +1,21 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AII Voice · Conversation</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+<div class="eyebrow">AII VOICE / LOCAL & NATIVE</div><h1>Let's talk.</h1>
+<p class="intro">A real conversation, using your local model and native audio. Speak naturally, interrupt, and keep going.</p>
+<section class="setup"><div class="row"><button id="devices">List audio devices</button><span id="backend">Checking voice engine…</span></div>
+<div class="columns"><label>Microphone<select id="input"></select></label><label>Speakers<select id="output"></select></label></div>
+<label>Reply source<select id="mode"><option value="conversation">Local conversation model</option><option value="manual">My application / manual reply</option></select></label>
+<p class="fine">No capture until Start. Microphone audio, transcripts and replies stay in local evidence files. System audio defaults are not changed. This is a working development application, not yet human-level or five-platform qualification.</p>
+</section>
+<div class="controls"><button id="start" disabled>Start conversation</button><button id="interrupt" disabled>Stop reply</button><button id="finish" disabled>Finish & drain</button><button id="abort" disabled>Abort session</button></div>
+<p id="status" role="status">Not recording.</p><p id="partial" aria-live="polite"></p><section id="conversation" aria-label="Conversation"></section>
+<section id="manual" hidden><label>Reply to the pending turn<textarea id="reply" maxlength="8000" placeholder="Your application can supply any response here."></textarea></label><button id="send" disabled>Speak this reply</button></section>
+<details><summary>Optional speaker enrollment</summary><p>Conversation never requires enrollment. These tools recognize a voice from an explicitly supplied recording. Results are development-only suggestions, not authentication. Accuracy and live microphone identity labeling are not yet qualified.</p>
+<p>Supply three different recordings per person: each 2–30 seconds, 16 kHz mono PCM16 WAV. No automatic enrollment, no microphone access from these controls.</p>
+<div class="columns"><label>Speaker ID<input id="speaker" maxlength="64" placeholder="speaker-1"></label><label>Display name<input id="label" maxlength="128" placeholder="Your chosen name"></label></div>
+<label>Recording<input id="wav" type="file" accept="audio/wav,.wav"></label>
+<button id="enroll">Enroll this recording</button><button id="identify">Identify recording</button><button id="list">List enrollments</button><button id="remove">Remove this speaker</button><button id="reset">Reset enrollments…</button><pre id="uid-result">No speaker operation requested.</pre>
+</details>
+<details><summary>Session events & evidence</summary><pre id="events"></pre></details>
+<p class="fine">Finish stops new input and preserves the final reply. Abort stops the owned session; it is not a successful drain. Reload/disconnect aborts capture. Responses from the local model are generated text, not tool execution.</p>
+</main><script src="/app.js"></script></body></html>

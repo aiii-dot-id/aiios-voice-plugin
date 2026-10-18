@@ -1,0 +1,26 @@
+                    val controlFolder = File(modelDir, "control-" + requestId)
+                    check(controlFolder.mkdir()) { "Control capture directory already exists" }
+                    val controlRows = JSONArray()
+                    fun saveControl(label: String, values: FloatArray): JSONObject {
+                        check(values.isNotEmpty() && values.size <= 512 * 8198 && values.all { it.isFinite() })
+                        val file = File(controlFolder, label + ".f32le")
+                        check(!file.exists())
+                        val raw = ByteBuffer.allocate(values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+                        values.forEach { raw.putFloat(it) }
+                        file.writeBytes(raw.array())
+                        return JSONObject().put("file", file.name).put("values", values.size)
+                            .put("bytes", file.length()).put("sha256", sha(file))
+                    }
+                    for (i in 0 until 4) {
+                        val features = if (i < 2) nativeInputs[i] else shiftedInputs[i - 2]
+                        val windows = if (i < 2) referenceWindows[i] else shiftedWindows[i - 2]
+                        val tokens = if (i < 2) report.getJSONArray("trials").getJSONObject(i).getJSONArray("tokens")
+                            else report.getJSONArray("shifted_reference").getJSONObject(i - 2).getJSONArray("tokens")
+                        val flattened = FloatArray(windows.sumOf { it.size });var position = 0
+                        windows.forEach { it.copyInto(flattened, position);position += it.size }
+                        controlRows.put(JSONObject().put("case", i).put("tokens", tokens)
+                            .put("features", saveControl("case-$i-features", features))
+                            .put("logits", saveControl("case-$i-logits", flattened)))
+                    }
+                    report.put("control_capture", JSONObject().put("directory", controlFolder.name)
+                        .put("cases", controlRows).put("model_sha256", report.getString("model_sha256")))

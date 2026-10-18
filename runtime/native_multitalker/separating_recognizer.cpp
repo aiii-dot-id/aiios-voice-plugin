@@ -1,0 +1,176 @@
+#include "separating_recognizer.h"
+#include <algorithm>
+#include <cmath>
+#include <condition_variable>
+#include <limits>
+#include <mutex>
+#include <thread>
+
+namespace aii::multitalker {
+namespace {
+constexpr uint64_t minimum_samples=32000;
+bool competing(const aii::voice::RecognizedSegment& row) {
+  return row.evidence_unavailable=="speaker_overlap_without_isolated_evidence"||
+    row.evidence_unavailable=="speaker_track_coverage_unverified";
+}
+constexpr const char* outcome_names[]={"none","replaced","incomplete_sources","budget_expired",
+  "separator_failed","source_failed","window_exceeded","below_minimum","too_many_tracks"};
+static_assert(std::size(outcome_names)==size_t(SeparationOutcome::count),"separation outcome names");
+template<class Work,class Stop> auto bounded(std::chrono::milliseconds budget,Work work,Stop stop,bool& expired) {
+  std::mutex mutex;std::condition_variable changed;bool done=false;
+  std::thread timer([&]{
+    std::unique_lock<std::mutex> lock(mutex);
+    if(changed.wait_for(lock,budget,[&]{return done;}))return;
+    expired=true;lock.unlock();stop();
+  });
+  struct Retire {
+    std::mutex& mutex;std::condition_variable& changed;bool& done;std::thread& timer;
+    ~Retire(){{std::lock_guard<std::mutex> lock(mutex);done=true;}changed.notify_all();timer.join();}
+  } retire{mutex,changed,done,timer};
+  return work();
+}
+}
+std::chrono::milliseconds SeparationBudget::of(size_t samples) const {
+  return std::clamp(std::chrono::milliseconds(uint64_t(samples)*audio_percent/1600),minimum,maximum);
+}
+SeparatingRecognizer::SeparatingRecognizer(std::unique_ptr<aii::voice::Recognizer> live,
+    std::unique_ptr<aii::voice::Recognizer> source,std::unique_ptr<SourceSeparator> separator,SeparationBudget budget)
+    :live_(std::move(live)),source_(std::move(source)),separator_(std::move(separator)),budget_(budget),
+     minimum_ms_(budget.minimum.count()),maximum_ms_(budget.maximum.count()) {
+  if(!live_||!source_||!separator_||!live_->separated()||!live_->continuous_input()||
+     !source_->separated()||separator_->maximum_samples()<32000||separator_->maximum_samples()>480000)
+    throw std::invalid_argument("source separation composition differs");
+  if(!budget_.audio_percent||budget_.audio_percent>10000||budget_.minimum.count()<=0||
+     budget_.minimum>budget_.maximum)
+    throw std::invalid_argument("source separation budget");
+}
+void SeparatingRecognizer::bound_separation(uint32_t minimum_ms,uint32_t maximum_ms,uint32_t model_call_ms) {
+  if(active_)throw std::runtime_error("previous separating recognizer has not retired");
+  if(!minimum_ms||minimum_ms>maximum_ms||maximum_ms>=model_call_ms)
+    throw std::invalid_argument("source separation budget must be stated and end inside a model call's time");
+  minimum_ms_.store(minimum_ms);maximum_ms_.store(maximum_ms);
+}
+void SeparatingRecognizer::alive() const {
+  if(cancelled_.load())throw aii::voice::Cancelled("source separation cancelled");
+}
+std::string SeparatingRecognizer::execution_info() const {
+  std::string outcomes;
+  for(size_t i=1;i<outcomes_.size();++i)
+    outcomes+=std::string(i>1?",":"")+"\""+outcome_names[i]+"\":"+std::to_string(outcomes_[i].load());
+  return "{\"recognizer\":"+live_->execution_info()+",\"source_separator\":\""+
+    separator_->provider()+"\",\"separator_maximum_samples\":"+
+    std::to_string(separator_->maximum_samples())+",\"separation_budget\":{\"audio_percent\":"+
+    std::to_string(budget_.audio_percent)+",\"minimum_ms\":"+std::to_string(minimum_ms_.load())+
+    ",\"maximum_ms\":"+std::to_string(maximum_ms_.load())+"},\"separation_outcomes\":{"+outcomes+
+    "},\"last_separation_outcome\":\""+outcome_names[last_outcome_.load()]+"\",\"hardware_execution_verified\":false}";
+}
+void SeparatingRecognizer::record(SeparationOutcome outcome) {
+  ++outcomes_[size_t(outcome)];last_outcome_.store(unsigned(outcome));
+}
+void SeparatingRecognizer::open() {
+  if(active_)throw std::runtime_error("previous separating recognizer has not retired");
+  cancelled_.store(false);live_->open();alive();separator_->open();alive();
+}
+void SeparatingRecognizer::begin() {
+  alive();
+  if(active_||capture_==std::numeric_limits<uint64_t>::max())
+    throw std::runtime_error("separating recognizer lifecycle");
+  result_.clear();pcm_.clear();origin_=received_=onset_=0;overflow_=finished_=onset_known_=false;++capture_;active_=true;
+  live_->begin();alive();
+}
+std::string SeparatingRecognizer::push(const float* pcm,size_t count) {
+  alive();if(!active_||finished_)throw std::runtime_error("separating recognizer is not accepting speech");
+  if(!pcm&&count)throw std::invalid_argument("missing separation PCM");
+  if(count>std::numeric_limits<uint64_t>::max()-received_)throw std::overflow_error("separation sample clock");
+  for(size_t i=0;i<count;++i)if(!std::isfinite(pcm[i])||std::abs(pcm[i])>1)
+    throw std::invalid_argument("separation PCM range");
+  const uint64_t end=received_+count,limit=separator_->maximum_samples();
+  const auto first=std::max<uint64_t>(origin_,end>limit?end-limit:0);
+  if(!overflow_&&onset_known_&&first>onset_){overflow_=true;std::vector<float>().swap(pcm_);}
+  if(!overflow_&&count) {
+    const auto old=std::min<uint64_t>(first-origin_,pcm_.size());
+    pcm_.erase(pcm_.begin(),pcm_.begin()+size_t(old));
+    pcm_.insert(pcm_.end(),pcm+(first-origin_-old),pcm+count);origin_=first;
+  }
+  received_=end;
+  if(!live_->push(pcm,count).empty())throw std::runtime_error("separating recognizer received pooled partial");
+  alive();return {};
+}
+void SeparatingRecognizer::speech_onset(uint64_t offset) {
+  alive();if(!active_||finished_||onset_known_)throw std::runtime_error("separating recognizer speech onset lifecycle");
+  if(offset>received_)throw std::invalid_argument("speech onset after captured input");
+  onset_known_=true;onset_=offset;
+  if(!overflow_&&offset<origin_){overflow_=true;std::vector<float>().swap(pcm_);}
+  live_->speech_onset(offset);alive();
+}
+std::string SeparatingRecognizer::finish() {
+  return finish_with_progress({});
+}
+std::string SeparatingRecognizer::finish_with_progress(const std::function<void()>& completed) {
+  alive();if(!active_||finished_)throw std::runtime_error("separating recognizer is not accepting speech");
+  if(!live_->finish_with_progress(completed).empty())throw std::runtime_error("separating recognizer received pooled final");
+  alive();auto rows=live_->segments();
+  if(completed)completed();
+  bool competition=false;
+  for(const auto& row:rows)competition=competition||competing(row);
+  const auto window=onset_known_?std::max(origin_,std::min(onset_,received_-std::min(received_,minimum_samples))):0;
+  if(!competition) {}
+  else if(overflow_||window<origin_)record(SeparationOutcome::window_exceeded);
+  else if(received_-window<minimum_samples)record(SeparationOutcome::below_minimum);
+  else if(rows.size()>2)record(SeparationOutcome::too_many_tracks);
+  else {
+    pcm_.erase(pcm_.begin(),pcm_.begin()+size_t(window-origin_));origin_=window;
+    bool refused=false,binding=false,expired=false;
+    auto outcome=SeparationOutcome::incomplete_sources;
+    const std::function<void()> stage=[&]{if(completed)try{completed();}catch(...){refused=true;throw;}};
+    try {
+      alive();
+      const auto waveforms=bounded(in_force().of(pcm_.size()),[&]{return separator_->separate(pcm_);},
+                                   [this]{separator_->cancel();},expired);
+      if(expired)throw aii::voice::Cancelled("separation budget expired");
+      alive();
+      for(const auto& source:waveforms) {
+        if(source.size()!=pcm_.size())throw std::runtime_error("separator source extent");
+        for(float x:source)if(!std::isfinite(x)||std::abs(x)>1)throw std::runtime_error("separator source PCM");
+      }
+      stage();binding=true;
+      auto separated=bind_source_text(*source_,waveforms,capture_,cancelled_,stage);alive();
+      bool first=false,second=false;
+      const auto prefix="capture-"+std::to_string(capture_)+".source-";
+      for(const auto& row:separated) {
+        first=first||row.track.compare(0,prefix.size()+2,prefix+"0.")==0;
+        second=second||row.track.compare(0,prefix.size()+2,prefix+"1.")==0;
+      }
+      if(first&&second) {
+        for(auto& row:separated) {
+          row.start+=window;row.end+=window;row.evidence_start+=window;
+          for(auto& region:row.evidence_regions){region.first+=window;region.second+=window;}
+        }
+        rows=std::move(separated);outcome=SeparationOutcome::replaced;
+      }
+    } catch(...) {
+      if(refused)throw;
+      alive();
+      try{throw;}catch(const aii::voice::Cancelled&){if(!expired||binding)throw;}
+      catch(const SourceContractViolation&){if(binding)throw;}catch(const std::exception&){}
+      outcome=expired?SeparationOutcome::budget_expired:binding?SeparationOutcome::source_failed:
+                                                                SeparationOutcome::separator_failed;
+      source_->reset();
+      for(auto& row:rows)if(competing(row))row.evidence_unavailable="speaker_separation_failed";
+    }
+    if(expired)separator_->open();
+    record(outcome);
+  }
+  alive();result_=std::move(rows);std::vector<float>().swap(pcm_);finished_=true;return {};
+}
+std::vector<aii::voice::RecognizedSegment> SeparatingRecognizer::segments() const {
+  alive();if(!finished_)throw std::runtime_error("separated finals are not ready");return result_;
+}
+void SeparatingRecognizer::reset() {
+  live_->reset();source_->reset();pcm_.clear();result_.clear();origin_=received_=onset_=0;
+  active_=finished_=overflow_=onset_known_=false;
+}
+void SeparatingRecognizer::cancel() noexcept {
+  cancelled_.store(true);live_->cancel();source_->cancel();separator_->cancel();
+}
+}

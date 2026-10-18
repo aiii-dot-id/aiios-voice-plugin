@@ -1,0 +1,21 @@
+                    val shiftedComparisons = JSONArray()
+                    for (i in 0 until shiftedInputs.size) {
+                        val native = JSONObject(nativeModel.recognize(70L + i, shiftedInputs[i], true, 0))
+                        val reference = report.getJSONArray("shifted_reference").getJSONObject(i)
+                        val earlier = report.getJSONArray("native_window_trials").getJSONObject(0).getJSONArray("windows").getJSONObject(if (i == 0) 6 else 11).getJSONObject("result")
+                        val traces = nativeModel.trace();val windows = shiftedWindows[i]
+                        check(traces.size == windows.sumOf { it.size } && native.getInt("model_calls") == windows.size)
+                        var offset = 0
+                        windows.forEach { row ->
+                            for (j in row.indices) check(row[j].toRawBits() == traces[offset + j].toRawBits()) { "Shifted logit bits differ" }
+                            offset += row.size
+                        }
+                        val row = JSONObject().put("start", reference.getInt("start")).put("end", reference.getInt("end"))
+                            .put("reference_tokens", reference.getJSONArray("tokens")).put("sequence_tokens", earlier.getJSONArray("tokens"))
+                            .put("fresh_native_tokens", native.getJSONArray("tokens")).put("windows_bit_identical", windows.size)
+                        shiftedComparisons.put(row);report.put("shifted_native_comparisons", shiftedComparisons)
+                        check(native.getJSONArray("tokens").toString() == reference.getJSONArray("tokens").toString()) { "Shifted reference/native decisions differ" }
+                        check(native.getJSONArray("tokens").toString() == earlier.getJSONArray("tokens").toString()) { "Shifted sequence/fresh decisions differ" }
+                    }
+                    check(shiftedComparisons.length() == 2)
+                    report.put("shifted_native_reference_parity", true)

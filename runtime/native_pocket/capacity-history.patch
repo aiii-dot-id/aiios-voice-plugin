@@ -1,0 +1,32 @@
+--- a/src/models/pocket_tts/session.cpp
++++ b/src/models/pocket_tts/session.cpp
+@@ -499,9 +499,15 @@
+ PocketTTSSession::AcousticCapacitySelection PocketTTSSession::select_acoustic_capacities(
+     int64_t prompt_steps,
+     int max_steps) const {
+-    const int64_t prompt_capacity = prompt_capacity_controller_.select_capacity_for_run(
+-        make_prompt_capacity_adapter(),
+-        prompt_steps);
++    const auto prompt_adapter = make_prompt_capacity_adapter();
++    // CPU graph shape changes reduction geometry. Let the current text choose
++    // its canonical bucket, never the largest previous utterance. Loaded
++    // weights remain reusable; only the shape-bound step graph is replaced.
++    const int64_t prompt_capacity =
++        execution_context().uses_host_graph_plan()
++            && graph_capacity_.prompt_mode == runtime::GraphCapacityMode::Tiered
++        ? prompt_adapter.canonical_capacity_for_request(prompt_steps)
++        : prompt_capacity_controller_.select_capacity_for_run(prompt_adapter, prompt_steps);
+     const int64_t generation_capacity = generation_capacity_controller_.select_capacity_for_run(
+         make_generation_capacity_adapter(),
+         max_steps);
+--- a/src/models/pocket_tts/acoustic_model.cpp
++++ b/src/models/pocket_tts/acoustic_model.cpp
+@@ -129,7 +129,7 @@
+         && runtime_cache_.backend == backend
+         && runtime_cache_.threads == threads
+         && runtime_cache_.manifest == &manifest
+-        && runtime_cache_.prompt_capacity >= prompt_capacity
++        && runtime_cache_.prompt_capacity == prompt_capacity
+         // The step runtime bakes the voice-prefix slot layout at creation: prompt KV
+         // destinations start at initial_cache_capacity and the prefix attention view
+         // spans exactly that many slots. Reusing a runtime built for a different prefix

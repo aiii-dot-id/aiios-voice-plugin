@@ -1,0 +1,53 @@
+{
+  "type":"object",
+  "description":"Successful operation_result after the host unwraps the SDK result envelope. Matching is identification evidence only, never permission. Refusals remain host-visible errors, not instances of this success schema.",
+  "properties":{
+    "recovery":{"type":"object","description":"Discovery, not permission: incompatible/corrupt stores are NOT an empty speaker list. Copy only the observed hash fields (enrollment_sha256, captures_sha256 and, when present, speaker_registry_sha256) into speaker.reset.recovery after closing speech; the host asks for confirmation.","properties":{"enrollment_state":{"enum":["ready","absent","incompatible","corrupt"]},"captures_state":{"enum":["ready","absent","incompatible","corrupt"]},"required":{"type":"boolean"},"enrollment_sha256":{"type":"string"},"captures_sha256":{"type":"string"},"stored_embedding_binding":{"type":"string"},"speaker_registry_state":{"enum":["incompatible","corrupt"],"description":"Present only when the anonymous speaker registry cannot be read under this runtime's model; until recovered it blocks speaker identification and speaker.buckets."},"speaker_registry_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"speaker_registry_stored_embedding_binding":{"type":"string"}},"required":["enrollment_state","captures_state","required","enrollment_sha256","captures_sha256"],"additionalProperties":false},
+    "recovery_archive_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "recovery_durable":{"type":"boolean"},"speaker_registry_recovery_archive_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"speaker_registry_publication":{"type":"object","description":"Readback evidence for the empty current-model speaker registry created by confirmed recovery."},
+    "session_id":{"type":"string"},
+    "speech":{"type":"object","description":"Engine state sampled at tool reply, not proof of browser capture. Attribution candidates are diagnostic evidence, never accepted identity or permission.","properties":{
+      "session_id":{"type":"string"},"state_sequence":{"type":"integer","minimum":0},
+      "lifecycle":{"enum":["closed","opening","open","draining"]},
+      "input":{"type":"object","properties":{"state":{"enum":["closed","opening","absent","accepting","finishing","finished"]},"admitted_end_sample":{"type":["integer","null"]},"received_end_sample":{"type":"integer"},"processed_end_sample":{"type":"integer"}},"required":["state"]},
+      "synthesis":{"type":"object","properties":{"state":{"enum":["idle","running","finished"]},"synthesis_id":{"type":"string"}},"required":["state"]},
+      "playback":{"type":"object","properties":{"state":{"enum":["idle","unobserved"]},"queued_samples":{"type":"integer"},"delivered_samples":{"type":"integer"},"rendered_samples":{"type":"integer"},"discarded_samples":{"type":"integer"},"sample_rate":{"type":"integer"},"evidence":{"type":"string"},"synthesis_id":{"type":"string"}},"required":["state"]},
+      "attributions":{"type":"array","maxItems":128,"items":{"type":"object","properties":{
+        "refers_to":{"type":"integer"},"track_id":{"type":"string"},"start_sample":{"type":"integer"},"end_sample":{"type":"integer"},"revision":{"type":"integer"},"decision":{"type":"string"},"reason":{"type":"string"},
+        "speaker_uuid":{"type":"string"},"continuity":{"enum":["matched","new_profile","provisional"]},"display_label":{"type":"string"},"registry_revision":{"type":"string"},"used_for_permissions":{"const":false},
+        "match":{"type":"object","description":"Nearest candidate may have been REJECTED. Scores are cosine similarities, not probabilities.","properties":{
+          "outcome":{"enum":["known","unknown","ambiguous"]},"reason":{"type":"string"},"candidate_count":{"type":"integer","minimum":0,"maximum":256},
+          "candidate_uuid":{"type":"string"},"score":{"type":"number","minimum":-1,"maximum":1},"margin":{"type":"number","minimum":0,"maximum":2},
+          "threshold":{"type":"number","minimum":-1,"maximum":1},"minimum_margin":{"type":"number","minimum":0,"maximum":2},"profile_revision":{"type":"string"},
+          "policy_sha256":{"type":"string"},"embedding_binding":{"type":"string"},"evidence_samples":{"type":"integer","minimum":31920,"maximum":160000}
+        },"required":["outcome","reason","candidate_count","threshold","minimum_margin","profile_revision","policy_sha256","embedding_binding","evidence_samples"],"additionalProperties":false}
+      }}}
+    },"required":["session_id","state_sequence","lifecycle","input","synthesis","playback","attributions"],"additionalProperties":false},
+    "session_open":{"type":"boolean","description":"Whether an ordinary speech session is open. A durable capture_id never requires it; live-final selection does."},
+    "pending_captures":{"type":"array","items":{"type":"object","properties":{"capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"created_ms":{"type":"integer","minimum":1},"samples":{"type":"integer","minimum":31920,"maximum":480000}},"required":["capture_id","created_ms","samples"],"additionalProperties":false}},
+    "guided_capture_available":{"type":"boolean"},
+    "policy_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The policy actually governing the stored enrollment and its readiness decisions."},
+    "runtime_policy_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The policy for new guided enrollment; not silently applied to existing profiles."},
+    "policy_upgrade_required":{"type":"boolean","description":"If true, close speech and propose speaker.upgrade_policy before enrolling a durable capture. Existing speakers still use their stored bound policy."},
+    "speaker_registry_revision":{"type":"string","description":"Revision durably read back for the anonymous UUID registry after confirmed policy upgrade."},
+    "speaker_registry_policy_upgrade_required":{"type":"boolean","description":"False only after the anonymous UUID registry also passed its confirmed policy upgrade and readback."},
+    "capture_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "speaker_id":{"type":"string"},
+    "label":{"type":"string"},
+    "enrollment_durable":{"type":"boolean"},
+    "capture_retirement_durable":{"type":"boolean"},
+    "reconciled":{"type":"boolean"},
+    "cleanup_detail":{"type":"string"},
+    "capture_publication":{"type":["object","null"]},
+    "speakers":{"type":"array","items":{"type":"object","properties":{"speaker_id":{"type":"string"},"label":{"type":"string"},"recordings":{"type":"integer","minimum":0},"ready":{"type":"boolean"}},"required":["speaker_id","label","recordings","ready"],"additionalProperties":false}},
+    "revision":{"type":"string","description":"Opaque decimal revision; never convert through a floating-point number."},
+    "enrollment_file_absent":{"type":"boolean"},
+    "used_for_permissions":{"const":false},
+    "publication":{"type":"object","description":"The engine's publication/readback evidence on a modifying operation."},
+    "eligible_final_sequences":{"type":"array","items":{"type":"integer","minimum":1},"uniqueItems":true},
+    "minimum_recordings_per_speaker":{"type":"integer","minimum":1},
+    "recording_retention_seconds":{"type":"integer","minimum":1}
+  },
+  "required":["session_id","session_open","used_for_permissions"],
+  "additionalProperties":false
+}

@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"Call speaker.list and speaker.buckets first. If either policy_upgrade_required is true, close speech and propose this operation with {}. The host must confirm it. Both policies come from the signed runtime, never your arguments. Existing usable speakers and anonymous UUIDs keep their IDs, labels and recordings; an incomplete old enrollment is named and refused, not silently activated. Enrollment and anonymous-registry publications each require durable readback; a partial result can be reconciled by a fresh confirmed retry. This never grants command authority.",
+  "properties":{"session_id":{"type":"string","minLength":1,"maxLength":128,"description":"Optional consistency check copied from speaker.list; normally omit for closed-microphone management."}},
+  "additionalProperties":false
+}

@@ -1,0 +1,492 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
+)
+
+func privateFixture(t *testing.T) (*carrier, *io.PipeReader, *io.PipeWriter) {
+	t.Helper()
+	requests, in := io.Pipe()
+	out, replies := io.Pipe()
+	c := newCarrier(in, out, func() {})
+	c.startPrivate()
+	go c.read()
+	t.Cleanup(func() { c.fail(io.EOF); replies.Close(); requests.Close(); c.workers.Wait(); <-c.readDone })
+	return c, requests, replies
+}
+
+type workerAnswer struct {
+	Value any
+	Err   error
+}
+
+func pendingResult(t *testing.T, c *carrier, op string) <-chan workerAnswer {
+	t.Helper()
+	result := make(chan workerAnswer, 1)
+	err := c.enqueue(nil, op, aiiosdk.Object(`{}`), func(value any, err error) { result <- workerAnswer{value, err} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-result:
+		t.Fatal("queueing fabricated immediate admission")
+	default:
+	}
+	return result
+}
+func awaitResult(t *testing.T, p <-chan workerAnswer) workerAnswer {
+	t.Helper()
+	select {
+	case r := <-p:
+		return r
+	case <-time.After(time.Second):
+		t.Fatal("missing result")
+		return workerAnswer{}
+	}
+}
+
+func TestPrivateOrderedEnqueueOutOfOrderRepliesAndRefusal(t *testing.T) {
+	c, requests, replies := privateFixture(t)
+	first := pendingResult(t, c, "synthesize")
+	second := pendingResult(t, c, "stop_playback")
+	scanner := bufio.NewScanner(requests)
+	for i, want := range []string{"synthesize", "stop_playback"} {
+		if !scanner.Scan() {
+			t.Fatal("missing ordered write")
+		}
+		var req privateRequest
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			t.Fatal(err)
+		}
+		if req.ID != uint64(i+1) || req.Operation != want {
+			t.Fatalf("reordered %+v", req)
+		}
+	}
+	if _, err := io.WriteString(replies, "{\"id\":2,\"result\":{\"fenced\":true}}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if r := awaitResult(t, second); r.Err != nil || string(r.Value.(json.RawMessage)) != `{"fenced":true}` {
+		t.Fatalf("stop: %+v", r)
+	}
+	select {
+	case <-first:
+		t.Fatal("synthesis outcome invented from stop")
+	default:
+	}
+	if _, err := io.WriteString(replies, "{\"id\":1,\"error\":\"STALE_SYNTHESIS\"}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if r := awaitResult(t, first); r.Err == nil || r.Err.Error() != "STALE_SYNTHESIS" {
+		t.Fatalf("lost refusal: %+v", r)
+	}
+}
+
+func awaitFault(t *testing.T, c *carrier, want string) {
+	t.Helper()
+	select {
+	case e := <-c.fault:
+		if !strings.Contains(e.Error(), want) {
+			t.Fatalf("wrong fault: %v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("no %q fault", want)
+	}
+}
+
+func unanswered(t *testing.T, p <-chan workerAnswer) {
+	t.Helper()
+	select {
+	case r := <-p:
+		t.Fatalf("a request the worker may have admitted was answered: %+v", r)
+	default:
+	}
+}
+
+func TestPrivateFailedTransportRefusesOnlyRequestsNeverSent(t *testing.T) {
+	c, requests, _ := privateFixture(t)
+	taken := pendingResult(t, c, "synthesize")
+	queued := pendingResult(t, c, "stop_playback")
+
+	if _, err := io.ReadFull(requests, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	c.fail(errors.New("injected broken pipe"))
+	awaitFault(t, c, "injected broken pipe")
+	if r := awaitResult(t, queued); r.Err == nil || !strings.Contains(r.Err.Error(), "not sent") {
+		t.Fatalf("unsent request not refused as unsent: %+v", r)
+	}
+	unanswered(t, taken)
+	if err := c.enqueue(nil, "status", aiiosdk.Object(`{}`), nil); err == nil {
+		t.Fatal("admitted after failure")
+	}
+}
+
+func TestPrivateDeadlineCoversBlockedWrite(t *testing.T) {
+	c, requests, _ := privateFixture(t)
+	p := pendingResult(t, c, "synthesize")
+	if _, err := io.ReadFull(requests, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.pending[1].deadline = time.Now().Add(-time.Second)
+	c.mu.Unlock()
+	awaitFault(t, c, "timeout")
+	select {
+	case <-c.stop:
+	default:
+		t.Fatal("transport did not stop")
+	}
+	unanswered(t, p)
+}
+
+func TestPrivateUnknownReplyFaultsInsteadOfSatisfyingAnotherCall(t *testing.T) {
+	c, requests, replies := privateFixture(t)
+	p := pendingResult(t, c, "synthesize")
+	if !bufio.NewScanner(requests).Scan() {
+		t.Fatal("request not written")
+	}
+	if _, err := io.WriteString(replies, "{\"id\":999,\"result\":{}}\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFault(t, c, "unsolicited")
+	unanswered(t, p)
+}
+
+func TestPrivateSecondReadinessIsAFaultAfterTheFirstWasTaken(t *testing.T) {
+	c, _, replies := privateFixture(t)
+	ready := "{\"ready\":{\"identity\":{\"backend\":\"deterministic-test-not-real-model\"}}}\n"
+	if _, err := io.WriteString(replies, ready); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.ready:
+	case <-time.After(time.Second):
+		t.Fatal("first readiness not delivered")
+	}
+	if _, err := io.WriteString(replies, ready); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case e := <-c.fault:
+		if !strings.Contains(e.Error(), "duplicate") {
+			t.Fatalf("wrong fault: %v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a second readiness after the first was taken did not fault the transport")
+	}
+	select {
+	case <-c.stop:
+	default:
+		t.Fatal("the transport recorded a fault without stopping")
+	}
+}
+
+func TestPrivateCapacityRefusesWithoutAdditionalEnqueue(t *testing.T) {
+	c, _, _ := privateFixture(t)
+	for range 64 {
+		pendingResult(t, c, "status")
+	}
+	if err := c.enqueue(nil, "status", aiiosdk.Object(`{}`), nil); err == nil {
+		t.Fatal("unbounded pending admissions")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.pending) != 64 || c.id != 64 {
+		t.Fatal("overflow allocated another request")
+	}
+}
+
+func TestRecordingPublicationGetsItsWorkerBudgetWithoutWideningSpeechControls(t *testing.T) {
+	c, _, _ := privateFixture(t)
+	pendingResult(t, c, "recording.record")
+	pendingResult(t, c, "recording.status")
+	c.mu.Lock()
+	recording := c.pending[1].deadline
+	status := c.pending[2].deadline
+	c.mu.Unlock()
+	if recording.Sub(status) < 40*time.Second {
+		t.Fatalf("recording deadline did not cover bounded broker publication: recording=%v status=%v", recording, status)
+	}
+}
+
+type heldEmitter struct {
+	mu      sync.Mutex
+	got     []string
+	holding chan struct{}
+	release chan struct{}
+}
+
+func (h *heldEmitter) emit(_ *aiiosdk.Session, event any) error {
+	h.mu.Lock()
+	h.got = append(h.got, string(event.(json.RawMessage)))
+	first := len(h.got) == 1
+	h.mu.Unlock()
+	if first {
+		close(h.holding)
+		<-h.release
+	}
+	return nil
+}
+
+func finalEventsRead(t *testing.T) (*carrier, *heldEmitter, chan struct{}, chan error, []string) {
+	t.Helper()
+	c, _, replies := privateFixture(t)
+	c.mu.Lock()
+	c.session = &aiiosdk.Session{}
+	c.mu.Unlock()
+	h := &heldEmitter{holding: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-h.release:
+		default:
+			close(h.release)
+		}
+	})
+	settle, forwarded := make(chan struct{}), make(chan error, 1)
+	go func() { forwarded <- c.forward(settle, h.emit) }()
+	var want []string
+	for i := range 32 {
+		event := fmt.Sprintf(`{"type":"resources_released","sequence":%d}`, i)
+		want = append(want, event)
+		if _, err := fmt.Fprintf(replies, "{\"event\":%s}\n", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-h.holding
+	_ = replies.Close()
+	awaitFault(t, c, "EOF")
+	<-c.readDone
+	return c, h, settle, forwarded, want
+}
+
+func TestFinalWorkerEventsReachHealthyHostBeforeTeardown(t *testing.T) {
+	c, h, settle, forwarded, want := finalEventsRead(t)
+	flushed := -1
+	flush := func(*aiiosdk.Session, context.Context) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		flushed = len(h.got)
+		return nil
+	}
+	handed := make(chan error, 1)
+	c.limits.LaneFlush = 5 * time.Second
+	go func() { handed <- c.handoff(settle, forwarded, flush) }()
+	<-settle
+	close(h.release)
+	select {
+	case err := <-handed:
+		if err != nil {
+			t.Fatalf("healthy host: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("teardown did not return")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !slices.Equal(h.got, want) {
+		t.Fatalf("teardown abandoned events already read: forwarded %d of %d", len(h.got), len(want))
+	}
+	if flushed != len(want) {
+		t.Fatalf("teardown flushed after %d of %d events were handed on", flushed, len(want))
+	}
+}
+
+const laneFlushPassed = "in 100 ms, the time the limits table gives the host's lane at this carrier's end (lane_flush_ms)"
+
+func TestFinalWorkerEventsUnflushedAreUnproven(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flush func(*aiiosdk.Session, context.Context) error
+		cause error
+		said  string
+	}{
+		{"lane ended", func(*aiiosdk.Session, context.Context) error {
+			return fmt.Errorf("%w: 32 accepted frame(s) not confirmed written", aiiosdk.ErrLaneEnded)
+		}, aiiosdk.ErrLaneEnded, ""},
+		{"writer behind", func(_ *aiiosdk.Session, ctx context.Context) error {
+			<-ctx.Done()
+			return fmt.Errorf("aiiosdk: flush outcome unknown: %w", ctx.Err())
+		}, context.DeadlineExceeded, "the host lane did not confirm them written " + laneFlushPassed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, h, settle, forwarded, _ := finalEventsRead(t)
+			close(h.release)
+			c.limits.LaneFlush = 100 * time.Millisecond
+			began := time.Now()
+			err := c.handoff(settle, forwarded, tc.flush)
+			if elapsed := time.Since(began); elapsed > 1500*time.Millisecond {
+				t.Fatalf("teardown waited %v for an unconfirmed flush under a table that gives the lane 100 ms", elapsed)
+			}
+			if err == nil || !strings.Contains(err.Error(), "unproven") || !errors.Is(err, tc.cause) {
+				t.Fatalf("unconfirmed final events were not reported: %v", err)
+			}
+
+			if strings.Contains(err.Error(), "lane_flush_ms") != (tc.said != "") || !strings.Contains(err.Error(), tc.said) {
+				t.Fatalf("the report does not say what passed, or says a limit passed that did not: %v", err)
+			}
+		})
+	}
+}
+
+func TestFinalWorkerEventsToStalledHostEndBoundedAndUnproven(t *testing.T) {
+	c, _, settle, forwarded, _ := finalEventsRead(t)
+	c.limits.LaneFlush = 100 * time.Millisecond
+	began := time.Now()
+	err := c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error {
+		t.Error("flushed events that were never handed on")
+		return nil
+	})
+	if elapsed := time.Since(began); elapsed > 1500*time.Millisecond {
+		t.Fatalf("teardown waited %v on a stalled host under a table that gives the lane 100 ms", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "worker event delivery unproven: the host lane did not take them "+laneFlushPassed) {
+		t.Fatalf("undelivered final events were not reported with the limit that passed: %v", err)
+	}
+}
+
+func TestDroppedFinalEventsMakeDeliveryUnproven(t *testing.T) {
+	c, _, replies := privateFixture(t)
+	c.mu.Lock()
+	c.session = &aiiosdk.Session{}
+	c.mu.Unlock()
+	h := &heldEmitter{holding: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-h.release:
+		default:
+			close(h.release)
+		}
+	})
+	settle, forwarded := make(chan struct{}), make(chan error, 1)
+	go func() { forwarded <- c.forward(settle, h.emit) }()
+	event := func(i int) string { return fmt.Sprintf("{\"event\":{\"sequence\":%d}}\n", i) }
+	if _, err := io.WriteString(replies, event(0)); err != nil {
+		t.Fatal(err)
+	}
+	<-h.holding
+	go func() {
+		for i := 1; i < 70; i++ {
+			if _, err := io.WriteString(replies, event(i)); err != nil {
+				return
+			}
+		}
+		_ = replies.Close()
+	}()
+	awaitFault(t, c, "worker event queue full")
+	<-c.readDone
+	handed := make(chan error, 1)
+	c.limits.LaneFlush = 5 * time.Second
+	go func() {
+		handed <- c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error { return nil })
+	}()
+	<-settle
+	close(h.release)
+	select {
+	case err := <-handed:
+		if err == nil || !strings.Contains(err.Error(), "worker event delivery unproven: 5 worker event(s) dropped") {
+			t.Fatalf("dropped final events were not reported: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("teardown did not return")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.got) != 65 {
+		t.Fatalf("queued events not handed on: %d of 65", len(h.got))
+	}
+}
+
+func TestPrivateDuplicateReplyFaultsWhileLive(t *testing.T) {
+	c, requests, replies := privateFixture(t)
+	p := pendingResult(t, c, "synthesize")
+	if !bufio.NewScanner(requests).Scan() {
+		t.Fatal("request not written")
+	}
+	if _, err := io.WriteString(replies, "{\"id\":1,\"result\":{}}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if r := awaitResult(t, p); r.Err != nil {
+		t.Fatalf("first reply: %+v", r)
+	}
+	if _, err := io.WriteString(replies, "{\"id\":1,\"error\":\"LATE\"}\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFault(t, c, "unsolicited")
+	unanswered(t, p)
+}
+
+func TestReaderDrainsTheWorkersTailAfterAFault(t *testing.T) {
+	for _, tc := range []struct{ name, lines, fault string }{
+		{"malformed line", "{broken\n", "invalid character"},
+		{"unsolicited reply", "{\"id\":999,\"result\":{}}\n", "unsolicited worker reply"},
+		{"duplicate readiness", "{\"ready\":{}}\n{\"ready\":{}}\n", "duplicate worker readiness"},
+		{"invalid settings request", "{\"id\":3,\"settings_request\":{}}\n", "invalid private settings request"},
+		{"the correction list read by a worker", "{\"snapshot_request\":{\"id\":4,\"session_id\":\"s\",\"resource\":\"corrections\"}}\n", "a resource that is not the worker's"},
+		{"the correction list staged by a worker", "{\"snapshot_request\":{\"id\":4,\"session_id\":\"s\",\"resource\":\"corrections\",\"action\":\"stage\",\"upload\":\"" + strings.Repeat("a", 64) + "\",\"data_b64\":\"e30=\"}}\n", "a resource that is not the worker's"},
+		{"the correction list published by a worker", "{\"snapshot_request\":{\"id\":4,\"session_id\":\"s\",\"resource\":\"corrections\",\"action\":\"publish\",\"upload\":\"" + strings.Repeat("a", 64) + "\",\"sha256\":\"" + strings.Repeat("b", 64) + "\",\"expected_absent\":true}}\n", "a resource that is not the worker's"},
+		{"unclassifiable message", "{}\n", "unclassifiable worker message"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, replies := privateFixture(t)
+			terminal := `{"type":"failure","resources_released":true}`
+			if _, err := io.WriteString(replies, tc.lines+"{\"id\":5,\"result\":{}}\n{\"event\":"+terminal+"}\n"); err != nil {
+				t.Fatal(err)
+			}
+			awaitFault(t, c, tc.fault)
+			_ = replies.Close()
+			select {
+			case raw := <-c.events:
+				if string(raw) != terminal {
+					t.Fatalf("queued %s, want the terminal event", raw)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("the terminal event after the fault was never read")
+			}
+			<-c.readDone
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.unread != nil {
+				t.Fatalf("a drained output was reported unread: %v", c.unread)
+			}
+		})
+	}
+}
+
+func TestUnreadWorkerOutputMakesDeliveryUnproven(t *testing.T) {
+	c, _, replies := privateFixture(t)
+	c.mu.Lock()
+	c.session = &aiiosdk.Session{}
+	c.mu.Unlock()
+	h := &heldEmitter{holding: make(chan struct{}), release: make(chan struct{})}
+	close(h.release)
+	settle, forwarded := make(chan struct{}), make(chan error, 1)
+	go func() { forwarded <- c.forward(settle, h.emit) }()
+	go func() {
+		_, _ = io.WriteString(replies, "{\"event\":{\"sequence\":0}}\n"+strings.Repeat("x", 2<<20)+"\n{\"event\":{\"sequence\":1}}\n")
+	}()
+	awaitFault(t, c, "token too long")
+	<-c.readDone
+	c.limits.LaneFlush = 5 * time.Second
+	err := c.handoff(settle, forwarded, func(*aiiosdk.Session, context.Context) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "worker event delivery unproven: the worker's output was not read to its end") || !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("a tail the reader never reached was not reported: %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !slices.Equal(h.got, []string{`{"sequence":0}`}) {
+		t.Fatalf("events before the unreadable line: %v", h.got)
+	}
+}

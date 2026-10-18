@@ -1,0 +1,68 @@
+The engine source of the Linux speaking library
+
+How the Linux speaking library this plugin ships was built is not recorded:
+no command, log or build directory of that build is kept. An engine source of
+that time is kept, and this directory holds the three files in which it
+differs from the sources the Windows and the macOS libraries were built from.
+Every change these three files make, and every change of ../engine_overrides,
+was found in the shipped library's own code. That the library was built from
+exactly these bytes is not established, and a library cannot show it.
+
+The three are modified copies of files of audio.cpp,
+Copyright 2026 ShugoAI LLC, at revision
+3174e6b26f11a0e39b4f150961dce98f43ba860d, under the Apache License, Version
+2.0, which is this repository's licence too (LICENSE, at its root).
+
+In that kept source the engine is the upstream revision with the five files
+of ../engine_overrides, the three files here, and the three files that
+scripts/stage_native_path_shim.py derives, each in place of the engine's own.
+Compared with the upstream revision file by file (4,524 files, none missing
+and none added) it differs in those eleven and in nothing else, but for the
+line ends of one script no library is compiled from.
+
+Each file in this directory is listed here with where it comes from and what
+was changed.
+
+acoustic_model.cpp
+  Upstream: src/models/pocket_tts/acoustic_model.cpp
+  Upstream sha256: 5cd1e0e79ecbd7a1bea21704946f0237c72fc3c2f021c1c4228024c96c4d46f6
+  As kept sha256: 93489ceb29709968a1072b80c94ff994368f384f807045c0fa57cdf59c0b75d2
+  Changed: two lines. In AcousticModel::next_stream_step, a stream that
+  reaches its frame limit before a natural end is an error, as in the file of
+  ../windows_resident/overrides. And a prepared step runtime is reused only
+  when its prompt capacity equals the one asked for, where upstream reuses
+  one at least as large: that is one of the two changes
+  ../capacity-history.patch makes. Nothing else differs.
+
+mimi_decoder.cpp
+  Upstream: src/models/pocket_tts/mimi_decoder.cpp
+  Upstream sha256: d64e4f1b6102d5d3a35f32eed6805ea6a232b055cfca253108e0520723fc5fc4
+  As kept sha256: f2745af597e646c7d943d70bfb01abfb8ee272ff450bb1815d2387989bde113e
+  Changed: what the file of ../windows_resident/overrides changes (two places
+  that configure a streaming transformer block through
+  graph_common::pocket_transformer_config, and seventeen lines that mark
+  tensors as outputs of the graph), and eleven more lines in three places. It
+  includes streaming_tail.h (in the directory above this one), keeps one
+  MimiStreamingTailRuntime in the decoder's runtime cache, and, where the
+  weights are on a Vulkan backend, runs everything after the decoder's
+  transformer through that runtime and returns its result. Nothing else
+  differs.
+
+session.cpp
+  Upstream: src/models/pocket_tts/session.cpp
+  Upstream sha256: 2f41f5f323ea24c4ae916dcf08aa97122b4d6fa3e67bb87d4190941e781e5123
+  As kept sha256: c678bba50eb5711e0c37512c1e9ff3bdfe92a2ed784d7971dff2e6baeeab0f4d
+  Changed: seventeen lines added and seven removed, in three places. Where
+  the graph is not planned on the host and the prompt capacity mode is
+  Double, the prompt capacity is the canonical capacity for twice the
+  request, and is not taken from the controller that remembers the largest
+  earlier reply; a request that is not positive, or cannot be doubled, is an
+  error ("canonical GPU prompt capacity overflow"). The stream loop's three
+  calls are timed and its decoded frames counted through profiling.h (in the
+  directory above this one). The other change of ../capacity-history.patch,
+  for a graph planned on the host, is NOT in this file. Nothing else
+  differs.
+
+"As kept" is the file of that kept source, which is the file here without its
+four-line head comment; a test holds the two to that. "Upstream" is the file
+of the upstream repository at the revision above.

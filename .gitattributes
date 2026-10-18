@@ -1,0 +1,2 @@
+* -text
+runtime/native_multitalker/patches/*.patch whitespace=-blank-at-eol

@@ -1,0 +1,38 @@
+{
+  "type":"object",
+  "description":"Public registry projection. Contains no audio, embeddings or profile vectors. UUID is the stable bucket key; a display name is mutable presentation, not permission.",
+  "properties":{
+    "registry_revision":{"type":"string"},
+    "policy_upgrade_required":{"type":"boolean","description":"The stored anonymous registry remains readable and forgettable under its bound previous policy, but cannot attribute new speech until confirmed speaker.upgrade_policy migrates it."},
+    "session_open":{"type":"boolean"},
+    "speech":{"type":"object","description":"Engine state sampled at tool reply, not proof of browser capture. Attribution candidates are diagnostic evidence, never accepted identity or permission.","properties":{
+      "session_id":{"type":"string"},"state_sequence":{"type":"integer","minimum":0},
+      "lifecycle":{"enum":["closed","opening","open","draining"]},
+      "input":{"type":"object","properties":{"state":{"enum":["closed","opening","absent","accepting","finishing","finished"]},"admitted_end_sample":{"type":["integer","null"]},"received_end_sample":{"type":"integer"},"processed_end_sample":{"type":"integer"}},"required":["state"]},
+      "synthesis":{"type":"object","properties":{"state":{"enum":["idle","running","finished"]},"synthesis_id":{"type":"string"}},"required":["state"]},
+      "playback":{"type":"object","properties":{"state":{"enum":["idle","unobserved"]},"queued_samples":{"type":"integer"},"delivered_samples":{"type":"integer"},"rendered_samples":{"type":"integer"},"discarded_samples":{"type":"integer"},"sample_rate":{"type":"integer"},"evidence":{"type":"string"},"synthesis_id":{"type":"string"}},"required":["state"]},
+      "attributions":{"type":"array","maxItems":128,"items":{"type":"object","properties":{
+        "refers_to":{"type":"integer"},"track_id":{"type":"string"},"start_sample":{"type":"integer"},"end_sample":{"type":"integer"},"revision":{"type":"integer"},"decision":{"type":"string"},"reason":{"type":"string"},
+        "speaker_uuid":{"type":"string"},"continuity":{"enum":["matched","new_profile","provisional"]},"display_label":{"type":"string"},"registry_revision":{"type":"string"},"used_for_permissions":{"const":false},
+        "match":{"type":"object","description":"Nearest candidate may have been REJECTED. Scores are cosine similarities, not probabilities.","properties":{
+          "outcome":{"enum":["known","unknown","ambiguous"]},"reason":{"type":"string"},"candidate_count":{"type":"integer","minimum":0,"maximum":256},
+          "candidate_uuid":{"type":"string"},"score":{"type":"number","minimum":-1,"maximum":1},"margin":{"type":"number","minimum":0,"maximum":2},
+          "threshold":{"type":"number","minimum":-1,"maximum":1},"minimum_margin":{"type":"number","minimum":0,"maximum":2},"profile_revision":{"type":"string"},
+          "policy_sha256":{"type":"string"},"embedding_binding":{"type":"string"},"evidence_samples":{"type":"integer","minimum":31920,"maximum":160000}
+        },"required":["outcome","reason","candidate_count","threshold","minimum_margin","profile_revision","policy_sha256","embedding_binding","evidence_samples"],"additionalProperties":false}
+      }}}
+    },"required":["session_id","state_sequence","lifecycle","input","synthesis","playback","attributions"],"additionalProperties":false},
+    "used_for_permissions":{"const":false},
+    "speakers":{"type":"array","maxItems":256,"items":{"type":"object","properties":{
+      "speaker_uuid":{"type":"string"},"profile_available":{"type":"boolean"},"display_label":{"type":"string"},"external_id":{"type":"string"},
+      "enrollment_id":{"type":"string","description":"Legacy enrollment linked to this persisted UUID using its original evidence. Display names and this compatibility ID are not UUIDs. Removing or replacing enrollment never reassigns this UUID to another person."},
+      "matching_ready":{"type":"boolean","description":"True for an anonymous profile with two corroborating recordings or a UUID bound to available explicit enrollment evidence. Older anonymous singleton profiles remain stored but do not compete as recognized identities."},
+      "matching_reason":{"type":"string","description":"Why a stored bucket is not ready for acoustic matching. anonymous_profile_needs_corroboration does not erase history or identify a different person; use the existing explicit enrollment flow with a clean recording to establish a named profile."},
+      "canonical_uuid":{"type":"string","description":"Future accepted acoustic matches resolve here after an operator-confirmed correction. Equals speaker_uuid when unlinked; no historical text or permission is rewritten."},
+      "link_revision":{"type":"string","description":"Revision of the latest confirmed link or unlink, absent if never corrected."},
+      "evidence_sha256":{"type":"array","maxItems":8,"items":{"type":"string","pattern":"^[0-9a-f]{64}$"},"description":"Exact PCM evidence digests bound to this acoustic profile. Absent when no profile exists. These are not speaker names or proof that two different recordings have the same speaker."}
+    },"required":["speaker_uuid","profile_available"],"additionalProperties":false}}
+  },
+  "required":["registry_revision","session_open","used_for_permissions","speakers"],
+  "additionalProperties":false
+}

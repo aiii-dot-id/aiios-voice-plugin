@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"List private WAV recordings by identifier and size. No audio is read or returned.",
+  "properties":{},
+  "additionalProperties":false
+}

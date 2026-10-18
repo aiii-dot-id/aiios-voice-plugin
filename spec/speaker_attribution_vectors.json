@@ -1,0 +1,242 @@
+{
+  "scope": "Source producer conformance; not installed host or acoustic qualification",
+  "cases": [
+    {
+      "name": "pending_to_known",
+      "session_id": "session-a",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "track-a",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "known",
+      "clean_evidence": true,
+      "expected_initial": {
+        "decision": "pending",
+        "reason": "speaker_match_pending",
+        "speaker": "",
+        "speaker_id": "",
+        "revision": 0,
+        "used_for_permissions": false
+      },
+      "expected_amendment": {
+        "refers_to": 101,
+        "decision": "known",
+        "reason": "fixture_match",
+        "speaker": "Fixture speaker",
+        "speaker_id": "person-a",
+        "late": true,
+        "used_for_permissions": false,
+        "evidence_scope": {
+          "start_sample": 16000,
+          "end_sample": 48000,
+          "enrollment_revision": "1",
+          "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "embedding_binding": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "revision": 1,
+        "track_id": "track-a",
+        "start_sample": 16000,
+        "end_sample": 48000
+      }
+    },
+    {
+      "name": "pending_to_unknown",
+      "session_id": "session-a",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "track-a",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "unknown",
+      "clean_evidence": true,
+      "expected_initial": {
+        "decision": "pending",
+        "reason": "speaker_match_pending",
+        "speaker": "",
+        "speaker_id": "",
+        "revision": 0,
+        "used_for_permissions": false
+      },
+      "expected_amendment": {
+        "refers_to": 101,
+        "decision": "unknown",
+        "reason": "fixture_match",
+        "speaker": "",
+        "speaker_id": "",
+        "late": true,
+        "used_for_permissions": false,
+        "evidence_scope": {
+          "start_sample": 16000,
+          "end_sample": 48000,
+          "enrollment_revision": "1",
+          "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "embedding_binding": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "revision": 1,
+        "track_id": "track-a",
+        "start_sample": 16000,
+        "end_sample": 48000
+      }
+    },
+    {
+      "name": "pending_to_uncertain",
+      "session_id": "session-a",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "track-a",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "unavailable",
+      "clean_evidence": false,
+      "expected_initial": {
+        "decision": "pending",
+        "reason": "speaker_match_pending",
+        "speaker": "",
+        "speaker_id": "",
+        "revision": 0,
+        "used_for_permissions": false
+      },
+      "expected_amendment": {
+        "refers_to": 101,
+        "decision": "uncertain",
+        "reason": "fixture_match",
+        "speaker": "",
+        "speaker_id": "",
+        "late": true,
+        "used_for_permissions": false,
+        "revision": 1,
+        "track_id": "track-a",
+        "start_sample": 16000,
+        "end_sample": 48000
+      }
+    },
+    {
+      "name": "pooled_known_is_not_a_person",
+      "session_id": "session-a",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "known",
+      "clean_evidence": false,
+      "expected_initial": {
+        "decision": "pending",
+        "reason": "speaker_match_pending",
+        "speaker": "",
+        "speaker_id": "",
+        "revision": 0,
+        "used_for_permissions": false
+      },
+      "expected_amendment": {
+        "refers_to": 101,
+        "decision": "uncertain",
+        "reason": "speaker_track_unverified",
+        "speaker": "",
+        "speaker_id": "",
+        "late": true,
+        "used_for_permissions": false,
+        "revision": 1,
+        "track_id": "",
+        "start_sample": 16000,
+        "end_sample": 48000
+      }
+    },
+    {
+      "name": "pooled_negative_is_not_a_clean_comparison",
+      "session_id": "session-a",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "unknown",
+      "clean_evidence": false,
+      "expected_initial": {
+        "decision": "pending",
+        "reason": "speaker_match_pending",
+        "speaker": "",
+        "speaker_id": "",
+        "revision": 0,
+        "used_for_permissions": false
+      },
+      "expected_amendment": {
+        "refers_to": 101,
+        "decision": "uncertain",
+        "reason": "speaker_track_unverified",
+        "speaker": "",
+        "speaker_id": "",
+        "late": true,
+        "used_for_permissions": false,
+        "revision": 1,
+        "track_id": "",
+        "start_sample": 16000,
+        "end_sample": 48000
+      }
+    },
+    {
+      "name": "overlap_first_clean_track",
+      "group": "overlap",
+      "session_id": "overlap-session",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "track-a",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "known",
+      "speaker_id": "person-a",
+      "clean_evidence": true,
+      "expected_initial": {"decision":"pending","reason":"speaker_match_pending","speaker":"","speaker_id":"","revision":0,"used_for_permissions":false},
+      "expected_amendment": {
+        "refers_to":101,"decision":"known","reason":"fixture_match","speaker":"Fixture speaker","speaker_id":"person-a",
+        "late":true,"used_for_permissions":false,"revision":1,"track_id":"track-a","start_sample":16000,"end_sample":48000,
+        "evidence_scope":{"start_sample":16000,"end_sample":48000,"enrollment_revision":"1",
+          "policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "embedding_binding":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+      }
+    },
+    {
+      "name": "overlap_second_independent_track",
+      "group": "overlap",
+      "session_id": "overlap-session",
+      "core_sequence": 8,
+      "final_sequence": 102,
+      "track_id": "track-b",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "known",
+      "speaker_id": "person-b",
+      "clean_evidence": true,
+      "expected_initial": {"decision":"pending","reason":"speaker_match_pending","speaker":"","speaker_id":"","revision":0,"used_for_permissions":false},
+      "expected_amendment": {
+        "refers_to":102,"decision":"known","reason":"fixture_match","speaker":"Fixture speaker","speaker_id":"person-b",
+        "late":true,"used_for_permissions":false,"revision":1,"track_id":"track-b","start_sample":16000,"end_sample":48000,
+        "evidence_scope":{"start_sample":16000,"end_sample":48000,"enrollment_revision":"1",
+          "policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "embedding_binding":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+      }
+    },
+    {
+      "name": "anonymous_uuid_is_not_enrolled_authority",
+      "session_id": "anonymous-session",
+      "core_sequence": 7,
+      "final_sequence": 101,
+      "track_id": "track-a",
+      "start_sample": 16000,
+      "end_sample": 48000,
+      "outcome": "unavailable",
+      "anonymous_uuid": "12345678-1234-4234-8234-123456789abc",
+      "clean_evidence": true,
+      "expected_initial": {"decision":"pending","reason":"speaker_match_pending","speaker":"","speaker_id":"","revision":0,"used_for_permissions":false},
+      "expected_amendment": {
+        "refers_to":101,"decision":"uncertain","reason":"fixture_match","speaker":"","speaker_id":"",
+        "speaker_uuid":"12345678-1234-4234-8234-123456789abc","registry_revision":"3","continuity":"matched",
+        "evidence_scope":{"start_sample":16000,"end_sample":48000,"registry_revision":"3",
+          "policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "embedding_binding":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+        "late":true,"used_for_permissions":false,"revision":1,"track_id":"track-a","start_sample":16000,"end_sample":48000
+      }
+    }
+  ]
+}

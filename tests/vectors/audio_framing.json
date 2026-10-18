@@ -1,0 +1,25 @@
+{
+  "description": "AUD1 audio frame conformance vectors shared by the native SDK codec and the Python test double. Frame fields and encoded bytes are fixed test data.",
+  "frames": [
+    {
+      "kind": "pcm",
+      "stream": 7,
+      "seq": 1,
+      "start": 100,
+      "pcm_hex": "0001ffff"
+    },
+    {
+      "kind": "discontinuity",
+      "stream": 7,
+      "seq": 2,
+      "start": 300
+    },
+    {
+      "kind": "end",
+      "stream": 7,
+      "seq": 3,
+      "start": 300
+    }
+  ],
+  "hex": "415544310100000000000007000000010000000000000064000000040001ffff41554431020000000000000700000002000000000000012c0000000041554431030000000000000700000003000000000000012c00000000"
+}
