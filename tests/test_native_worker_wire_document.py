@@ -105,7 +105,7 @@ NAMES = {
     "exit statuses": (
         set(re.findall(r"\babandon\((\d+)\)", WORKER))
         | {n for pair in re.findall(r"_Exit\(count == 0 \? (\d+) : (\d+)\)", LIVENESS) for n in pair}
-        | set(re.findall(r"workerTreeJob\),\s*(\d+)\)", CARRIER)),
+        | set(re.findall(r"worker(?:Tree)?Job\),\s*(\d+)\)", CARRIER)),
         {"72", "73", "74", "75"}),
     "storage words": (
         set(re.findall(r'"resource"\s*,\s*string\("([a-z_:]+)"', BRIDGE))

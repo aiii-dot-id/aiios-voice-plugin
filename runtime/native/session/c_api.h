@@ -85,6 +85,18 @@ aii_voice_result aii_voice_models_execution(aii_voice_models*,char*,size_t,size_
 aii_voice_result aii_voice_models_prefer(aii_voice_models*,const char* const* terms,uint32_t count,uint32_t* accepted,aii_voice_error*);
 aii_voice_result aii_voice_models_warm(aii_voice_models*, aii_voice_readiness*, aii_voice_error*);
 aii_voice_result aii_voice_models_warm_within(aii_voice_models*, uint32_t limit_ms, aii_voice_readiness*, aii_voice_error*);
+typedef void (*aii_voice_model_server_ready)(void* context, const aii_voice_readiness*);
+aii_voice_result aii_voice_model_server_run(const aii_voice_paths*, const char* tts_backend,
+  const char* uid_model, const char* policy_json, size_t policy_bytes, const char* asr_execution_json,
+  const char* previous_policy_json, size_t previous_policy_bytes, uint32_t warm_limit_ms, uint32_t retire_ms,
+  uint32_t max_sessions, uint32_t session_open_ms,
+  aii_voice_model_server_ready ready, void* context, intptr_t control_in, intptr_t control_out, aii_voice_error*);
+aii_voice_result aii_voice_models_lost(aii_voice_models*, uint8_t* lost, aii_voice_error*);
+aii_voice_result aii_voice_models_admit(aii_voice_models*, uint8_t* admitted, uint32_t* retry_after_ms, aii_voice_error*);
+aii_voice_result aii_voice_models_admission_release(aii_voice_models*, aii_voice_error*);
+aii_voice_result aii_voice_models_load_channel(intptr_t channel_in, intptr_t channel_out, const char* vad_path,
+  const char* policy_json, size_t policy_bytes, aii_voice_snapshot_reader, void* context,
+  const char* previous_policy_json, size_t previous_policy_bytes, aii_voice_models**, aii_voice_error*);
 aii_voice_result aii_voice_prepare_capture(aii_voice_models*, const float*, size_t,
   aii_voice_capture*, aii_voice_error*);
 aii_voice_result aii_voice_models_release(aii_voice_models**, aii_voice_error*);

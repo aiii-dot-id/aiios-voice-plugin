@@ -1,0 +1,7 @@
+{
+  "type":"object",
+  "description":"After operator confirmation, delete one speaker recovery archive by its exact archive_sha256 from speaker.recovery_list. The voiceprints and names it holds are gone for good; current speakers are not changed.",
+  "properties":{"archive_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The exact archive_sha256 of one archive from speaker.recovery_list."}},
+  "required":["archive_sha256"],
+  "additionalProperties":false
+}

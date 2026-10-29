@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 
 import pytest
+from scripts import native_probe
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'runtime/native/session'
@@ -23,10 +24,7 @@ def test_compiled_phase_trace_owns_observation(tmp_path, mutation):
         header = header.replace(before, after)
     (tmp_path / 'tts_phase_trace.h').write_text(header)
     (tmp_path / 'test.cpp').write_bytes((SOURCE / 'tts_phase_trace_test.cpp').read_bytes())
-    binary = tmp_path / 'test'
-    built = subprocess.run(['c++', '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror',
-                            str(tmp_path / 'test.cpp'), '-o', str(binary)], capture_output=True, text=True, timeout=30)
-    assert built.returncode == 0, built.stderr
+    binary = native_probe.build(tmp_path, 'test', [tmp_path / 'test.cpp'], timeout=30).path
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5)
     if mutation:
         assert result.returncode != 0
@@ -43,5 +41,5 @@ def test_compiled_phase_trace_owns_observation(tmp_path, mutation):
 def test_native_placement_does_not_touch_cancel_or_publish_diagnostics_as_audio():
     source = (SOURCE / 'native_models.cpp').read_text().split('struct Pocket final:', 1)[1].split('struct NativeModels::Impl', 1)[0]
     assert 'phase_trace' not in source.split('void cancel(uint64_t id)', 1)[1]
-    assert source.index('phase_trace.begin') < source.index('const auto rc=nv_start') < source.index('phase_trace.started')
+    assert source.index('phase_trace.begin') < source.index('return nv_start(') < source.index('phase_trace.started')
     assert source.index('if(rc==-2) throw Cancelled("synthesis cancelled during inference")') < source.index('phase_trace.audio(n)')

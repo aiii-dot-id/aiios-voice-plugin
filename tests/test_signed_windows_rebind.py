@@ -1,4 +1,5 @@
 import copy
+from scripts import go_toolchain
 import hashlib
 import json
 import shutil
@@ -222,7 +223,7 @@ def test_actual_go_carrier_rebuild_binds_new_inventory_not_parent(tmp_path, monk
         assert not out.exists()
         return [{'test_fixture_only':True}]
     monkeypatch.setattr(module,'verify_authenticode',simulated_trust)
-    result=module.prepare(parent,stage,out,Path(shutil.which('go') or '/usr/local/go1.27/bin/go'),Path('fixture-signtool'))
+    result=module.prepare(parent,stage,out,Path(shutil.which('go') or go_toolchain.default_go()),Path('fixture-signtool'))
     assert observations==['verified-before-output'] and result['passed']
     current,build,_,_=verify_checkpoint(out)
     assert result['runtime_manifest_sha256']!=binding

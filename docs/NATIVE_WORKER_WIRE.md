@@ -98,8 +98,11 @@ Both then add the audio and liveness descriptors (`handles_unix.go` and
   ever written to it. The worker reads it from before it loads a model
   (`worker_liveness.h`, `watch_carrier_liveness`). The worker refuses to start
   when the value is not a decimal number from 3 to 1024. On Windows there is
-  no such pipe: the carrier puts itself and its children in one job that ends
-  with it (`job_windows.go`, `ownWorkerTree`).
+  no such pipe: the carrier's ownership job ends its descendants with it
+  (`job_windows.go`, `ownWorkerTree`). The worker starts suspended, is assigned
+  its own nested job, and resumes only after that assignment (`adoptWorker`).
+  Forced worker cleanup ends only the nested job, leaving the carrier alive
+  to observe the exit and flush the worker's final events.
 
 On Linux and macOS the worker is started in a process group of its own
 (`handles_unix.go`, `inheritAudio`). Its standard error is the carrier's
@@ -263,7 +266,7 @@ and one warm inference has run. Then its first line is `ready`
 | `identity` | an object with one member, `backend`: `native-common-cpu`, `native-common-vulkan` or `native-common-metal` (`worker.cpp`, `backend_name`). A build may compile in another name for the first; the tests' fixture worker is built as `fixture-native`. |
 | `readiness` | an object with the four members below |
 | `models_loaded` | 4, or 5 when the speaker model is loaded (`native_c_api.cpp`, `warm`) |
-| `accelerator` | `cpu`, `cpu_vulkan`, `cpu_metal`, or `external_recognizer` when a recognizer was supplied from outside (`native_c_api.cpp`, `warm`) |
+| `accelerator` | the providers the components registered at start, in `accelerator.json`'s words joined by `+`: `cpu` first, then any of `cuda`, `directml`, `vulkan`, `metal`, `coreml` in that order (for example `cpu+cuda+vulkan` for Linux Full, `cpu+metal` for macOS); or `external_recognizer` when a recognizer was supplied from outside (`registered_accelerators.h`, `native_c_api.cpp`, `warm`). Registration, not measured placement: the host measures use. The carrier refuses a line out of this form, or one that does not name the build's own speaking backend (`main.go`, `registeredAccelerators`) |
 | `accelerator_scope` | fixed text saying what `accelerator` describes |
 | `probe_ms` | how long the warm inference took, at least 1; the worker fails its start past `warm_probe_ms`, 40000 by default (`c_api.cpp`, `aii_voice_models_warm_within`) |
 
@@ -300,7 +303,7 @@ writes no `AII_VOICE_READY` line. A second `ready` is a fault (`main.go`,
 
 ### 1.5 What ends the worker
 
-The worker's main loop ends for one of three reasons (`worker.cpp`,
+The worker's main loop ends for one of four reasons (`worker.cpp`,
 `Worker::run`):
 
 1. Its standard input reached its end. Controls already read are answered
@@ -311,6 +314,17 @@ The worker's main loop ends for one of three reasons (`worker.cpp`,
 3. An exception reached the loop: a control line that is not JSON, a request
    whose `id` is not greater than the last, a `snapshot_reply` that no
    request of this worker asked for, a failure of the core.
+4. An engine failure was found anywhere else: a model failed inside a
+   reply, a model call passed `model_call_ms` (even where the model then
+   cancelled), a request failed in the core, or the core refused input
+   because it had failed (`worker.cpp`, `fail_engine`). Its session ends
+   with the failure, and the worker serves no other session, because only a
+   new process clears a model's fault. Until it ends it answers
+   `speech.session.status` as before and refuses every other request with
+   "the engine failed: this worker takes no other request and is retiring".
+   A failure that belongs to one session (`fail_session`: its input's
+   contract, its settings reply) does not end the worker, which goes on
+   serving the next session.
 
 From that moment the worker has `retire_ms`, five seconds by default, for
 all of its end: the session and any storage operation retiring, and then its
@@ -327,7 +341,7 @@ that member instead (`end_unretired`).
 | `72` | the worker's own deadline passed and it ended itself at once, having said which: an aborted session whose core did not retire in `abort_ms`, or a session or a thread that did not retire in `retire_ms` at the end (`worker.cpp`, `abandon`). |
 | `74` | Linux and macOS: the liveness pipe reached its end, so the carrier is gone (`worker_liveness.h`). |
 | `75` | Linux and macOS: the liveness pipe yielded a byte or a read error. |
-| `73` | Windows: the carrier ended the whole job, itself included, because the worker did not exit (`handles_windows.go`, `killWorker`). |
+| `73` | Windows worker: the carrier ended the worker's nested job because the worker did not exit (`handles_windows.go`, `killWorker`). The carrier remains alive to reap the worker and ends with its own fault status, normally 1. |
 
 An engine failure is recorded when it happens and cleared when the next
 `speech.session.open` is accepted (`worker.cpp`, `open`), so status 1 reports
@@ -345,7 +359,8 @@ the worker's `retire_ms` and the margin, so that the worker's own deadline
 comes first. Then it kills the worker's process group (Linux and macOS) or
 ends its job (Windows) and waits `worker_reap_ms`, five seconds by default,
 to see the worker gone (`main.go`, `endWorker`; `handles_unix.go` and
-`handles_windows.go`, `killWorker`). Where a private fault ended the lane
+`handles_windows.go`, `killWorker`). The Windows carrier's own job stays open;
+it is not terminated by forced worker cleanup. Where a private fault ended the lane
 while the public lane was still open, it then gives the host's lane
 `lane_flush_ms`, two seconds by default, to take the worker's last events and
 confirm them written (`main.go`, `handoff`). Each of the three, when it is
@@ -363,6 +378,87 @@ while a session is live fails that session as an engine failure (5.2), so
 whoever holds the writing end ends the control channel first and keeps the
 audio input open until the worker has exited. The stand-in closes in that
 order (`prove_native_worker_transport.py`, `close`).
+
+### 1.6 The model server and its session processes (beta.12, W2d)
+
+The same binary has two more modes, each with one argument and the installed
+profile read as for no argument (`worker.cpp`, `main`). No carrier starts
+them yet (W4). A channel is an anonymous pipe each way, never a name (W4b:
+under the Linux wall a process can make pipes and no socket): a session
+process's `AII_MODEL_CHANNEL_IN` (it reads) and `AII_MODEL_CHANNEL_OUT` (it
+writes), decimal descriptors from 3 to 1024 on POSIX, each a pipe's end and
+close-on-exec on arrival, and decimal handle values on Windows, made
+non-inheritable on arrival (`worker_liveness.h`, `inherited_ends`). A
+process that holds a channel ignores SIGPIPE (the worker does in every mode;
+`model_link.h`). The control is one stream socket on POSIX, in an engine the
+spare pair the service makes outside the wall and hands it at spawn
+(`AII_ENGINE_INTERNAL_FDS`, contract B1); on Windows it is two handle values,
+`AII_MODEL_CONTROL_IN` (read) and `AII_MODEL_CONTROL_OUT` (written).
+
+- `--model-server` loads every model once, warms it within the table's
+  `warm_probe_ms`, and writes one line on standard output:
+  `{"model_server_ready":{"models_loaded":N,"accelerator":"...","probe_ms":N}}`.
+  It then serves the channels its carrier gives it over the control socket
+  named by `AII_MODEL_CONTROL_FD` (a decimal descriptor from 3 to 1024): each
+  is the server end's two descriptors, its pipe's read end then its write
+  end, sent in one message with SCM_RIGHTS (on Windows, the two pipe handles
+  duplicated into the server by its carrier, their values sent as two u64),
+  answered with one byte, `y` served or `n` refused
+  (`model_server_control.h`). Descriptors after the first two are closed;
+  two that are not a pipe's read end and a pipe's write end are closed and
+  refused. The carrier keeps its copies until the answer: on macOS a socket
+  in flight whose sender closed it first arrived disconnected, and the answer
+  covers pipes the same way. The server exits 0 when the control socket ends,
+  after every channel it served has ended and its streams are freed.
+- `--session` is the worker of sections 2 to 5, whose recognizer, endpoint,
+  speech and speaker are streams over the channel named by
+  `AII_MODEL_CHANNEL_IN` and `AII_MODEL_CHANNEL_OUT`, and whose VAD
+  is its own (`native_c_api.cpp`, `ChannelOwner`). It does not warm (W4a):
+  the server warmed every model before it said ready, and a session process
+  starts per session, so a warm of its own would hold the shared speaking
+  lane at every session's start. Its `ready` names the server's accelerator
+  and the server's warm's `probe_ms`, both read once from the server's
+  description (`<accelerator>\n<probe_ms>\n<execution info>`), and its
+  `models_loaded` from what it holds: 5 with a speaker, which is what turns
+  speaker matching on. It is ready in about 130 ms on the Mac Studio
+  (`scripts/probe_session_start.py`).
+
+**The carrier's engine core (W4c; `plugin/native/engine_core.go`).**
+- It starts one `--model-server` and a `--session` process per channel. Each child gets exactly its own ends:
+  - the server gets its control;
+  - a session process gets its audio pair, a liveness pipe and its model channel, on Unix as descriptors 3 to 7.
+- No child is told of the engine's own ends: every `AII_ENGINE_` and `AII_MODEL_` name, and the engine's audio and
+  liveness names, are removed from its environment before its own are added.
+- The core asks a slot with the channel's own Admit frame before it accepts a channel; the session process's ask at
+  its session's open is then answered yes and changes nothing.
+- A session process is ended alone: its own process group on Unix, its own process on Windows (it starts none).
+
+A session process asks the model server for a slot as each session opens and
+gives it back at the session's end (`admission.h`). The server admits below the
+profile's optional `max_sessions` (1 to 64; absent, the channel bound) the
+first session whatever its costs (whether a set serves one session on a machine
+is the host's selection's, by `validation.json`'s real-time check), and another
+only while its own measured costs keep every session's reply at a real-time
+factor of 0.8 or less and its first sound within 2 s, with every session
+speaking at once.
+Refused, the open fails with `reason_code` `ENGINE_BUSY`, `retry_may_pass` true
+and `retry_after_ms`, and the process stays ready. The server says the costs it
+starts from on standard error once ready:
+`AII_VOICE_MODEL_SERVER {"event":"lane_costs","rtf":R,"first_sound_ms":F}`.
+
+When a session process's server is gone (W2e), every model call fails; the
+open session fails with `reason_code` `MODEL_SERVER_LOST` and `retry_may_pass`
+true, and the process ends with status 1, at once when no session is open.
+The server, once a channel has ended, gives each of its streams the table's
+`retire_ms` to return; a stream still inside its model then (deaf to its
+cancel) ends the server with status 78, after the line
+`AII_VOICE_MODEL_SERVER {"event":"hung_stream","reason":"..."}` on standard
+error, and every session over it fails as above.
+
+Every mode turns crash dumps off before it loads anything
+(`worker_dumps.h`): a core limit of zero, hard and soft, and on Linux not
+dumpable; on Windows no abort message, fault report or fault dialog, a crash
+or abort ending the process unreported, and WER without the heap.
 
 ## 2. The control channel, carrier to worker
 
@@ -405,7 +501,7 @@ session's, and is otherwise refused with `stale session` (`worker.cpp`,
 
 | Operation | Arguments | Result |
 |---|---|---|
-| `speech.session.open` | `session_id` (1 to 128 bytes, never used before in this worker); `output_handle`; `audio`, an object with `output` (`rate` 8000 to 192000, `channels` 1 or 2), `input` (the same two members, or null for a session with no input), optionally `format`, which must be `s16le`; `input_handle` when there is an input and absent when there is none. Inside `audio.input`, optionally `stream` (the number of the input stream, 5.2), `processing` (what the page reported about its capture) and `channel_roles`. Optionally `enrollment_capture`, an object with exactly `consented` (true), `request_id` (a digest) and `created_ms`. | `session_id`; `state` (the `lifecycle`); `purpose` (`conversation` or `enrollment_capture`); `audio`, with `input` (`rate` 16000, `channels` 1, or 2 with `channel_roles`, or null) and `output` (`rate` 24000, `channels` 1) |
+| `speech.session.open` | `session_id` (1 to 128 bytes, never used before in this worker); `output_handle`; `audio`, an object with `output` (`rate` 8000 to 192000, `channels` 1 or 2), `input` (the same two members, or null for a session with no input), optionally `format`, which must be `s16le`; `input_handle` when there is an input and absent when there is none. Inside `audio.input`, optionally `stream` (the number of the input stream, 5.2), `processing` (what the page reported about its capture) and `channel_roles`. Optionally `enrollment_capture`, an object with exactly `consented` (true), `request_id` (a digest) and `created_ms`. Optionally `check`, a boolean: true only on a publisher's check the host opens (V2 session checks), never with `enrollment_capture`; such a session's audio enters no recording window and its speaker observations read and keep nothing (`session_is_a_check`), and `recording.record` and `recording.status` are refused (`no recording after a check until a real session opens`) from its open until a session without it opens (`worker.cpp`, `check_`, `keep_waveform`). | `session_id`; `state` (the `lifecycle`); `purpose` (`conversation` or `enrollment_capture`); `audio`, with `input` (`rate` 16000, `channels` 1, or 2 with `channel_roles`, or null) and `output` (`rate` 24000, `channels` 1) |
 | `speech.session.status` | `session_id` | the session's state: `model_execution`, `session_id`, `state_sequence`, `attributions`, `lifecycle`, `opening` (only while opening: `waiting_for`, `waited_ms`), `reason`, `operator_settings`, `corrections` (when a list was handed over), `purpose`, `enrollment_capture`, `input`, `recognition`, `input_completion`, `synthesis`, `playback`, `bookkeeping` (`worker.cpp`, `status`) |
 | `speech.session.finish_input` | `session_id`; `stream_id`, which must be the open's `input_handle`; `end_sample` | `stream_id`, `end_sample`. Accepted while the session is still opening, and applied when it opens. |
 | `speech.session.synthesize` | `session_id`; `synthesis_id` (never used before in this worker); `text` (1 to 32000 bytes) | `synthesis_id`; `output_stream`, the number of the audio stream the reply is written on |
@@ -458,6 +554,21 @@ Every one but `speaker.list` and `speaker.buckets` must carry the host's
 record of the operator's confirmation in `_host_operator_act`, an object with
 `id` and `confirmed_at`. The worker takes each `id` once, except the kit's
 standing `auto` (`confirmed_acts.h`).
+
+Before `speaker.buckets`, `speaker.associate`, `speaker.forget` and
+`speaker.link` the carrier reads the host's settings, inside what the host's
+allowance for one invocation leaves beside the storage control (at most a
+read's time; `limits.go`, `retentionRead`), and adds `_carrier_settings`: an
+object with those of `anonymous_profiles` and `anonymous_expiry_days` the
+operator saved (`retention.go`). When the read has no time or no answer, the
+rule the carrier last read, here or for a session, is added instead. A caller
+cannot supply it. The worker reads it as settings, takes each absent one's default,
+and applies that rule for voiceprints of people never enrolled before the
+operation (`speaker_registry_store.cpp`, `expire`). Without it, when the host
+did not answer, the last rule a session or an operation gave stays in force,
+and before any nothing expires. The `speaker.recovery_list` and
+`speaker.recovery_delete` operations do not travel on this wire: the carrier
+serves them from the private files (`recovery_archives.go`).
 
 The reply comes when the work has ended, which may be after later requests
 were answered. Its `result` is an object with `status` (`succeeded` or
@@ -608,7 +719,7 @@ core's events are not published; the session still ends with `session_end`.
 | `synthesis_end`, `synthesis_cancelled` | `synthesis_id`, `output_stream`, `delivered_samples`, `generated_samples`, `playback_verified` | a reply's last audio frame, its END, was written and the core retired it |
 | `playback_observation` | `synthesis_id`, `output_stream`, `sample_rate`, `rendered_samples`, `delivered_samples`, `discarded_samples`, `terminal`, `outcome` (`progress`, `drained` or `stopped`), `evidence`, `playback_verified` | a `speech.session.playback_report` changed what is known |
 | `session_end` | `status` (`completed` or `aborted`), `scope`, `playback_verified`, `input_samples`, `model_padding_samples`; for a capture also `enrollment_capture` | the session ended and its resources are released |
-| `failure` | `reason`, `scope`, `resources_released`, `playback_verified`, `attributions` | the session ended in failure and its resources are released |
+| `failure` | `reason`, `scope`, `resources_released`, `playback_verified`, `attributions`; and `reason_code` with `retry_may_pass` (true) when the cause is momentary by nature: `MODEL_DEADLINE`, `AUDIO_WRITE_DEADLINE`, `HOST_SETTINGS_NO_ANSWER`, `DEVICE_MEMORY` or, in a session process (1.6), `MODEL_SERVER_LOST` or `ENGINE_BUSY` (`failure_codes.h`, `momentary_failure`); `ENGINE_BUSY` adds `retry_after_ms`, when to try again. Every other failure carries neither | the session ended in failure and its resources are released |
 
 The core also numbers five kinds the worker never emits: `pause_query` and
 `pause_resolved` are dropped (`worker.cpp`, `pump`); `pause_late`, the
@@ -647,7 +758,7 @@ names a file by a fixed word, never by a path.
 |---|---|
 | `id` | a whole number counted by the storage bridge from 1, in a counter of its own (`snapshot_bridge.cpp`, `exchange`) |
 | `session_id` | the name the bridge was begun under: the session's id, or a name the worker made for work outside a session (`worker.cpp`, `enroll`, `waveform_control`) |
-| `resource` | absent for the enrollment file; `captures` for the pending captures; `speaker_registry`; `recovery:` followed by a digest; `waveform:` followed by a digest. Never `corrections`: the correction list is the carrier's, kept under the operator's confirmation, and a worker that names it is at fault (`snapshot.go`, `workers`; `main.go`, `read`). |
+| `resource` | absent for the enrollment file; `captures` for the pending captures; `speaker_registry`; `speaker_heard` for the days speakers were last heard, beside the registry (`speaker_retention.h`); `recovery:` followed by a digest; `waveform:` followed by a digest. Never `corrections`: the correction list is the carrier's, kept under the operator's confirmation, and a worker that names it is at fault (`snapshot.go`, `workers`; `main.go`, `read`). |
 | `action` | absent for a page read; `stage`; `publish` |
 
 By action:
@@ -903,7 +1014,26 @@ write of up to `PIPE_BUF` bytes whole.
 | `AII_VOICE_GAP` | `input_gap` | `start`, `samples` | a GAP frame was filled with silence |
 | `AII_VOICE_FOREIGN_INPUT` | `foreign_input` | `stream`, `declared` | the first frame of a session on a stream that is not the session's |
 | `AII_VOICE_SPEAKER` | `speaker_match_late` | `refers_to` (the final), `limit` (`speaker_match_ms`), `limit_ms` | a final's wait for its speaker was declared over; the `speaker_observation` that follows says `speaker_match_timeout` and carries no number |
+| `AII_VOICE_SPEAKER` | `speaker_voiceprints_expired` | `count` | an expiry pass deleted that many voiceprints of people never enrolled (`speaker_registry_store.cpp`, `expire`); never whose, in every mode |
 | `AII_VOICE_ENDPOINT` | `endpoint_decision_late` | `limit` (`endpoint_decision_ms`), `limit_ms` | the endpoint model's verdict on a pause did not come in time; the turn ends by silence alone and nothing has failed |
+
+**Engine mode (W4d; the engine contract's Q6).** An engine's standard error is
+the service's one log, which every identity on the machine shares. A session
+process (`--session`), or any worker started with `AII_VOICE_LOG_CODES_ONLY=1`,
+writes there no value of an identity's:
+- `session_settings` names the keys in force (`settings_keys`), not `settings`;
+- `speech_settings` names the keys that changed (`settings_changed`);
+- `speech_settings_not_taken` and `corrections_unreadable` say `reason_withheld`
+  for `reason`, since a reason can name a value (a voice's name);
+- `failure` says its `reason_code` where the failure is momentary, and
+  `reason_withheld` for `reason`;
+- a fault that ends the process after a session has opened is said without its
+  words. Before any session opens the process holds no identity's data, so a
+  fault at its start is said in full.
+
+The session's own events and status still carry every value and reason, to
+that session's identity alone. The other lines carry numbers, stream numbers
+and limits' names in every mode (`tests/test_native_engine_log.py`).
 
 The carrier writes two more on the same stream:
 
@@ -942,7 +1072,7 @@ the other never writes. The document's test recomputes it from the source.
 | request line | none | none |
 | `settings_reply` | none | none |
 | `snapshot_reply` | none | none |
-| worker line | none | none |
+| worker line | `model_server_ready` | none |
 | `ready` | `accelerator_scope` | none |
 | `settings_request` | none | none |
 | `snapshot_request` | none | none |

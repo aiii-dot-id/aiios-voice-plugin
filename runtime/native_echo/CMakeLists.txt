@@ -34,7 +34,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
   find_package(Git REQUIRED)
   execute_process(COMMAND "${CMAKE_COMMAND}" -E env
     "GIT_CEILING_DIRECTORIES=${CMAKE_CURRENT_BINARY_DIR}"
-    "${GIT_EXECUTABLE}" apply
+    "${GIT_EXECUTABLE}" -c core.autocrlf=false -c core.eol=lf apply
     "${CMAKE_CURRENT_SOURCE_DIR}/aec3-portable-vector-access.patch"
     WORKING_DIRECTORY "${aec_portable_dir}" RESULT_VARIABLE patched)
   if(NOT patched EQUAL 0)

@@ -15,6 +15,29 @@ from .settings import SettingsReader
 MAX_LINE = 1024 * 1024
 
 
+def end_blocked_read(thread, native_id):
+    if os.name != "nt" or native_id is None:
+        return
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenThread.restype = ctypes.c_void_p
+    kernel32.OpenThread.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+    kernel32.CancelSynchronousIo.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    handle = kernel32.OpenThread(0x0001, False, native_id)
+    if not handle:
+        return
+    try:
+        for _ in range(100):
+            if not thread.is_alive():
+                return
+            kernel32.CancelSynchronousIo(handle)
+            thread.join(0.01)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def watch_carrier_liveness():
     if os.name == "nt":
         return
@@ -236,7 +259,10 @@ async def serve(
         except (OSError, ValueError, RuntimeError) as error:
             put(("fault", str(error)))
 
+    reading = {}
+
     def audio_reader():
+        reading["id"] = threading.get_native_id()
         try:
             while not stopped.is_set():
                 frame = read_frame(audio_in)
@@ -259,8 +285,9 @@ async def serve(
         }
     )
     wt = asyncio.create_task(writer())
-    for target in (controls, audio_reader):
-        threading.Thread(target=target, daemon=True).start()
+    audio_reading = threading.Thread(target=audio_reader, daemon=True)
+    for thread in (threading.Thread(target=controls, daemon=True), audio_reading):
+        thread.start()
     propagating = False
     try:
         while True:
@@ -310,6 +337,7 @@ async def serve(
         await asyncio.gather(wt, return_exceptions=True)
         io_executor.shutdown(wait=False, cancel_futures=True)
         message_executor.shutdown(wait=False, cancel_futures=True)
+        end_blocked_read(audio_reading, reading.get("id"))
         audio_in.close()
         audio_out.close()
         for error in cleanup_errors:

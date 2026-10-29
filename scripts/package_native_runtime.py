@@ -24,6 +24,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from scripts.runtime_limits import profile_limits
+from scripts import go_toolchain
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -117,9 +118,7 @@ def bind_carrier(output, record_path, go):
         raise ValueError("carrier build output already exists")
     before = inputs()
     recipe = sha256(Path(__file__))
-    version = subprocess.check_output([str(go), "version"], text=True).strip()
-    if "go1.27.0 " not in version:
-        raise ValueError("runtime carrier requires Go 1.27.0")
+    version = go_toolchain.require(go, "runtime carrier")
     env = {
         **os.environ,
         "GOTOOLCHAIN": "local",
@@ -177,7 +176,7 @@ if __name__ == "__main__":
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--verify", metavar="EXPECTED_MANIFEST_SHA256")
     p.add_argument("--bind-carrier", type=Path, metavar="BUILD_RECORD")
-    p.add_argument("--go", type=Path, default=Path("/usr/local/go1.27/bin/go"))
+    p.add_argument("--go", type=Path, default=go_toolchain.default_go())
     args = p.parse_args()
     if args.bind_carrier:
         bind_carrier(args.output.resolve(), args.bind_carrier.resolve(), args.go)

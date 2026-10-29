@@ -6,9 +6,11 @@
 #include "../../native_vad/vad.h"
 #include "../../native_endpoint/endpoint.h"
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -162,8 +164,32 @@ struct VoiceEndpoint final:Endpoint {
     cancelled=true; aii_endpoint_cancel_through(model,counter.load());
   }
 };
+std::mutex& speech_lane(){static std::mutex lane;return lane;}
+template<class F> auto in_lane(F f){std::lock_guard<std::mutex> lane(speech_lane());return f();}
+template<class F> auto in_lane_timed(double& held_ms,F f){
+  std::lock_guard<std::mutex> lane(speech_lane());
+  const auto began=std::chrono::steady_clock::now();
+  auto result=f();
+  held_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count();
+  return result;
+}
+struct LaneMeter {
+  std::mutex mutex;
+  double lane_ms=0,audio_ms=0,first_sound_ms=0;bool have=false;
+  void reply(double reply_lane_ms,double reply_audio_ms,double reply_first_sound_ms) {
+    std::lock_guard<std::mutex> lock(mutex);
+    lane_ms=0.8*lane_ms+reply_lane_ms;audio_ms=0.8*audio_ms+reply_audio_ms;
+    first_sound_ms=have?0.8*first_sound_ms+0.2*reply_first_sound_ms:reply_first_sound_ms;have=true;
+  }
+  LaneCosts costs() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return {have?lane_ms/audio_ms:0,first_sound_ms,have};
+  }
+};
+LaneMeter& lane_meter(){static LaneMeter meter;return meter;}
 struct Pocket final:Synthesizer {
   size_t playback_reserve_samples() const override { return 3 * 24000; }
+  double reply_lane_ms=0,reply_first_sound_ms=0;size_t reply_samples=0;
   void* model=nullptr;
   TtsPhaseTrace phase_trace;
   std::mutex control;
@@ -173,7 +199,7 @@ struct Pocket final:Synthesizer {
   int execution_status=-1;
   void publish_execution() {
     char value[4096]{};
-    const int status=nv_execution_info(model,value,sizeof value);
+    const int status=in_lane([&]{return nv_execution_info(model,value,sizeof value);});
     std::lock_guard<std::mutex> lock(published);
     execution_status=status; execution=status?"":value;
   }
@@ -186,7 +212,7 @@ struct Pocket final:Synthesizer {
   void publish_execution() {}
 #endif
   uint64_t generation=0,client=0,cancelled=0;
-  bool started=false,silent=false;
+  bool started=false,wordless=false;
   uint32_t seed=20260908;
   const std::filesystem::path english_root,english_config;
   const std::string backend;
@@ -196,11 +222,11 @@ struct Pocket final:Synthesizer {
       :english_root(std::filesystem::u8path(p.pocket)),english_config(std::filesystem::u8path(p.pocket_config)),backend(p.tts_backend) {
     StartupSpan profile("load_tts");
     char error[1024]{};
-    model=nv_create_bound(p.pocket.c_str(),p.pocket_config.c_str(),p.tts_backend.c_str(),4,error,sizeof error);
+    model=in_lane([&]{return nv_create_bound(p.pocket.c_str(),p.pocket_config.c_str(),p.tts_backend.c_str(),4,error,sizeof error);});
     if(!model) throw std::runtime_error(error);
     publish_execution();
   }
-  ~Pocket() override { if(model && nv_destroy(model)) std::terminate(); }
+  ~Pocket() override { if(model && in_lane([&]{return nv_destroy(model);})) std::terminate(); }
   struct Location { std::filesystem::path root,config; };
   Location location(const SpeechLanguage& next) const {
     if(!*next.directory) return {english_root,english_config};
@@ -214,7 +240,7 @@ struct Pocket final:Synthesizer {
     bytes.resize(size_t(in.gcount())); return bytes;
   }
   void* create(const Location& at,char* error,size_t capacity) const {
-    return nv_create_bound(at.root.u8string().c_str(),at.config.u8string().c_str(),backend.c_str(),4,error,capacity);
+    return in_lane([&]{return nv_create_bound(at.root.u8string().c_str(),at.config.u8string().c_str(),backend.c_str(),4,error,capacity);});
   }
   static void require_installed(const SpeechLanguage& next,const Location& at,const std::string& voice) {
     namespace fs=std::filesystem;
@@ -231,7 +257,7 @@ struct Pocket final:Synthesizer {
     SpeechReplacements table;
     try { table=speech_replacements(read_config(at.config)); }
     catch(const std::exception& e) { throw std::invalid_argument(std::string("speaking language ")+next->label+" has an unreadable configuration: "+e.what()); }
-    if(model) { if(nv_destroy(model)) throw std::runtime_error("speech model is busy; language unchanged"); model=nullptr; }
+    if(model) { if(in_lane([&]{return nv_destroy(model);})) throw std::runtime_error("speech model is busy; language unchanged"); model=nullptr; }
     char error[1024]{};
     model=create(at,error,sizeof error);
     if(model) { language=code; replacements=std::move(table); publish_execution(); return; }
@@ -257,7 +283,7 @@ struct Pocket final:Synthesizer {
     require_installed(*next,at,settings.voice);
     if(!model || settings.tts_language!=language) select(next,at);
     char error[1024]{};
-    aii::voice::check(nv_configure_voice(model,settings.voice.c_str(),settings.temperature,error,sizeof error),error);
+    aii::voice::check(in_lane([&]{return nv_configure_voice(model,settings.voice.c_str(),settings.temperature,error,sizeof error);}),error);
     seed=settings.seed;
   }
   void open() override {
@@ -273,27 +299,40 @@ struct Pocket final:Synthesizer {
       client=id; ++generation;
     }
     const auto spoken=replace_speech_characters(replacements,text);
-    silent=spoken.find_first_not_of(" \t\r\n")==std::string::npos;
-    if(silent) return;
+    wordless=spoken.find_first_not_of(" \t\r\n")==std::string::npos;
+    if(wordless) return;
     char error[1024]{}; started=true;
     phase_trace.begin(id,generation);
-    const auto rc=nv_start(model,generation,spoken.c_str(),seed,750,nullptr,error,sizeof error);
+    double start_ms=0;
+    const auto rc=in_lane_timed(start_ms,[&]{return nv_start(model,generation,spoken.c_str(),seed,750,nullptr,error,sizeof error);});
+    reply_lane_ms=start_ms;reply_first_sound_ms=0;reply_samples=0;
     phase_trace.started(rc);
     if(rc==-2) throw Cancelled("synthesis cancelled at start");
     aii::voice::check(rc,error);
   }
+  bool silent() const override { return wordless; }
   std::vector<float> next() override {
-    if(silent) return {};
+    if(wordless) return {};
     std::vector<float> result(120000); size_t n=0; char error[1024]{};
-    const auto rc=nv_next(model,generation,result.data(),result.size(),&n,error,sizeof error);
+    double held_ms=0;
+    const auto rc=in_lane_timed(held_ms,[&]{return nv_next(model,generation,result.data(),result.size(),&n,error,sizeof error);});
     if(rc==-2) throw Cancelled("synthesis cancelled during inference");
     if(rc!=0 && rc!=1) aii::voice::check(rc,error);
+    reply_lane_ms+=held_ms;
+    if(n) {
+      const auto reserve=playback_reserve_samples();
+      if(reply_samples<reserve && reply_samples+n>=reserve)reply_first_sound_ms=reply_lane_ms;
+      reply_samples+=n;
+    } else if(reply_samples>=playback_reserve_samples()) {
+      lane_meter().reply(reply_lane_ms,double(reply_samples)/24.0,reply_first_sound_ms);
+      reply_samples=0;
+    }
     phase_trace.audio(n);
     result.resize(n); return result;
   }
   void reset() override {
     if(started) {
-      char error[1024]{}; aii::voice::check(nv_reset(model,generation,error,sizeof error),error); started=false;
+      char error[1024]{}; aii::voice::check(in_lane([&]{return nv_reset(model,generation,error,sizeof error);}),error); started=false;
       phase_trace.finish();
     }
   }
@@ -305,7 +344,8 @@ struct Pocket final:Synthesizer {
 };
 }
 namespace {
-std::unique_ptr<Recognizer> default_recognizer(const ModelPaths& p) {
+using RecognizerFactory=std::function<std::unique_ptr<Recognizer>()>;
+RecognizerFactory shared_hearing(const ModelPaths& p) {
 #ifdef AII_MULTITALKER_ASR
   const auto hearing=aii::voice::wire::HearingProfile::read(p.asr_execution,std::filesystem::u8path(p.asr));
   aii::multitalker::NemotronConfig diarizer;
@@ -325,44 +365,72 @@ std::unique_ptr<Recognizer> default_recognizer(const ModelPaths& p) {
       throw std::runtime_error("multitalker vocabulary token");
     vocabulary.emplace_back(token->valuestring);
   }
-  if(!hearing.separator_backend.empty())
-    execution.weights=aii::multitalker::OnnxEncoder::load_weights(p.asr,execution);
-  auto make_recognizer=[&]{return std::make_unique<aii::multitalker::Recognizer>(
-      p.asr,mel.data(),mel.size(),vocabulary,diarizer,execution);};
-  auto live=make_recognizer();
-  if(hearing.separator_backend.empty())return live;
-  std::unique_ptr<aii::multitalker::SourceSeparator> separator;
-  if(hearing.separator_backend=="coreml") {
-#ifdef __APPLE__
-    separator=std::make_unique<aii::multitalker::CoreMLSeparator>(hearing.separator_model);
-#else
-    throw std::runtime_error("Core ML separation requires an Apple target");
-#endif
-  } else {
+  execution.weights=aii::multitalker::OnnxEncoder::load_weights(p.asr,execution);
+  if(!diarizer.model.empty())diarizer.loaded=std::make_shared<aii::multitalker::NemotronModel>(diarizer);
+  std::shared_ptr<aii::multitalker::OnnxSeparatorModel> separator_model;
+  if(!hearing.separator_backend.empty() && hearing.separator_backend!="coreml") {
     const auto graph=bytes(hearing.separator_model,512u*1024*1024);
-    separator=std::make_unique<aii::multitalker::OnnxSeparator>(graph.data(),graph.size(),
+    separator_model=std::make_shared<aii::multitalker::OnnxSeparatorModel>(graph.data(),graph.size(),
         hearing.separator_threads,hearing.separator_cuda);
   }
-  return std::make_unique<aii::multitalker::SeparatingRecognizer>(
-      std::move(live),make_recognizer(),std::move(separator));
+  return [p,hearing,diarizer,execution,separator_model,mel=std::move(mel),vocabulary=std::move(vocabulary)]
+      ()->std::unique_ptr<Recognizer> {
+    auto make_recognizer=[&]{return std::make_unique<aii::multitalker::Recognizer>(
+        p.asr,mel.data(),mel.size(),vocabulary,diarizer,execution);};
+    auto live=make_recognizer();
+    if(hearing.separator_backend.empty())return live;
+    std::unique_ptr<aii::multitalker::SourceSeparator> separator;
+    if(hearing.separator_backend=="coreml") {
+#ifdef __APPLE__
+      separator=std::make_unique<aii::multitalker::CoreMLSeparator>(hearing.separator_model);
 #else
-  return std::make_unique<Asr>(p);
+      throw std::runtime_error("Core ML separation requires an Apple target");
+#endif
+    } else {
+      separator=std::make_unique<aii::multitalker::OnnxSeparator>(separator_model);
+    }
+    return std::make_unique<aii::multitalker::SeparatingRecognizer>(
+        std::move(live),make_recognizer(),std::move(separator));
+  };
+#else
+  return [p]()->std::unique_ptr<Recognizer> {return std::make_unique<Asr>(p);};
 #endif
 }
 }
 struct NativeModels::Impl {
+  const ModelPaths paths;
+  RecognizerFactory hearing;
   std::unique_ptr<Recognizer> asr; VoiceVad vad; VoiceEndpoint endpoint; Pocket pocket;
   Impl(const ModelPaths& p,std::unique_ptr<Recognizer> supplied)
-      :asr(supplied?std::move(supplied):default_recognizer(p)),vad(p),endpoint(p),pocket(p) {}
+      :paths(p),hearing(supplied?RecognizerFactory{}:shared_hearing(p)),
+       asr(supplied?std::move(supplied):hearing()),vad(p),endpoint(p),pocket(p) {}
 };
 NativeModels::NativeModels(const ModelPaths& p):NativeModels(p,nullptr) {}
 NativeModels::NativeModels(const ModelPaths& p,std::unique_ptr<Recognizer> supplied)
     :p_(std::make_unique<Impl>(p,std::move(supplied))) {}
 NativeModels::~NativeModels()=default;
 Recognizer& NativeModels::recognizer(){return *p_->asr;}
+NativeModels::SessionHearing NativeModels::open_hearing() {
+  return {open_recognizer(),std::make_unique<VoiceVad>(p_->paths),open_endpoint()};
+}
+std::unique_ptr<Recognizer> NativeModels::open_recognizer() {
+  if(!p_->hearing)throw std::logic_error("a supplied recognizer serves one session");
+  return p_->hearing();
+}
+std::unique_ptr<Endpoint> NativeModels::open_endpoint() {return std::make_unique<VoiceEndpoint>(p_->paths);}
+std::unique_ptr<Vad> NativeModels::open_vad() {return std::make_unique<VoiceVad>(p_->paths);}
+LaneCosts NativeModels::speech_lane_costs() { return lane_meter().costs(); }
+void NativeModels::forget_speech_lane_costs() {
+  auto& meter=lane_meter();std::lock_guard<std::mutex> lock(meter.mutex);
+  meter.lane_ms=meter.audio_ms=meter.first_sound_ms=0;meter.have=false;
+}
+std::unique_ptr<Vad> NativeModels::load_vad(const std::string& path) {
+  ModelPaths only;only.vad=path;return std::make_unique<VoiceVad>(only);
+}
 Vad& NativeModels::vad(){return p_->vad;}
 Endpoint& NativeModels::endpoint(){return p_->endpoint;}
 Synthesizer& NativeModels::synthesizer(){return p_->pocket;}
+std::unique_ptr<Synthesizer> NativeModels::open_speech(){return std::make_unique<Pocket>(p_->paths);}
 #if defined(__linux__) && !defined(__ANDROID__)
 std::string NativeModels::tts_execution_info(){return p_->pocket.execution_info();}
 #endif

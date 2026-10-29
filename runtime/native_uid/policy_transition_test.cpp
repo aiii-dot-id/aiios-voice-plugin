@@ -22,7 +22,7 @@ Sample sample(char digest,unsigned axis){Vector v(256);v.at(axis)=1;return {std:
 int main(){try {
   const auto old=policy(3),guided=policy(1,'c');
   const Snapshot source{old.policy,41,{{"ada","Ada",{sample('1',0),sample('2',0),sample('3',0)}},
-      {"speaker-1","Speaker One",{sample('4',1),sample('5',1),sample('6',1)}}}};
+      {"alex","Alex",{sample('4',1),sample('5',1),sample('6',1)}}}};
   const auto bytes=write_snapshot(source,old);
   const BoundPolicies policies(guided.canonical,old.canonical);
   check(policies.resolve(bytes).policy.fingerprint==old.policy.fingerprint&&policies.read(bytes).revision==41,
@@ -49,7 +49,7 @@ int main(){try {
       policies.resolve(insufficient).policy.minimum_enrollment_samples==3,"incomplete old profile silently activated on read");
   refused([&]{policies.read(bytes+" ");},"not canonical");
   refused([&]{policies.read(write_snapshot({policy(3,'d').policy,0,{}},policy(3,'d')));},"not bound");
-  refused([&]{prepare_guided_policy_transition(insufficient,old,guided);},"incomplete existing enrollment requires operator review: speaker-1");
+  refused([&]{prepare_guided_policy_transition(insufficient,old,guided);},"incomplete existing enrollment requires operator review: alex");
   check(write_snapshot(incomplete,old)==insufficient,"refusal changed existing profile");
   const auto empty=write_snapshot({old.policy,0,{}},old);
   check(read_snapshot(prepare_guided_policy_transition(empty,old,guided).snapshot,guided).speakers.empty(),

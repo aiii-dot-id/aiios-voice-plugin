@@ -69,6 +69,7 @@ struct Synthesizer {
   }
   virtual void start(uint64_t, const std::string&) = 0;
   virtual std::vector<float> next() = 0;
+  virtual bool silent() const { return false; }
   virtual void reset() = 0;
   virtual void cancel(uint64_t) noexcept = 0;
 };

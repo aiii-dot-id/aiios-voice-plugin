@@ -214,9 +214,13 @@ SESSION_TYPED = {
                         'std::chrono::milliseconds(1)', 'std::chrono::milliseconds(1)', 'std::chrono::seconds(120)'],
     'causal_turn_probe.cpp': ['1ms'] * 3,
     'continuous_probe.cpp': ['1ms'] * 6,
+    'hearing_pair_probe.cpp': ['1ms'] * 2,
+    'hearing_channel_probe.cpp': ['1ms'] * 2,
     'pause_projection_probe.cpp': ['10s'],
     'probe.cpp': ['std::chrono::milliseconds(1)'] * 9,
     'speaker_model_probe.cpp': ['std::chrono::milliseconds(1)'] * 2,
+    'admission.h': ['criterion_first_sound_ms = 2000', 'first_sound_ms = 0', 'retry_after_ms = 0'],
+    'native_models.cpp': ['lane_ms=0', 'audio_ms=0', 'first_sound_ms=0', 'lane_ms=0', 'audio_ms=0', 'reply_lane_ms=0', 'reply_first_sound_ms=0', 'start_ms=0', 'reply_first_sound_ms=0', 'held_ms=0', 'first_sound_ms=0'],
 }
 SESSION_TESTS = ('c_api_test_models.cpp', 'worker_test_models.cpp', 'worker_exit_test_library.cpp')
 A_NUMBER = r"(?<![\w.])\d[\d']*(?![\w.])"

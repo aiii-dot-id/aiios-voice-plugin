@@ -55,11 +55,13 @@ struct SlowEnd:End {
 struct Tts:Synthesizer {
   std::atomic<uint64_t> through{0},generation{0};
   std::atomic<bool> entered{false},hold{false},fault_on_cancel{false},blocked{false},release{false};
+  std::atomic<bool> late{false},late_given{false};
   std::atomic<size_t> starts{0};
   size_t hold_segment=0;
   std::vector<std::string> texts;
   int chunks=0;
   int chunk_count=2;
+  std::chrono::milliseconds notice{0};
   size_t reserve_samples=0;
   size_t playback_reserve_samples() const override { return reserve_samples; }
   void start(uint64_t id,const std::string& text) override {
@@ -68,6 +70,8 @@ struct Tts:Synthesizer {
   std::vector<float> next() override {
     if(chunks==1 && (hold || (hold_segment && starts==hold_segment))) { blocked=true; until([&]{return through>=generation || release.load();}); }
     if(through>=generation) {
+      if(notice.count()) std::this_thread::sleep_for(notice);
+      if(late && !late_given.exchange(true)) return std::vector<float>(960,.7f);
       if(fault_on_cancel) throw std::runtime_error("inference failure, not cancellation");
       throw Cancelled("TTS fenced");
     }
@@ -442,6 +446,78 @@ void bounded_read_keeps_custody() {
   s.stop_playback(1);check(s.audio_bounded(out,0,required) && out.end,"capacity retry revived detached stale PCM");
   s.playback(1,0,true,true);s.finish_input(0);s.close(false);check(s.wait_closed(1000),"bounded read stranded owner");
 }
+void replacement_follows_an_admitted_cancel() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;t.notice=300ms;Session s(a,v,e,t);
+  s.synthesize(1,"The reply being replaced.");until([&]{return t.blocked.load();});
+  s.interrupt(1);
+  check(!s.generation(1).retired,"the test needs the cancelled reply still computing");
+  s.synthesize(2,"The newer reply.");
+  check(t.starts==1,"a second reply started beside the first");
+  t.hold=false;until([&]{return !s.status().synthesizing;});
+  check(t.starts==2 && t.texts.back()=="The newer reply.","the newer reply was not spoken after the first");
+  check(s.generation(1).cancelled && s.generation(1).retired && s.generation(2).retired && !s.generation(2).cancelled,
+        "the replaced reply did not retire as cancelled, or the newer one did not end");
+  Audio out;uint64_t samples=0;size_t ends1=0,ends2=0;while(s.audio(out)){
+    if(out.generation==1){check(out.pcm.empty(),"the cancelled reply's PCM escaped");ends1+=out.end;}
+    else{ if(out.end)++ends2; else samples+=out.pcm.size(); }
+  }
+  check(ends1==1 && ends2==1 && samples==1920,"each reply needs one END, and the newer one all its audio");
+  bool cancelled1=false,ended2=false;Event event;while(s.event(event)){
+    cancelled1|=event.kind=="synthesis_cancelled" && event.generation==1;
+    ended2|=event.kind=="synthesis_end" && event.generation==2;
+  }
+  check(cancelled1 && ended2,"the engine did not say how each reply ended");
+  s.playback(1,0,true,true);s.playback(2,samples,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"the session did not close after both replies");
+}
+void a_replaced_replys_late_chunk_never_sounds() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;t.late=true;t.notice=100ms;Session s(a,v,e,t);
+  s.synthesize(1,"The reply being replaced.");until([&]{return t.blocked.load();});
+  s.interrupt(1);
+  s.synthesize(2,"The newer reply.");
+  check(t.starts==1,"the newer reply took the speaking model before the older one retired");
+  t.hold=false;until([&]{return !s.status().synthesizing;});
+  check(t.late_given,"the test needs the cancelled model to hand back its late chunk");
+  Audio out;bool end1_seen=false,audio2_before_end1=false,late_escaped=false;uint64_t samples2=0;
+  while(s.audio(out)){
+    for(float x:out.pcm) late_escaped|=x>.69f && x<.71f;
+    if(out.generation==1){ if(out.end)end1_seen=true; else check(out.pcm.empty(),"the cancelled reply's PCM escaped"); }
+    else if(!out.end){ audio2_before_end1|=!end1_seen; samples2+=out.pcm.size(); }
+  }
+  check(!late_escaped,"the cancelled reply's late chunk reached the output");
+  check(end1_seen && !audio2_before_end1,"the newer reply's audio came before the older reply's END");
+  check(samples2==1920,"the newer reply did not deliver all its audio");
+  s.playback(1,0,true,true);s.playback(2,samples2,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"the session did not close after both replies");
+}
+void a_reply_replaced_before_it_started_retires() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;t.notice=300ms;Session s(a,v,e,t);
+  s.synthesize(1,"First.");until([&]{return t.blocked.load();});
+  s.interrupt(1);s.synthesize(2,"Second, never spoken.");s.interrupt(2);s.synthesize(3,"Third.");
+  check(s.generation(2).retired && s.generation(2).cancelled,"the never-started reply was left for the loop");
+  t.hold=false;until([&]{return !s.status().synthesizing;});
+  check(t.starts==2 && t.texts.back()=="Third.","the never-started reply was spoken, or the last one was not");
+  Audio out;uint64_t samples=0;while(s.audio(out))if(out.generation==3 && !out.end)samples+=out.pcm.size();
+  bool cancelled2=false;Event event;while(s.event(event))cancelled2|=event.kind=="synthesis_cancelled" && event.generation==2;
+  check(cancelled2,"the never-started reply was not said as cancelled");
+  s.playback(1,0,true,true);s.playback(2,0,true,true);s.playback(3,samples,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"a never-started reply held the session open");
+}
+void a_stopped_reply_still_holds_the_next() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;Session s(a,v,e,t);
+  s.synthesize(1,"Stopped, still computing.");until([&]{return t.blocked.load();});
+  s.stop_playback(1);
+  refuses([&]{s.synthesize(2,"Too early.");},"a newer reply was admitted beside running compute");
+  t.release=true;until([&]{return !s.status().synthesizing;});
+  s.synthesize(3,"After it.");until([&]{return !s.status().synthesizing;});
+  Audio out;uint64_t samples=0;while(s.audio(out))if(out.generation==3 && !out.end)samples+=out.pcm.size();
+  s.playback(1,0,true,true);s.playback(3,samples,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"the stopped reply's session did not close");
+}
 int main() {
   try {
     settled_generation_custody();
@@ -472,5 +548,9 @@ int main() {
     std::cout<<"an admitted cutoff repeated after the drain released is not a late finish PASS\n";
     std::cout<<"backpressure suspends only the missing-tail wait; deadline resumes on capacity PASS\n";
     bounded_read_keeps_custody();std::cout<<"capacity refusal keeps event/audio custody under control fences PASS\n";
+    replacement_follows_an_admitted_cancel();std::cout<<"a reply sent once its predecessor's cancel is admitted is spoken after it PASS\n";
+    a_reply_replaced_before_it_started_retires();std::cout<<"a reply replaced before it started retires at once PASS\n";
+    a_replaced_replys_late_chunk_never_sounds();std::cout<<"a replaced reply's late chunk never sounds, and its END comes first PASS\n";
+    a_stopped_reply_still_holds_the_next();std::cout<<"a stop without a cancel still holds the next reply PASS\n";
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
 }

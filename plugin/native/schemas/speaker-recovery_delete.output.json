@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "properties":{"archive_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"deleted":{"type":"boolean"}},
+  "required":["archive_sha256","deleted"],
+  "additionalProperties":false
+}

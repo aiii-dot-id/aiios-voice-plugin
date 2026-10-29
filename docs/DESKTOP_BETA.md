@@ -69,6 +69,8 @@ new session.
 | VAD threshold | Speech-detection sensitivity; VAD remains active. |
 | TTS variation | Sampling temperature within the declared bounds. |
 | TTS seed | Whole-number sampling seed; this does not promise cross-backend bit identity. |
+| Voiceprints of people not enrolled | Default on. Off: no anonymous voiceprint is made, matched or kept fresh, and no recording is held to corroborate one; those already kept are deleted when due. |
+| Delete the voiceprint of someone not enrolled after (days) | Default 30, from 1 to 3650. Counted from the day the person was last heard. |
 
 The capture limit and the turn pause are different: a pause ends an utterance;
 the capture limit ends input for that session. At a finite limit, the host
@@ -97,6 +99,29 @@ fabricated permanent speaker UUID. A new anonymous UUID needs corroborating
 clean evidence from a distinct utterance. An operator can later attach a label
 or, with confirmation, link two UUIDs known independently to be the same
 person. Labels and UUIDs are continuity claims, never authentication.
+
+A voiceprint of a person who has not enrolled is not kept indefinitely. Once
+the number of days the operator set has passed since that person was last
+heard (made, or accepted as a match), the bucket is deleted: its voiceprint,
+its labels and its UUID. Transcripts are kept. A UUID bound to an enrollment
+that is present is kept until the enrollment is removed; after that its day is
+counted too. Speakers joined by a confirmed link are deleted together, from the
+latest day either was heard. The deletion happens the next time the speaker
+files are read: at an observation in a session, or before `speaker.buckets`,
+`speaker.associate`, `speaker.forget` or `speaker.link`. `speaker.buckets`
+says the rule in force and, for each such speaker, `heard_on` and
+`expires_on`; a call that deleted any lists their UUIDs in
+`expired_speaker_uuids`, and the worker's log line `AII_VOICE_SPEAKER` `speaker_voiceprints_expired`
+gives the count, never whose. The days are kept in a file of their own beside
+the speaker registry, whose format is unchanged, so rolling the plugin back
+keeps its speakers. Speakers without a recorded day (kept before this rule
+existed, or made by an earlier version) are counted from the first time the
+rule sees them.
+
+`speaker.reset` with `recovery` sets aside speaker files the runtime cannot
+read as recovery archives, which hold voiceprints and names.
+`speaker.recovery_list` lists them, with what each holds, and
+`speaker.recovery_delete` deletes one after operator confirmation.
 
 The host's only/ignore UID policy controls which recognized text reaches the
 identity. Restricted delivery withholds unresolved finals and unclassified

@@ -1,0 +1,12 @@
+{"checks": [
+  {"name": "hears a reminder to its last word", "sets": ["*"], "lane": "session",
+   "input": {"audio": "checks/reminder-16k.wav"},
+   "expect": {"events": {"order": ["session_ready", "transcript_final", "input_finished"],
+                         "transcript_contains": ["water the garden", "thursday morning", "before the rain comes"]}},
+   "within_ms": 20000},
+  {"name": "speaks a reply faster than real time", "sets": ["*"], "lane": "session",
+   "input": {"text": "Good morning. The garden is watered and the doors are locked."},
+   "expect": {"events": {"order": ["session_ready", "synthesis_start", "synthesis_end"],
+                         "audio_at_least": {"ms": 3000, "rms_dbfs": -45}}},
+   "within_ms": 3450}
+]}

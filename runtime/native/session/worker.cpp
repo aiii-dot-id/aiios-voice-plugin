@@ -1,7 +1,9 @@
+#include "failure_codes.h"
 #include "c_api.h"
 #include "worker_io.h"
 #include "worker_audio_scratch.h"
 #include "worker_liveness.h"
+#include "worker_dumps.h"
 #include "worker_environment.h"
 #include "worker_json.h"
 #include "speaker_observation.h"
@@ -28,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <atomic>
 #include <cstdlib>
 #include <deque>
 #include <future>
@@ -41,6 +44,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <array>
+#ifdef _WIN32
+#include <io.h>
+#endif
 using namespace aii::voice::wire;
 using Clock = std::chrono::steady_clock;
 #ifndef AII_WORKER_BACKEND
@@ -58,8 +64,9 @@ namespace {
 #endif
 }
 const char *backend_name(const aii_voice_readiness &r) {
-  if(std::string(r.accelerator)=="cpu_vulkan")return "native-common-vulkan";
-  if(std::string(r.accelerator)=="cpu_metal")return "native-common-metal";
+  const std::string line = "+" + std::string(r.accelerator) + "+";
+  if(line.find("+vulkan+")!=std::string::npos)return "native-common-vulkan";
+  if(line.find("+metal+")!=std::string::npos)return "native-common-metal";
   return AII_WORKER_BACKEND;
 }
 void core(aii_voice_result r, const aii_voice_error &e) {
@@ -119,6 +126,26 @@ struct IdentityHash {
     size_t value=0;std::memcpy(&value,digest.data(),sizeof value);return value;
   }
 };
+bool codes_only_log=false;
+std::atomic<bool> identity_data_seen{false};
+Json member_names(const cJSON* o) {
+  auto names=own(cJSON_CreateArray());
+  for(const cJSON* c=o?o->child:nullptr;c;c=c->next) {
+    auto name=string(c->string?c->string:"");
+    require(cJSON_AddItemToArray(names.get(),name.get()),"log allocation failed");name.release();
+  }
+  return names;
+}
+Json changed_names(const cJSON* before, const cJSON* after) {
+  auto names=own(cJSON_CreateArray());
+  for(const cJSON* c=after?after->child:nullptr;c;c=c->next) {
+    const cJSON* was=before&&c->string?cJSON_GetObjectItemCaseSensitive(before,c->string):nullptr;
+    if(was&&cJSON_Compare(was,c,true))continue;
+    auto name=string(c->string?c->string:"");
+    require(cJSON_AddItemToArray(names.get(),name.get()),"log allocation failed");name.release();
+  }
+  return names;
+}
 struct TerminalReceipt {
   uint64_t epoch=0,rendered=0;
   uint32_t stream=0;
@@ -151,6 +178,10 @@ class Worker {
   uint64_t echo_tail_start_=0;
 #endif
   bool reference_input_=false;
+  bool check_=false,after_check_=false;
+  void keep_waveform(uint64_t at,const float* pcm,size_t count) {
+    if(!check_)recent_waveforms_.feed(at,pcm,count);
+  }
   std::future<aii_voice_session *> opening_;
   std::future<Json> enrollment_;
   std::optional<aii::voice::CaptureInput> capture_;
@@ -199,6 +230,9 @@ class Worker {
   static constexpr uint64_t kGapChunkSamples = 4096;
   bool waiting_settings_ = false, pending_audio_ = false, abort_ = false,
        quit_ = false;
+  bool server_lost_ = false;
+  std::atomic<bool> admitted_{false};
+  std::atomic<uint32_t> busy_retry_after_ms_{0};
   Clock::time_point opening_deadline_, open_deadline_, closing_deadline_, exit_deadline_;
   Clock::time_point opening_began_;
   bool said_waiting_settings_ = false, said_waiting_open_ = false;
@@ -209,6 +243,7 @@ class Worker {
   std::optional<Output> active_output_;
   AudioScratch<> audio_scratch_;
   Json processing_ = null(), effective_ = object();
+  Json logged_effective_ = object();
   aii::voice::Corrections corrections_;
   Json corrections_state_ = null();
   aii_voice_snapshot snapshot_{};
@@ -474,6 +509,8 @@ class Worker {
     failure_contained_ = true;
   }
   void fail_engine(const std::string &reason) {
+    if (!quit_)
+      begin_retiring();
     if (!failure_.empty() && failure_contained_) {
       failure_contained_ = false;
       say_failure(reason);
@@ -486,7 +523,10 @@ class Worker {
     put(diagnostic,"component",string("voice-worker"));
     put(diagnostic,"event",string("failure"));
     put(diagnostic,"session_id",string(sid_));
-    put(diagnostic,"reason",string(reason.substr(0,1024)));
+    if(codes_only_log) {
+      if(const auto momentary=aii::voice::momentary_failure(reason))put(diagnostic,"reason_code",string(momentary->code));
+      put(diagnostic,"reason_withheld",boolean(true));
+    } else put(diagnostic,"reason",string(reason.substr(0,1024)));
     log_line("AII_VOICE_FAILURE " + encode(diagnostic));
   }
   void begin_retiring() {
@@ -695,6 +735,7 @@ class Worker {
   bool waveform_control(uint64_t request,const std::string& op,const cJSON* a) {
     if(op!="recording.record"&&op!="recording.status")return false;
     require(cJSON_IsObject(a),"recording arguments object required");
+    require(!after_check_,"no recording after a check until a real session opens");
     if(op=="recording.record") {
       require(!waveform_publish_.valid() && (lifecycle_=="open"||session_retired()) &&
               !enrollment_.valid() && !capturing_.valid(),
@@ -765,6 +806,10 @@ class Worker {
     }
     auto processing = checked_processing(field(field(audio, "input"), "processing"));
     const auto* roles=field(source,"channel_roles");
+    const auto* checking=field(a,"check");
+    require(!checking || cJSON_IsBool(checking),"check must be true or false");
+    const bool check=checking && cJSON_IsTrue(checking);
+    require(!check || !capture,"a check is not an enrollment capture");
     bool reference=false;
     if(roles) {
       require(input_enabled && !capture && cJSON_IsArray(roles) && cJSON_GetArraySize(roles)==2 &&
@@ -784,8 +829,11 @@ class Worker {
     reference_input_=reference;
     processing_ = std::move(processing);
     sid_ = id;
+    identity_data_seen = true;
     uid_snapshot_.begin(sid_);
-    recent_waveforms_.begin(sid_);
+    check_=check;after_check_=check;
+    if(registry_)registry_->checking(check);
+    if(!check_)recent_waveforms_.begin(sid_);
     attributions_.begin(sid_);
     enrollment_finals_.clear();
     input_handle_ = handle;
@@ -927,9 +975,15 @@ class Worker {
     put(diagnostic, "component", string("voice-worker"));
     put(diagnostic, "event", string(event));
     put(diagnostic, "session_id", string(sid_));
-    put(diagnostic, "settings", clone(effective_.get()));
-    if (!reason.empty())
-      put(diagnostic, "reason", string(reason.substr(0, 256)));
+    if (codes_only_log) {
+      if (reason.empty()) put(diagnostic, "settings_changed", changed_names(logged_effective_.get(), effective_.get()));
+      else put(diagnostic, "reason_withheld", boolean(true));
+    } else {
+      put(diagnostic, "settings", clone(effective_.get()));
+      if (!reason.empty())
+        put(diagnostic, "reason", string(reason.substr(0, 256)));
+    }
+    if (reason.empty()) logged_effective_ = clone(effective_.get());
     log_line("AII_VOICE_SETTINGS " + encode(diagnostic));
   }
   void settings(const cJSON *p) {
@@ -953,10 +1007,14 @@ class Worker {
     input_limit_=aii::voice::capture_samples(config.capture_limit_minutes);
     effective_=config.effective();
     config_=config;refresh_id_=0;speech_revision_=0;speech_refusal_.clear();
+    if(registry_)registry_->retain({config.anonymous_profiles=="on",config.anonymous_expiry_days});
     {
       auto diagnostic=object();
       put(diagnostic,"component",string("voice-worker"));put(diagnostic,"event",string("session_settings"));
-      put(diagnostic,"session_id",string(sid_));put(diagnostic,"settings",clone(effective_.get()));
+      put(diagnostic,"session_id",string(sid_));
+      if(codes_only_log)put(diagnostic,"settings_keys",member_names(effective_.get()));
+      else put(diagnostic,"settings",clone(effective_.get()));
+      logged_effective_=clone(effective_.get());
       log_line("AII_VOICE_SETTINGS " + encode(diagnostic));
     }
     std::vector<const char*> preferred;
@@ -974,7 +1032,9 @@ class Worker {
         put(corrections_state_,"unreadable",string(std::string(e.what()).substr(0,256)));
         auto diagnostic=object();
         put(diagnostic,"component",string("voice-worker"));put(diagnostic,"event",string("corrections_unreadable"));
-        put(diagnostic,"session_id",string(sid_));put(diagnostic,"reason",string(std::string(e.what()).substr(0,256)));
+        put(diagnostic,"session_id",string(sid_));
+        if(codes_only_log)put(diagnostic,"reason_withheld",boolean(true));
+        else put(diagnostic,"reason",string(std::string(e.what()).substr(0,256)));
         log_line("AII_VOICE_CORRECTIONS " + encode(diagnostic));
       }
     }
@@ -996,6 +1056,13 @@ class Worker {
       aii_voice_session *s = nullptr;
       const auto speech=config.speech();
       const aii_voice_open_options options{&config.control,&speech,config.capture_limit_minutes,uint8_t(input_enabled)};
+      uint8_t admitted=1;uint32_t retry_after=0;
+      core(aii_voice_models_admit(models_,&admitted,&retry_after,&e),e);
+      if(!admitted) {
+        busy_retry_after_ms_=retry_after;
+        throw Refused("engine busy: its measured load keeps no more sessions within the criterion");
+      }
+      admitted_=true;
       core(aii_voice_open_bounded(models_, &options, &waits, &s, &e), e);
       return s;
     });
@@ -1045,6 +1112,10 @@ class Worker {
         require(!raw.empty()&&raw.find_first_not_of("0123456789")==std::string::npos &&
           (raw=="0"||raw[0]!='0'),"canonical registry revision required");
         revision=std::stoull(raw);require(revision<=9007199254740991ULL,"registry revision exceeds bound");
+      }
+      if(const auto* rule=field(a,"_carrier_settings")) {
+        const auto config=aii::voice::wire::OperatorSettings::read(rule);
+        registry_->retain({config.anonymous_profiles=="on",config.anonymous_expiry_days});
       }
       if(session_retired())uid_snapshot_.begin("uid-management-"+std::to_string(request));
       if(mutates)enrollment_acts_.consume(act);
@@ -1742,7 +1813,7 @@ class Worker {
     if (lifecycle_ == "closed" || lifecycle_ == "failed")
       return;
     if(enrollment_.valid()||capturing_.valid()||waveform_publish_.valid())return;
-    recent_waveforms_.end();
+    if(!check_)recent_waveforms_.end();
     if(capture_)capture_->abandon();
     for(auto& observation:attributions_.end(!failure_.empty()?"session_failed":
           abort_?"session_aborted":"speaker_result_missing"))
@@ -1750,10 +1821,18 @@ class Worker {
     if (session_)
       core(aii_voice_release(&session_, &error_), error_);
     uid_snapshot_.cancel();
+    if (admitted_.exchange(false))
+      core(aii_voice_models_admission_release(models_, &error_), error_);
     if (!failure_.empty()) {
       lifecycle_ = "failed";
       auto e = object();
       put(e, "reason", string(failure_));
+      if (const auto momentary = aii::voice::momentary_failure(failure_)) {
+        put(e, "reason_code", string(momentary->code));
+        put(e, "retry_may_pass", boolean(true));
+        if (std::string(momentary->code) == "ENGINE_BUSY")
+          put(e, "retry_after_ms", number(busy_retry_after_ms_.exchange(0)));
+      }
       put(e, "scope", string("engine_resources"));
       put(e, "resources_released", boolean(true));
       put(e, "playback_verified", boolean(false));
@@ -1813,7 +1892,7 @@ class Worker {
       if (rc == AII_VOICE_AGAIN)
         return;
       core(rc, error_);
-      recent_waveforms_.feed(input_received_, silence.data(), n);
+      keep_waveform(input_received_, silence.data(), n);
       input_received_ += n;
       capture_limit_reached_ = input_limit_ && input_received_ == input_limit_;
     }
@@ -1858,7 +1937,7 @@ class Worker {
       if(!echo_tail_.empty()) {
         const auto rc=aii_voice_feed(session_,echo_tail_start_,echo_tail_.data(),echo_tail_.size(),&error_);
         if(rc==AII_VOICE_AGAIN)return;
-        core(rc,error_);recent_waveforms_.feed(echo_tail_start_,echo_tail_.data(),echo_tail_.size());echo_tail_.clear();
+        core(rc,error_);keep_waveform(echo_tail_start_,echo_tail_.data(),echo_tail_.size());echo_tail_.clear();
       }
     }
 #endif
@@ -1979,7 +2058,7 @@ class Worker {
       if(!f.clean.empty()) {
         const auto rc=aii_voice_feed(session_,f.feed_start,f.clean.data(),f.clean.size(),&error_);
         if(rc==AII_VOICE_AGAIN)return;
-        core(rc,error_);recent_waveforms_.feed(f.feed_start,f.clean.data(),f.clean.size());
+        core(rc,error_);keep_waveform(f.feed_start,f.clean.data(),f.clean.size());
       }
       input_received_+=f.input_count;
       capture_limit_reached_=input_limit_ && input_received_==input_limit_;
@@ -1993,7 +2072,7 @@ class Worker {
       if (rc == AII_VOICE_AGAIN)
         return;
       core(rc, error_);
-      recent_waveforms_.feed(f.start,f.pcm.data(),count);
+      keep_waveform(f.start,f.pcm.data(),count);
       input_received_ += count;
       capture_limit_reached_=input_limit_ && input_received_==input_limit_;
     } else {
@@ -2017,6 +2096,12 @@ public:
     if(!policy.empty()) {
       uid_policies_.emplace(policy,previous);
       registry_=std::make_unique<aii::voice::SpeakerRegistryStore>(uid_snapshot_,uid_policies_->current(),uid_policies_->previous());
+      registry_->on_expired([](size_t count) {
+        auto diagnostic=object();
+        put(diagnostic,"component",string("voice-worker"));put(diagnostic,"event",string("speaker_voiceprints_expired"));
+        put(diagnostic,"count",number(count));
+        log_line("AII_VOICE_SPEAKER " + encode(diagnostic));
+      });
       core(aii_voice_models_track_observer_at(models_,aii::voice::SpeakerRegistryStore::callback_at,registry_.get(),&error_),error_);
     }
   }
@@ -2028,7 +2113,7 @@ public:
     put(identity, "backend", string(backend_name(readiness_)));
     put(details, "models_loaded", number(readiness_.models_loaded));
     put(details, "accelerator", string(readiness_.accelerator));
-    put(details, "accelerator_scope", string("TTS backend summary; per-component configuration is in status.model_execution"));
+    put(details, "accelerator_scope", string("providers registered at start, in accelerator.json's words; placement is measured by the host; per-component configuration is in status.model_execution"));
     put(details, "probe_ms", number(readiness_.probe_ms));
     put(ready, "identity", std::move(identity));
     put(ready, "readiness", std::move(details));
@@ -2040,13 +2125,12 @@ public:
           wire_.interrupt();
           fault_transport(wire_.expiry());
         }
-        if (output_.expired()
-#ifdef AII_AUDIO_ACK_TEST_HOOK
-            && main_loop_sees_audio_deadline()
-#endif
-        ) {
+        if (output_.expired()) {
           output_.interrupt();
-          fault_transport(output_.expiry());
+#ifdef AII_AUDIO_ACK_TEST_HOOK
+          if (main_loop_sees_audio_deadline())
+#endif
+            fault_transport(output_.expiry());
         }
         bool eof, audio_eof;
         std::string error, control;
@@ -2085,6 +2169,19 @@ public:
             lifecycle_ != "failed")
           fail("audio endpoint lost; not graceful Finish");
         pump();
+        if (!control.empty() && quit_) {
+          auto j = parse(control);
+          if (!field(j.get(), "settings_reply") && !field(j.get(), "snapshot_reply")) {
+            const auto id = integer(field(j.get(), "id"));
+            require(id > request_id_, "private request ID reused");
+            request_id_ = id;
+            const auto op = str(field(j.get(), "operation"));
+            if (op == "speech.session.status")
+              answer(id, [&] { if (auto r = admit(id, op, field(j.get(), "arguments"))) reply(id, std::move(r)); });
+            else
+              refuse(id, "the engine failed: this worker takes no other request and is retiring");
+          }
+        }
         if (!control.empty() && !quit_) {
           auto j = parse(control);
           const auto *settings_reply = field(j.get(), "settings_reply");
@@ -2119,6 +2216,16 @@ public:
               fail_engine(snapshot_.error);
             else
               fail_session(e.what());
+          }
+        }
+        if (!server_lost_) {
+          uint8_t lost = 0;
+          core(aii_voice_models_lost(models_, &lost, &error_), error_);
+          if (lost) {
+            server_lost_ = true;
+            if (session_ || opening_.valid()) fail_engine("model server lost");
+            else say_failure("model server lost");
+            if (!quit_) begin_retiring();
           }
         }
         if (quit_ && !session_ && !opening_.valid() && !enrollment_.valid() && !capturing_.valid() && !waveform_publish_.valid() && !pending_audio_)
@@ -2168,7 +2275,7 @@ public:
     for (auto &t : threads_)
       t.join();
     std::lock_guard<std::mutex> l(mutex_);
-    return (failure_.empty() || failure_contained_) && transport_fault_.empty() ? 0 : 1;
+    return (failure_.empty() || failure_contained_) && transport_fault_.empty() && !server_lost_ ? 0 : 1;
   }
 };
 }
@@ -2178,8 +2285,24 @@ int main(int argc, char **argv) {
       std::cout<<encode(OperatorSettings::declarations())<<'\n';
       return 0;
     }
+    aii::voice::disable_crash_dumps();
+    enum class Mode { Single, ModelServer, Session } mode = Mode::Single;
+    if(argc==2 && std::string(argv[1])=="--model-server") { mode=Mode::ModelServer; argc=1; }
+    else if(argc==2 && std::string(argv[1])=="--session") { mode=Mode::Session; argc=1; }
+    {
+#ifdef _WIN32
+      char* snapshot=nullptr; size_t length=0;
+      if(_dupenv_s(&snapshot,&length,"AII_VOICE_LOG_CODES_ONLY")) throw std::runtime_error("cannot read AII_VOICE_LOG_CODES_ONLY");
+      std::unique_ptr<char,decltype(&std::free)> owned(snapshot,std::free);
+      const char* codes=owned.get();
+#else
+      const char* codes=std::getenv("AII_VOICE_LOG_CODES_ONLY");
+#endif
+      codes_only_log=mode==Mode::Session||(codes&&std::string(codes)=="1");
+    }
     aii::voice::watch_carrier_liveness();
     const int wire = protocol_stdout();
+    require(mode==Mode::Single || argc==1,"a mode reads the installed profile");
     std::optional<InstalledProfile> installed;
     std::array<char*,11> pointers{};
     if(argc==1) {
@@ -2202,22 +2325,63 @@ int main(int argc, char **argv) {
     aii::voice::SnapshotBridge uid;
     uid.limits(aii::voice::WorkerLimits::from_environment());
     std::string policy,previous;
+    const auto read_policy=[](const std::string& path) {
+      std::ifstream f(std::filesystem::u8path(path),std::ios::binary);require(bool(f),"UID policy unavailable");
+      char data[4097];f.read(data,sizeof data);const auto n=f.gcount();
+      require(f.eof()&&n>0&&n<=4096,"UID policy byte/read bound");return std::string(data,size_t(n));
+    };
+    if(mode==Mode::ModelServer) {
+      const auto control=aii::voice::inherited_ends("AII_MODEL_CONTROL_FD","AII_MODEL_CONTROL_IN","AII_MODEL_CONTROL_OUT");
+      if(argc>=11) {
+        policy=read_policy(argv[10]);
+        if(!installed->previous_uid_policy.empty())previous=read_policy(installed->previous_uid_policy);
+      }
+      const auto ready_line=[](void* to,const aii_voice_readiness* r) {
+        auto details=object(),message=object();
+        put(details,"models_loaded",number(r->models_loaded));put(details,"accelerator",string(r->accelerator));
+        put(details,"probe_ms",number(r->probe_ms));put(message,"model_server_ready",std::move(details));
+        const auto line=encode(message)+"\n";
+        const int fd=*static_cast<int*>(to);size_t at=0;
+        while(at<line.size()) {
+#ifdef _WIN32
+          const auto n=_write(fd,line.data()+at,unsigned(line.size()-at));
+#else
+          const auto n=::write(fd,line.data()+at,line.size()-at);
+#endif
+          if(n<=0)break;at+=size_t(n);
+        }
+      };
+      int wire_fd=wire;
+      core(aii_voice_model_server_run(&paths,argv[8],argc>=11?argv[9]:nullptr,
+          policy.empty()?nullptr:policy.data(),policy.size(),
+          installed&&!installed->asr_execution.empty()?installed->asr_execution.c_str():nullptr,
+          previous.empty()?nullptr:previous.data(),previous.size(),uint32_t(uid.limits().warm_probe.count()),
+          uint32_t(uid.limits().retire.count()),installed->max_sessions,uint32_t(uid.limits().session_open.count()),
+          ready_line,&wire_fd,control.first,control.second,&error),error);
+      return 0;
+    }
 #ifdef AII_WITH_UID
     if(argc>=11) {
-      const auto read_policy=[](const std::string& path) {
-        std::ifstream f(std::filesystem::u8path(path),std::ios::binary);require(bool(f),"UID policy unavailable");
-        char data[4097];f.read(data,sizeof data);const auto n=f.gcount();
-        require(f.eof()&&n>0&&n<=4096,"UID policy byte/read bound");return std::string(data,size_t(n));
-      };
       policy=read_policy(argv[10]);
       const auto previous_path=installed?installed->previous_uid_policy:argc==12?std::string(argv[11]):std::string{};
       if(!previous_path.empty())previous=read_policy(previous_path);
+      if(mode==Mode::Session) {
+        const auto channel=aii::voice::inherited_ends(nullptr,"AII_MODEL_CHANNEL_IN","AII_MODEL_CHANNEL_OUT");
+        core(aii_voice_models_load_channel(channel.first,channel.second,argv[3],
+          policy.data(),policy.size(),aii::voice::SnapshotBridge::callback,&uid,
+          previous.empty()?nullptr:previous.data(),previous.size(),&models,&error),error);
+      } else
       core(aii_voice_models_load_uid_policies(&paths,argv[8],argv[9],policy.data(),policy.size(),
         aii::voice::SnapshotBridge::callback,&uid,
         installed&&!installed->asr_execution.empty()?installed->asr_execution.c_str():nullptr,
         previous.empty()?nullptr:previous.data(),previous.size(),&models,&error),error);
     } else
 #endif
+    if(mode==Mode::Session) {
+      const auto channel=aii::voice::inherited_ends(nullptr,"AII_MODEL_CHANNEL_IN","AII_MODEL_CHANNEL_OUT");
+      core(aii_voice_models_load_channel(channel.first,channel.second,argv[3],
+          nullptr,0,nullptr,nullptr,nullptr,0,&models,&error),error);
+    } else
     if(argc==9)core(aii_voice_models_load_with_backend(&paths,argv[8],&models,&error),error);
     else core(aii_voice_models_load(&paths, &models, &error), error);
     core(aii_voice_models_warm_within(models, uint32_t(uid.limits().warm_probe.count()), &ready, &error), error);
@@ -2233,7 +2397,10 @@ int main(int argc, char **argv) {
     return result;
 #endif
   } catch (const std::exception &e) {
-    log_line(std::string("native voice worker: ") + e.what());
+    if (codes_only_log && identity_data_seen)
+      log_line("native voice worker: ended by a fault after a session opened; in engine mode its words are withheld");
+    else
+      log_line(std::string("native voice worker: ") + e.what());
 #ifdef _WIN32
     aii::voice::wire::end_process(1);
 #else

@@ -2,7 +2,9 @@
 #include "../../native_uid/enrollment.h"
 #include "../vendor/picosha2/picosha2.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #ifdef _WIN32
 #include <windows.h>
@@ -32,9 +34,28 @@ std::string label_for(const aii::uid::SpeakerBucket& bucket,const aii::uid::Snap
   const auto* named=enrolled?aii::uid::bound_enrollment(bucket,*enrolled):nullptr;
   return named&&!named->label.empty()?named->label:"unknown";
 }
-Json projection(const aii::uid::SpeakerRegistry& registry,const aii::uid::Snapshot* enrolled=nullptr) {
+std::string civil_day(uint64_t days) {
+  const long long z=static_cast<long long>(days)+719468,era=z/146097;
+  const unsigned doe=static_cast<unsigned>(z-era*146097);
+  const unsigned yoe=(doe-doe/1460+doe/36524-doe/146096)/365;
+  const unsigned doy=doe-(365*yoe+yoe/4-yoe/100),mp=(5*doy+2)/153;
+  const unsigned d=doy-(153*mp+2)/5+1,m=mp<10?mp+3:mp-9;
+  const long long y=static_cast<long long>(yoe)+era*400+(m<=2?1:0);
+  char out[32];std::snprintf(out,sizeof out,"%04lld-%02u-%02u",y,m,d);return out;
+}
+uint64_t system_today() {
+  const auto since=std::chrono::system_clock::now().time_since_epoch();
+  const auto hours=std::chrono::duration_cast<std::chrono::hours>(since).count();
+  return hours<0?0:static_cast<uint64_t>(hours)/24;
+}
+Json projection(const aii::uid::SpeakerRegistry& registry,const aii::uid::Snapshot* enrolled=nullptr,
+    const std::optional<SpeakerRetention>& retention=std::nullopt,const aii::uid::HeardDays& heard={}) {
   auto out=object(),rows=own(cJSON_CreateArray());
   put(out,"registry_revision",string(std::to_string(registry.revision)));
+  if(retention) {
+    put(out,"anonymous_profiles",string(retention->anonymous_profiles?"on":"off"));
+    put(out,"anonymous_expiry_days",number(retention->expiry_days));
+  }
   for(const auto& bucket:registry.buckets) {
     auto row=object();put(row,"speaker_uuid",string(bucket.uuid));
     put(row,"canonical_uuid",string(aii::uid::canonical_speaker(registry,bucket.uuid)));
@@ -59,6 +80,9 @@ Json projection(const aii::uid::SpeakerRegistry& registry,const aii::uid::Snapsh
     }
     put(row,"display_label",string(label_for(bucket,enrolled)));
     if(bucket.enrollment)put(row,"enrollment_id",string(bucket.enrollment->id));
+    if(const auto day=heard.find(bucket.uuid);day!=heard.end())put(row,"heard_on",string(civil_day(day->second)));
+    if(retention)
+      if(const auto day=aii::uid::expiry_day(registry,bucket,heard,retention->expiry_days,enrolled))put(row,"expires_on",string(civil_day(*day)));
     if(!bucket.associations.empty()) {
       put(row,"external_id",string(bucket.associations.back().external_id));
     }
@@ -129,12 +153,84 @@ aii::uid::Snapshot SpeakerRegistryStore::read_enrolled() {
     throw;
   }
 }
-Json SpeakerRegistryStore::project(const std::string& raw) {
+Json SpeakerRegistryStore::project(const std::string& raw,const std::vector<std::string>& expired) {
   const auto registry=aii::uid::read_registry(raw,policy_for(raw));
+  const auto retention=retention_now();
+  aii::uid::HeardDays heard;
+  if(retention){std::string stored;bool none=false;heard=load_heard(stored,none);}
+  auto out=null();
   if(std::any_of(registry.buckets.begin(),registry.buckets.end(),[](const auto& b){return b.enrollment.has_value();})) {
-    const auto enrolled=read_enrolled();return projection(registry,&enrolled);
+    const auto enrolled=read_enrolled();out=projection(registry,&enrolled,retention,heard);
+  } else out=projection(registry,nullptr,retention,heard);
+  if(!expired.empty()) {
+    auto gone=own(cJSON_CreateArray());
+    for(const auto& id:expired){auto value=string(id);require(cJSON_AddItemToArray(gone.get(),value.get()),"speaker list allocation");value.release();}
+    put(out,"expired_speaker_uuids",std::move(gone));
   }
-  return projection(registry);
+  return out;
+}
+std::optional<SpeakerRetention> SpeakerRegistryStore::retention_now() {
+  std::lock_guard<std::mutex> lock(retention_mutex_);return retention_;
+}
+uint64_t SpeakerRegistryStore::today() {
+  std::function<uint64_t()> clock;
+  {std::lock_guard<std::mutex> lock(retention_mutex_);clock=today_;}
+  return clock?clock():system_today();
+}
+std::string SpeakerRegistryStore::expire(const std::string& raw,bool& absent,const aii::uid::PolicyDocument& bound,
+    bool observed,std::vector<std::string>* expired,const aii::uid::Snapshot* known) {
+  const auto rule=retention_now();
+  if(!rule||absent)return raw;
+  const auto registry=aii::uid::read_registry(raw,bound);
+  std::optional<aii::uid::Snapshot> enrolled;
+  const aii::uid::Snapshot* look=known;
+  if(!look&&std::any_of(registry.buckets.begin(),registry.buckets.end(),[](const auto& b){return b.enrollment.has_value();})) {
+    try{enrolled=read_enrolled();look=&*enrolled;}catch(const std::exception&){}
+  }
+  std::string stored;bool none=false;
+  const auto heard=load_heard(stored,none);
+  const auto pass=aii::uid::expire_unenrolled(raw,bound,heard,today(),rule->expiry_days,look);
+  if(pass.registry.document!=raw) {
+    if(observed) {
+      try{publish_observed(raw,pass.registry,absent);}catch(const StorageLate&){publication_kept_=false;throw;}
+    } else publish(raw,pass.registry,absent);
+    absent=false;
+  }
+  save_heard(stored,none,pass.heard,observed);
+  if(expired)*expired=pass.expired;
+  if(!pass.expired.empty()) {
+    std::function<void(size_t)> said;
+    {std::lock_guard<std::mutex> lock(retention_mutex_);said=said_;}
+    if(said)said(pass.expired.size());
+  }
+  return pass.registry.document;
+}
+aii::uid::HeardDays SpeakerRegistryStore::load_heard(std::string& raw,bool& absent) {
+  absent=false;raw=bridge_.read(&absent,SnapshotBridge::Store::SpeakerHeard);
+  if(absent)return {};
+  try{return aii::uid::read_heard(raw);}
+  catch(const StorageLate&){throw;}
+  catch(const std::exception&){return {};}
+}
+void SpeakerRegistryStore::save_heard(const std::string& raw,bool absent,const aii::uid::HeardDays& heard,bool observed) {
+  const auto candidate=aii::uid::write_heard(heard);
+  if((!absent&&candidate==raw)||(absent&&heard.empty()))return;
+  const auto write=[&]{
+    auto receipt=bridge_.publish(candidate,absent?"":picosha2::hash256_hex_string(raw),absent,
+        picosha2::hash256_hex_string(random_uuid()),SnapshotBridge::Store::SpeakerHeard);
+    require(flag(field(receipt.get(),"durable"))&&flag(field(receipt.get(),"readback_verified")),"speaker heard days durability unresolved");
+  };
+  if(!observed){write();return;}
+  try{write();}catch(const std::exception&){}
+}
+void SpeakerRegistryStore::heard_now(const aii::uid::SpeakerRegistry& registry,const std::string& uuid,const aii::uid::Snapshot* enrolled) {
+  const auto rule=retention_now();
+  if(!rule||!rule->anonymous_profiles)return;
+  try {
+    std::string stored;bool none=false;
+    const auto heard=load_heard(stored,none);
+    save_heard(stored,none,aii::uid::heard_speaker(registry,heard,uuid,today(),enrolled),true);
+  } catch(const std::exception&) {}
 }
 void SpeakerRegistryStore::publish(const std::string& base,const aii::uid::RegistryChange& change,bool absent) {
   if(base==change.document)return;
@@ -181,6 +277,10 @@ void SpeakerRegistryStore::finish_kept() {
   }
 }
 Json SpeakerRegistryStore::observe(const aii_voice_capture* evidence,uint64_t session,uint64_t utterance) {
+  if(checking_) {
+    auto out=object();put(out,"outcome",string("unavailable"));put(out,"reason",string("session_is_a_check"));
+    put(out,"used_for_permissions",boolean(false));return out;
+  }
   std::unique_lock<std::mutex> lock(mutex_);
   publication_kept_=false;
   Json out=null();
@@ -209,14 +309,19 @@ Json SpeakerRegistryStore::observe_now(const aii_voice_capture* evidence,uint64_
     sample=aii::uid::Sample{evidence->pcm_sha256,vector};
   }
   const auto enrolled=sample?std::optional<aii::uid::Snapshot>(read_enrolled()):std::nullopt;
-  bool absent=false;const auto raw=read(absent);
+  bool absent=false;auto raw=read(absent);
   const auto& bound=policy_for(raw);
+  const auto rule=retention_now();
+  const bool anonymous=!rule||rule->anonymous_profiles;
+  if(!anonymous)admissions_.clear();
+  raw=expire(raw,absent,bound,true,nullptr,enrolled?&*enrolled:nullptr);
   if(bound.policy.fingerprint!=policy_.policy.fingerprint)
     return unresolved("speaker_registry_policy_upgrade_required");
   const auto registry=aii::uid::read_registry(raw,bound);
   if(sample) {
     const auto enrolled_match=aii::uid::identify(*enrolled,enrolled->policy,sample->embedding,policy_.policy.embedding_binding);
-    const auto anonymous_match=aii::uid::identify(aii::uid::anonymous_matching_profiles(registry),policy_.policy,sample->embedding,policy_.policy.embedding_binding);
+    const auto gallery=anonymous?aii::uid::anonymous_matching_profiles(registry):aii::uid::Snapshot{policy_.policy,0,{}};
+    const auto anonymous_match=aii::uid::identify(gallery,policy_.policy,sample->embedding,policy_.policy.embedding_binding);
     const auto margin=policy_.policy.minimum_margin;
     const bool cross_close=enrolled_match.score && anonymous_match.score &&
       std::abs(*enrolled_match.score-*anonymous_match.score)<margin;
@@ -266,6 +371,7 @@ Json SpeakerRegistryStore::observe_now(const aii_voice_capture* evidence,uint64_
       std::string label="unknown";
       for(const auto& b:registry.buckets)if(b.uuid==id)label=label_for(b,&*enrolled);
       put(out,"display_label",string(label));
+      heard_now(registry,anonymous_match.speaker_id,&*enrolled);
       return out;
     }
     if(enrolled_match.outcome=="ambiguous" || anonymous_match.outcome=="ambiguous" ||
@@ -274,6 +380,7 @@ Json SpeakerRegistryStore::observe_now(const aii_voice_capture* evidence,uint64_
     if(enrolled_match.score && *enrolled_match.score>=enrolled->policy.threshold-margin)
       return unresolved("enrolled_profile_nearby");
   }
+  if(sample && !anonymous)return unresolved("anonymous_profiles_off");
   const auto id=random_uuid();
   auto change=aii::uid::observe_speaker(raw,policy_,registry.revision,id,sample);
   if(change.reason=="speaker_profile_pending" && sample) {
@@ -311,6 +418,7 @@ Json SpeakerRegistryStore::observe_now(const aii_voice_capture* evidence,uint64_
     put(out,"match",std::move(match));
   }
   const auto next=aii::uid::read_registry(change.document,policy_);
+  if(change.continuity=="new_profile"&&!change.uuid.empty())heard_now(next,change.uuid,enrolled?&*enrolled:nullptr);
   if(!change.uuid.empty()) {
     std::string label="unknown";
     for(const auto& b:next.buckets)if(b.uuid==change.uuid)label=label_for(b,enrolled?&*enrolled:nullptr);
@@ -321,23 +429,29 @@ Json SpeakerRegistryStore::observe_now(const aii_voice_capture* evidence,uint64_
 Json SpeakerRegistryStore::list() {
   std::unique_lock<std::mutex> lock(mutex_,std::try_to_lock);require(lock.owns_lock(),"speaker registry busy");
   admissions_.expire();
-  bool absent=false;const auto raw=read(absent);
-  auto out=project(raw);
+  bool absent=false;auto raw=read(absent);
+  std::vector<std::string> expired;
+  raw=expire(raw,absent,policy_for(raw),false,&expired);
+  auto out=project(raw,expired);
   put(out,"policy_upgrade_required",boolean(policy_for(raw).policy.fingerprint!=policy_.policy.fingerprint));
   return out;
 }
 Json SpeakerRegistryStore::associate(uint64_t revision,const std::string& uuid,const std::string& label,const std::string& id) {
   std::unique_lock<std::mutex> lock(mutex_,std::try_to_lock);require(lock.owns_lock(),"speaker registry busy");
-  bool absent=false;const auto raw=read(absent);
+  bool absent=false;auto raw=read(absent);
   const auto& bound=policy_for(raw);
+  std::vector<std::string> expired;
+  raw=expire(raw,absent,bound,false,&expired);
   const auto change=aii::uid::associate_speaker(raw,bound,revision,uuid,label,id);
   publish(raw,change,absent);
-  return project(change.document);
+  return project(change.document,expired);
 }
 Json SpeakerRegistryStore::forget(uint64_t revision,const std::string& uuid) {
   std::unique_lock<std::mutex> lock(mutex_,std::try_to_lock);require(lock.owns_lock(),"speaker registry busy");
-  bool absent=false;const auto raw=read(absent);
+  bool absent=false;auto raw=read(absent);
   const auto& bound=policy_for(raw);
+  std::vector<std::string> expired;
+  raw=expire(raw,absent,bound,false,&expired);
   const auto registry=aii::uid::read_registry(raw,bound);
   for(const auto& b:registry.buckets)if(b.uuid==uuid&&b.enrollment) {
     const auto enrolled=read_enrolled();
@@ -346,12 +460,14 @@ Json SpeakerRegistryStore::forget(uint64_t revision,const std::string& uuid) {
   }
   const auto change=aii::uid::forget_speaker(raw,bound,revision,uuid);
   publish(raw,change,absent);
-  return project(change.document);
+  return project(change.document,expired);
 }
 Json SpeakerRegistryStore::link(uint64_t revision,const std::string& source,const std::string& target) {
   std::unique_lock<std::mutex> lock(mutex_,std::try_to_lock);require(lock.owns_lock(),"speaker registry busy");
-  bool absent=false;const auto raw=read(absent);
+  bool absent=false;auto raw=read(absent);
   const auto& bound=policy_for(raw);
+  std::vector<std::string> expired;
+  raw=expire(raw,absent,bound,false,&expired);
   if(source!=target) {
     const auto registry=aii::uid::read_registry(raw,bound);
     std::optional<aii::uid::Snapshot> enrolled;
@@ -366,7 +482,7 @@ Json SpeakerRegistryStore::link(uint64_t revision,const std::string& source,cons
   }
   const auto change=aii::uid::link_speaker(raw,bound,revision,source,target);
   publish(raw,change,absent);
-  return project(change.document);
+  return project(change.document,expired);
 }
 Json SpeakerRegistryStore::upgrade_policy() {
   std::unique_lock<std::mutex> lock(mutex_,std::try_to_lock);require(lock.owns_lock(),"speaker registry busy");

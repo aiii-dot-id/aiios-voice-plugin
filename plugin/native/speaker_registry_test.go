@@ -5,6 +5,7 @@ import (
 	"github.com/aiii-dot-id/aii-plugin-sdk/pkg/aiiosdk"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSpeakerRegistryCompleteListFitsDeclaredBudget(t *testing.T) {
@@ -109,5 +110,25 @@ func TestSpeakerLinkIsDiscoverableAndRequiresExactConfirmedArguments(t *testing.
 	}
 	if !found {
 		t.Fatal("link absent from discovery")
+	}
+}
+
+func TestSpeakerHeardDaysAreAFileBesideTheRegistry(t *testing.T) {
+	q := snapshotQuery{settingsQuery: settingsQuery{ID: 1, SessionID: "s"}, Resource: "speaker_heard"}
+	if !q.valid() || q.target() != speakerHeardPath || q.target() == speakerRegistryPath || q.limit() != snapshotPageBytes {
+		t.Fatal("heard days resource not bounded beside the registry", q.target(), q.limit())
+	}
+	upload := strings.Repeat("a", 64)
+	q.Action, q.Upload, q.Data = "stage", upload, "e30="
+	if !q.valid() || q.target() != "uid/.heard-"+upload+".pending" {
+		t.Fatal("heard days stage path", q.target())
+	}
+	size := int64(16)
+	old := "2000-01-01T00:00:00Z"
+	if !expiredVoiceStage("uid", recordingEntry{Name: ".heard-" + upload + ".pending", Size: &size, Modified: old}, time.Now()) {
+		t.Fatal("an abandoned heard days stage is not pruned")
+	}
+	if expiredVoiceStage("uid", recordingEntry{Name: "speakers-heard.json", Size: &size, Modified: old}, time.Now()) {
+		t.Fatal("the heard days themselves were taken for a stage")
 	}
 }

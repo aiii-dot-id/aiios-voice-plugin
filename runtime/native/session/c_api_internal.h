@@ -1,6 +1,7 @@
 #pragma once
 #include "c_api.h"
 #include "session.h"
+#include "admission.h"
 namespace aii::voice {
 struct ModelOwner {
   virtual ~ModelOwner() = default;
@@ -27,6 +28,9 @@ struct ModelOwner {
   }
   virtual aii_voice_readiness warm() { throw std::runtime_error("model owner has no readiness implementation"); }
   virtual std::string execution_info() { return R"({"scope":"unspecified model owner","hardware_execution_verified":false})"; }
+  virtual bool lost() { return false; }
+  virtual Admission::Answer admit() { return {true, 0, 1}; }
+  virtual void release() {}
 };
 aii_voice_models* wrap_models(std::unique_ptr<ModelOwner>);
 aii_voice_result load_native_models(const aii_voice_paths*,const char* tts_backend,

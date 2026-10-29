@@ -49,4 +49,6 @@ func inheritAudio(cmd *exec.Cmd) (func(), error) {
 	return cleanup, nil
 }
 
+func adoptWorker(*exec.Cmd) error { return nil }
+
 func killWorker(cmd *exec.Cmd) error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

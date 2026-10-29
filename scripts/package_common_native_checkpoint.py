@@ -3,10 +3,13 @@ require_assertions()
 import argparse,hashlib,json,os,shutil,subprocess,tarfile
 from pathlib import Path
 from scripts.build_plugin_carrier import SDK_SOURCE,PIN
+from scripts import go_toolchain
 from scripts.package_native_runtime import refuse_interpreter_profile,verify
-ROOT=Path(__file__).resolve().parents[1];GO='/usr/local/go1.27/bin/go'
+ROOT=Path(__file__).resolve().parents[1];GO=str(go_toolchain.default_go())
 SPEAKER_OPERATIONS={'speaker.enroll','speaker.list','speaker.remove','speaker.reset',
-                    'speaker.discard_capture','speaker.upgrade_policy','speaker.buckets','speaker.associate','speaker.forget','speaker.link'}
+                    'speaker.discard_capture','speaker.upgrade_policy','speaker.buckets','speaker.associate','speaker.forget','speaker.link',
+                    'speaker.recovery_list','speaker.recovery_delete'}
+SPEAKER_READS=('speaker.list','speaker.buckets','speaker.recovery_list')
 VOCABULARY_OPERATIONS={'vocabulary.list','vocabulary.correct','vocabulary.forget'}
 
 def enrollment_interfaces(descriptors):
@@ -16,11 +19,11 @@ def enrollment_interfaces(descriptors):
     speaker=[n for n in ids if n.startswith('speaker.')]
     recording=[n for n in ids if n.startswith('recording.')]
     vocabulary=[n for n in ids if n.startswith('vocabulary.')]
-    if len(speech)!=8 or set(speaker)!=SPEAKER_OPERATIONS or set(recording)!={'recording.record','recording.status','recording.list','recording.delete','recording.prune'} or set(vocabulary)!=VOCABULARY_OPERATIONS or len(ids)!=26:
+    if len(speech)!=8 or set(speaker)!=SPEAKER_OPERATIONS or set(recording)!={'recording.record','recording.status','recording.list','recording.delete','recording.prune'} or set(vocabulary)!=VOCABULARY_OPERATIONS or len(ids)!=28:
         raise ValueError('incomplete guided enrollment interface')
     for descriptor in descriptors:
         if descriptor['id'] in SPEAKER_OPERATIONS:
-            if descriptor.get('operator_confirms',False)!=(descriptor['id'] not in ('speaker.list','speaker.buckets')):
+            if descriptor.get('operator_confirms',False)!=(descriptor['id'] not in SPEAKER_READS):
                 raise ValueError('speaker confirmation declaration differs')
         if descriptor['id'] in VOCABULARY_OPERATIONS and descriptor.get('operator_confirms',False)!=(descriptor['id']!='vocabulary.list'):
             raise ValueError('vocabulary confirmation declaration differs')
@@ -107,7 +110,7 @@ def main():
       'settings':decls,'models':models,'runtimes':[{'variant_id':variant,'url':'https://checkpoint.invalid/runtime/'+variant+'-cp1.tar.gz',**{k:declaration[k] for k in ('sha256','size','installed_bytes','files','inventory_sha256')}}]}
     shutil.copyfile(carrier,a.out/'aii-voice-t3');(a.out/'aii-voice-t3').chmod(0o755)
     desc=subprocess.run([str(carrier)],env={'PATH':'','AIISDK_DESCRIBE':'1'},capture_output=True,check=True,timeout=10)
-    descriptors=json.loads(desc.stdout);assert not desc.stderr and len(descriptors)==26
+    descriptors=json.loads(desc.stdout);assert not desc.stderr and len(descriptors)==28
     (a.out/'descriptors.json').write_bytes(desc.stdout)
     schema_files={}
     schema_root=a.schema_root.resolve() if a.schema_root else ROOT/'plugin/native'

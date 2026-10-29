@@ -179,6 +179,8 @@ func (c *carrier) readSettingsBounded(parent context.Context, q settingsQuery, b
 		}
 	} else if reply.Values, err = settingsValues(result); err != nil {
 		reply.Reason = settingsNotSettings
+	} else {
+		c.keepRule(reply.Values)
 	}
 	if err == nil && corrections != nil {
 		reply.Corrections = corrections(ctx)

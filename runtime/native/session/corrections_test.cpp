@@ -80,8 +80,8 @@ int main(int argc,char** argv) {
     require(list.correct({"Kwin","Quinn"}) && list.correct({"mapel","Maple"}) && list.correct({"say of","Quinn"}),"rules were not taken");
     require(!list.correct({"Kwin","Quinn"}),"an unchanged rule reported a change");
 
-    auto r=list.apply("Kwin, tell Mapel that KWIN's notes are done. Kwintet and maplenna stay.");
-    require(r.text=="Quinn, tell Maple that Quinn's notes are done. Kwintet and maplenna stay." && r.applied==3,"whole-word correction differs");
+    auto r=list.apply("Kwin, tell Mapel that KWIN's notes are done. Kwintet and mapella stay.");
+    require(r.text=="Quinn, tell Maple that Quinn's notes are done. Kwintet and mapella stay." && r.applied==3,"whole-word correction differs");
     r=list.apply("That is Mapel\xe2\x80\x99s idea");
     require(r.text=="That is Maple\xe2\x80\x99s idea" && r.applied==1,"typographic possessive lost");
     r=list.apply("I say of course. Say, of all people. say of");

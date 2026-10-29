@@ -218,6 +218,13 @@ func (l limits) playbackReport() time.Duration { return l.AudioWrite + l.Control
 
 func (l limits) ownStorage() time.Duration { return 2*l.HostRead + 2*l.HostWrite }
 
+func (l limits) retentionRead() time.Duration {
+	if left := hostInvokeAllowance - hostAnswerMargin - l.storageOperation(); left < l.HostRead {
+		return left
+	}
+	return l.HostRead
+}
+
 type workerLimits struct {
 	ExchangeReadMS     int64 `json:"exchange_read_ms"`
 	ExchangeWriteMS    int64 `json:"exchange_write_ms"`

@@ -43,7 +43,8 @@ def test_carrier_declares_playback_control_without_starting_a_worker(carrier):
         )
     }
     expected |= {"speaker." + name for name in
-                 ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget", "link")}
+                 ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget", "link",
+                  "recovery_list", "recovery_delete")}
     expected |= {"recording.record", "recording.status", "recording.list", "recording.delete", "recording.prune"}
     expected |= {"vocabulary.list", "vocabulary.correct", "vocabulary.forget"}
     assert set(operations) == expected and len(operations) == len(expected)
@@ -60,7 +61,7 @@ def test_proof_binds_the_actual_carrier_declaration(carrier):
             for field in ("input", "output"):
                 schema = json.loads((root / row[field]).read_text())
                 assert schema["type"] == "object"
-                takes_nothing = field == "input" and (row["id"].startswith("recording.") or row["id"] == "vocabulary.list")
+                takes_nothing = field == "input" and (row["id"].startswith("recording.") or row["id"] in ("vocabulary.list", "speaker.recovery_list"))
                 if not takes_nothing:
                     assert schema["properties"], "empty, undiscoverable callable contract"
 

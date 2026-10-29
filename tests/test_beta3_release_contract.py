@@ -44,7 +44,8 @@ def example():
             'settings': [{'key': k, 'scope': 'speaking' if k.startswith('tts_') else 'hearing',
                           'default': 'unchanged', 'type': 'enum', 'values': ['unchanged']}
                          for k in ('stt_language', 'turn_pause_ms', 'vad_threshold', 'tts_voice',
-                                   'tts_language', 'tts_temperature', 'tts_seed', 'capture_limit_minutes')]}
+                                   'tts_language', 'tts_temperature', 'tts_seed', 'capture_limit_minutes',
+                                   'anonymous_profiles', 'anonymous_expiry_days')]}
 
 
 def measured(cfg, runtime='e' * 64):
@@ -72,7 +73,8 @@ def test_declarations_preserve_runtime_choices_and_settings():
         assert operator_setup(variant['platform']) == {}
     for setting in cfg['settings']:
         assert setting['scope'] == ('hearing' if setting['key'] in
-                                        ('stt_language', 'turn_pause_ms', 'vad_threshold', 'capture_limit_minutes') else 'speaking')
+                                        ('stt_language', 'turn_pause_ms', 'vad_threshold', 'capture_limit_minutes',
+                                         'anonymous_profiles', 'anonymous_expiry_days') else 'speaking')
     assert cfg == prior
 
 
@@ -557,12 +559,19 @@ def test_packaged_runtime_json_keeps_the_staged_extent(tmp_path, fault):
 
 
 def test_authoring_sdk_must_read_the_extent_at_its_floor(tmp_path):
+    vectors = tmp_path / 'sdk/vectors/runtime_extent.json'
+    vectors.parent.mkdir(parents=True)
+    vectors.write_bytes(EXTENT_VECTORS.read_bytes())
+    assembly.authoring_extent_floor(tmp_path / 'sdk')
+    for text in ('{"floor": "0.1.15"}', '{"floor": ""}', '{}', '[]', 'not json'):
+        vectors.write_text(text)
+        with pytest.raises(ValueError, match='does not read runtime extents'):
+            assembly.authoring_extent_floor(tmp_path / 'sdk')
+    vectors.unlink()
+    with pytest.raises(ValueError, match='does not read runtime extents'):
+        assembly.authoring_extent_floor(tmp_path / 'sdk')
     source = tmp_path / 'sdk/pkg/aiiospkg/runtime.go'
     source.parent.mkdir(parents=True)
     source.write_text('package aiiospkg\n\nconst RuntimeExtentMinHost = "0.1.14"\n')
-    assembly.authoring_extent_floor(tmp_path / 'sdk')
-    for text in ('package aiiospkg\n', 'const RuntimeExtentMinHost = "0.1.15"\n',
-                 '// const RuntimeExtentMinHost = "0.1.14"\n'):
-        source.write_text(text)
-        with pytest.raises(ValueError, match='does not read runtime extents'):
-            assembly.authoring_extent_floor(tmp_path / 'sdk')
+    with pytest.raises(ValueError, match='does not read runtime extents'):
+        assembly.authoring_extent_floor(tmp_path / 'sdk')

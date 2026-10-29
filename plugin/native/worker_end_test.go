@@ -17,15 +17,18 @@ import (
 func TestNoDurationIsTypedInThisCarrierButThoseListedWithAReason(t *testing.T) {
 	listed := map[string][]string{
 
-		"enrollment.go": {"10*time.Minute", "time.Minute"},
-		"vocabulary.go": {"10*time.Minute", "time.Minute"},
-		"waveform.go":   {"10*time.Minute", "time.Minute"},
+		"enrollment.go":        {"10*time.Minute", "time.Minute"},
+		"vocabulary.go":        {"10*time.Minute", "time.Minute"},
+		"waveform.go":          {"10*time.Minute", "time.Minute"},
+		"recovery_archives.go": {"10*time.Minute", "time.Minute"},
 
 		"main.go": {"10 * time.Millisecond"},
 
 		"recording_store.go": {"2 * time.Minute"},
 
 		"runtime_inventory.go": {"2*time.Second"},
+
+		"engine_core.go": {"time.Millisecond"},
 	}
 	typed := regexp.MustCompile(`(\d+\s*\*\s*)?\btime\.(Hour|Minute|Second|Millisecond|Microsecond|Nanosecond)\b`)
 	files, err := filepath.Glob("*.go")

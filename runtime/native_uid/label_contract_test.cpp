@@ -28,7 +28,7 @@ int main(int argc,char** argv){try{
   auto p=read_policy("{\"calibration_sha256\":\""+std::string(64,'a')+"\",\"embedding_binding\":\""+std::string(64,'b')+"\",\"minimum_enrollment_samples\":1,\"minimum_margin\":0.105,\"threshold\":0.56}");
   const auto blank=write_snapshot({p.policy,0,{}},p);Vector v(256);v[0]=1;
   const auto admitted=[&](const std::string& label){
-    try{(void)prepare_enrollment(blank,p,"speaker-1",label,{{std::string(64,'c'),v}},p.policy.embedding_binding);return true;}
+    try{(void)prepare_enrollment(blank,p,"alex",label,{{std::string(64,'c'),v}},p.policy.embedding_binding);return true;}
     catch(const std::invalid_argument&){return false;}catch(const Refused&){return false;}
   };
   unsigned count=0;
@@ -72,7 +72,7 @@ int main(int argc,char** argv){try{
   for(uint32_t one:{0x200cu,0x200du})for(uint32_t two:{0x200cu,0x200du}){
     judge("a"+utf8(one)+utf8(two)+"b",false,one,"beside another joiner");judge("a"+utf8(one)+"b"+utf8(two)+"c",true,one,"with a letter before the next joiner");
   }
-  Snapshot stored{p.policy,1,{{"speaker-1","a\xe2\x80\xae" "b",{{std::string(64,'c'),v}}}}};
+  Snapshot stored{p.policy,1,{{"alex","a\xe2\x80\xae" "b",{{std::string(64,'c'),v}}}}};
   require(read_snapshot(write_snapshot(stored,p),p).speakers[0].label=="a\xe2\x80\xae" "b","a stored label became unreadable");
   std::cout<<count<<" native enrollment label vectors and "<<cases<<" placed code points PASS\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

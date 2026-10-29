@@ -44,7 +44,7 @@ def test_examples_and_public_attributions_remain_valid():
 
 
 def test_assistant_and_noreply_attribution_is_refused():
-    for address in ('noreply'+'@'+'example'+'.invalid', 'automation'+'@'+'example'+'.com', 'maintainer'+'@'+'users.noreply.github.com'):
+    for address in ('noreply'+'@'+'anthropic'+'.com', 'codex'+'@'+'openai'+'.com', 'maintainer'+'@'+'users.noreply.github.com'):
         assert (1, 'unapproved-email') in scan_text('contact '+address), address
     assert (1, 'attribution-trailer') in scan_text('Co-Authored-'+'By: automated tool')
     assert (2, 'attribution-trailer') in scan_text('subject\n  co-authored-'+'by: someone')

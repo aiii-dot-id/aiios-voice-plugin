@@ -110,16 +110,23 @@ def runtime_extent(decls, minimum_host_version):
             raise ValueError('runtime ' + name + ': depth ' + str(depth) + ' is outside 1..' + str(MAX_RUNTIME_DEPTH))
 
 
-def authoring_extent_floor(sdk):
+def authoring_extent_floor(sdk, go=None):
     """The verified authoring SDK must read the extent at the same floor.
 
     An SDK that predates the fields refuses them as unknown members; one
-    with another floor would disagree with this assembler's rule.
+    with another floor would disagree with this assembler's rule. The floor
+    is read where the SDK publishes it for every reader, its own vector file
+    (vectors/runtime_extent.json, "floor"), and not out of its Go source.
     """
-    source = (Path(sdk) / 'pkg/aiiospkg/runtime.go').read_text()
-    if re.findall(r'^const RuntimeExtentMinHost = "([^"]*)"$', source, re.M) != [RUNTIME_EXTENT_MIN_HOST]:
+    from scripts.sdk_vectors import vector
+    try:
+        floor = json.loads(vector(sdk, 'runtime_extent.json', go) or b'null').get('floor')
+    except (OSError, ValueError, AttributeError):
+        floor = None
+    if floor != RUNTIME_EXTENT_MIN_HOST:
         raise ValueError('authoring SDK does not read runtime extents from host ' + RUNTIME_EXTENT_MIN_HOST
-                         + '; use one that declares RuntimeExtentMinHost (the SDK runtime-extent contract)')
+                         + ' (its vectors/runtime_extent.json says ' + repr(floor)
+                         + '); use aii-plugin-sdk f8b4961 or later')
 
 
 def accelerator_domains(variant):
@@ -321,7 +328,8 @@ def release_contract(cfg, minimum_host_version, measured=None):
         raise ValueError('minimum host ' + minimum_host_version + ' predates the documented '
                          'component-selection floor ' + COMPONENT_SELECTION_MIN_HOST)
     keys = {'stt_language', 'turn_pause_ms', 'capture_limit_minutes', 'vad_threshold',
-            'tts_voice', 'tts_language', 'tts_temperature', 'tts_seed'}
+            'tts_voice', 'tts_language', 'tts_temperature', 'tts_seed',
+            'anonymous_profiles', 'anonymous_expiry_days'}
     variants = cfg['variants']
     names = [v['variant_id'] for v in variants]
     if ({v['platform'] for v in variants} != PLATFORMS or not 3 <= len(variants) <= 64
@@ -791,7 +799,7 @@ def main():
     authoring_sdk = a.authoring_sdk.resolve()
     sdk_archive = a.authoring_sdk_archive.resolve()
     sdk_inventory = verify_sdk_source(authoring_sdk, sdk_archive, a.authoring_sdk_archive_sha256)
-    authoring_extent_floor(authoring_sdk)
+    authoring_extent_floor(authoring_sdk, a.go.resolve())
     cfg,index,notice_rows=authoring_template(template,a.author_template_sha256)
     uid_files={}
     if any((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):
@@ -848,6 +856,8 @@ def main():
     expected_schemas={'schemas/speaker-'+name+'.input.json' for name in
         ('list','enroll','remove','reset','discard_capture','upgrade_policy','buckets','associate','link','forget')}
     expected_schemas.update(('schemas/speaker.output.json','schemas/speaker-buckets.output.json'))
+    expected_schemas.update('schemas/speaker-'+name+'.'+part+'.json' for name in ('recovery_list','recovery_delete')
+                            for part in ('input','output'))
     expected_schemas.update(('schemas/recording-record.input.json',
                              'schemas/recording-status.input.json',
                              'schemas/recording-list.input.json',
@@ -913,6 +923,15 @@ def main():
     emit(author/'notices/INDEX.json',index)
     notice_rows.append(dict(path='notices/INDEX.json',size=(author/'notices/INDEX.json').stat().st_size,sha256=sha(author/'notices/INDEX.json')))
     for name in schemas:put(author/name,(ROOT/'plugin/native'/name).read_bytes())
+    checks=ROOT/'plugin/native/validation.json'
+    if checks.is_file():
+        put(author/'validation.json',checks.read_bytes())
+        for check in json.loads(checks.read_text())['checks']:
+            audio=(check.get('input') or {}).get('audio')
+            if audio:
+                if Path(audio).is_absolute() or '..' in Path(audio).parts:raise ValueError('a check names a recording outside the plugin: '+audio)
+                put(author/audio,(ROOT/'plugin/native'/audio).read_bytes())
+        cfg['validation_file']='validation.json'
     emit(author/'plugin.json',cfg);emit(author/'descriptors.json',descriptors)
     emit(author/'release-notices.json',notice_rows)
     env={**os.environ,'GOTOOLCHAIN':'local','GOWORK':'off','GOPROXY':'off','GOSUMDB':'off',

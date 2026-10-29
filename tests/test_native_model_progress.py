@@ -1,5 +1,6 @@
 import os
 import queue
+import subprocess
 import time
 from pathlib import Path
 
@@ -26,6 +27,7 @@ def test_stalled_models_fault_and_retire_before_recovery(tmp_path):
             w.event('synthesis_start', label)
         cooperative, stubborn = workers
         started = time.monotonic()
+        refused_while_retiring = False
         while time.monotonic() - started < 40:
             if stubborn.p.poll() is not None:
                 break
@@ -34,11 +36,18 @@ def test_stalled_models_fault_and_retire_before_recovery(tmp_path):
                     try:
                         state = w.status(label)
                     except (BrokenPipeError, OSError, queue.Empty):
-                        assert w is stubborn and w.p.poll() == 72
+                        assert w.p.wait(timeout=5) == (72 if w is stubborn else 1)
                         break
                     assert state['lifecycle'] in ('open', 'draining', 'failed')
+                    if w is stubborn and state['lifecycle'] != 'open' and not refused_while_retiring:
+                        w.counter += 1
+                        w.send({'id': w.counter, 'operation': 'speech.session.open', 'arguments': {'session_id': 'late'}})
+                        row = w.replies.get(timeout=2)
+                        assert row['id'] == w.counter and 'retiring' in str(row.get('error')), row
+                        refused_while_retiring = True
             time.sleep(.2)
         assert stubborn.p.poll() == 72, 'unretired inference must end the process nonzero'
+        assert refused_while_retiring, 'the retiring worker was never asked to serve, so its refusal was not shown'
         assert time.monotonic() - started >= 29, 'failed before the production call deadline'
         failure = cooperative.event('failure', 'cooperative')
         assert failure['reason'] == ('synthesis model call exceeded progress deadline: 30000 ms, the time the '
@@ -47,20 +56,10 @@ def test_stalled_models_fault_and_retire_before_recovery(tmp_path):
         assert not stubborn.frames and not cooperative.frames
         assert not any(e['type'] == 'session_end' for e in stubborn.events)
         assert not any(e.get('resources_released') for e in stubborn.events)
-        open_output(cooperative, 'recovery')
-        result, _ = cooperative.call('synthesize', session_id='recovery', synthesis_id='fresh', text='Recovery.')
-        cooperative.event('synthesis_end', 'recovery')
-        due = time.monotonic() + 5
-        stream = result['output_stream']
-        while not any(f['stream'] == stream and f['kind'] == 3 for f in cooperative.frames):
-            assert time.monotonic() < due
-            time.sleep(.002)
-        count = sum(f['samples'] for f in cooperative.frames if f['stream'] == stream)
-        assert count == 960
-        cooperative.call('playback_report', session_id='recovery', synthesis_id='fresh',
-                         output_stream=stream, rendered_samples=count, terminal=True)
-        cooperative.call('close', session_id='recovery', mode='drain')
-        assert cooperative.event('session_end', 'recovery')['status'] == 'completed'
+        try:
+            assert cooperative.p.wait(timeout=15) == 1, 'the worker that retired after an engine failure exited 0'
+        except subprocess.TimeoutExpired:
+            raise AssertionError('the worker went on serving after its model call passed its deadline')
     finally:
         for index, w in enumerate(workers):
             if w.p.poll() is None and index == 1:

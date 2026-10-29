@@ -4,7 +4,6 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,6 +12,7 @@ from runtime.plugin_engine.audio import END, PCM, Frame, read_frame
 from runtime.plugin_engine.mlx import ResidentMLXModels
 from runtime.plugin_engine.session import Refused, ResidentEngine
 from runtime.speech_output.mlx_backend import MLXTTSBackend
+from scripts.build_plugin_carrier import SDK_SOURCE
 from tests.plugin_models import Models, open_args
 
 
@@ -60,8 +60,10 @@ def parts(request):
 
 
 def test_sdk_audio_vectors_and_truncation():
-    source = Path(__file__).resolve().parent / "vectors/audio_framing.json"
-    data = json.loads(source.read_text())
+    from scripts.sdk_vectors import vector
+    raw = vector(SDK_SOURCE, "audio_framing.json")
+    assert raw is not None, "the pinned SDK's audio framing vectors cannot be read; see plugin/NATIVE_BUILD.md"
+    data = json.loads(raw)
     encoded = bytes.fromhex(data["hex"])
     reader = io.BytesIO(encoded)
     frames = [read_frame(reader) for _ in data["frames"]]

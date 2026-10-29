@@ -6,6 +6,7 @@ import sys
 import threading
 from pathlib import Path
 
+from scripts.inherited_descriptors import inherit
 from tests.plugin_models import open_args
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ class Worker:
     def __init__(self, **env):
         audio_in, self.audio_in = os.pipe()
         self.audio_out, audio_out = os.pipe()
+        named, handover = inherit(audio_in, audio_out)
         self.child = subprocess.Popen(
             [sys.executable, "-m", "tests.plugin_worker_fixture"],
             cwd=ROOT,
@@ -23,11 +25,11 @@ class Worker:
             stderr=subprocess.PIPE,
             env={
                 **os.environ,
-                "AII_AUDIO_IN_FD": str(audio_in),
-                "AII_AUDIO_OUT_FD": str(audio_out),
+                "AII_AUDIO_IN_FD": named[0],
+                "AII_AUDIO_OUT_FD": named[1],
                 **env,
             },
-            pass_fds=(audio_in, audio_out),
+            **handover,
         )
         os.close(audio_in)
         os.close(audio_out)

@@ -88,7 +88,7 @@ def test_nothing_is_written_where_a_digest_does_not_hold(made, fault):
 
 def test_the_trees_own_files_hold_for_both_layouts():
     windows, macos = tool.replacements("windows"), tool.replacements("macos")
-    assert len(windows) == 6 and len(macos) == 7 and set(windows) < set(macos)
+    assert len(windows) == 7 and len(macos) == 8 and set(windows) < set(macos)
     assert all(path.startswith(("external/ggml/", "include/engine/", "src/")) for path in macos)
     assert sorted(set(macos) - set(windows)) == ["src/models/pocket_tts/acoustic_model.cpp"]
     decoder = "src/models/pocket_tts/mimi_decoder.cpp"
@@ -100,7 +100,7 @@ def test_the_trees_own_files_hold_for_both_layouts():
 def test_the_linux_layout_is_the_five_the_three_kept_and_the_three_derived():
     linux, macos = tool.replacements("linux"), tool.replacements("macos")
     derived = sorted(path for path, (_, data, _) in linux.items() if data is None)
-    assert len(linux) == 11 and derived == sorted(tool.path_shim().PINS)
+    assert len(linux) == 12 and derived == sorted(tool.path_shim().PINS)
     assert sorted(set(linux) - set(macos)) == sorted(derived + ["src/models/pocket_tts/session.cpp"])
     assert all(linux[path][1] != macos[path][1] for path in
                ("src/models/pocket_tts/mimi_decoder.cpp", "src/models/pocket_tts/acoustic_model.cpp"))

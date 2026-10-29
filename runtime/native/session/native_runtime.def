@@ -13,6 +13,11 @@ EXPORTS
     aii_voice_models_prefer
     aii_voice_models_warm
     aii_voice_models_warm_within
+    aii_voice_model_server_run
+    aii_voice_models_load_channel
+    aii_voice_models_lost
+    aii_voice_models_admit
+    aii_voice_models_admission_release
     aii_voice_models_release
   aii_voice_open
   aii_voice_open_session

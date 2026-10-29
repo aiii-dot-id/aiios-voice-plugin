@@ -16,12 +16,22 @@ func TestRealReadinessCannotBeSpawnOrPlaceholder(t *testing.T) {
 		`{"readiness":{"models_loaded":3,"accelerator":"fake","probe_ms":1}}`,
 		`{"readiness":{"models_loaded":4,"accelerator":"cpu","probe_ms":23}}`,
 		`{"identity":{"backend":"native-common-cpu"},"readiness":{"models_loaded":4,"accelerator":"cpu","probe_ms":0}}`,
-		`{"readiness":{"models_loaded":4,"accelerator":"cpu_vulkan","probe_ms":23}}`,
-		`{"identity":{"backend":"native-common-cpu"},"readiness":{"models_loaded":4,"accelerator":"cpu_vulkan","probe_ms":23}}`,
-		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":3,"accelerator":"cpu_vulkan","probe_ms":23}}`,
-		`{"identity":{"backend":"native-common-metal"},"readiness":{"models_loaded":3,"accelerator":"cpu_metal","probe_ms":23}}`,
-		`{"identity":{"backend":"native-common-cpu"},"readiness":{"models_loaded":5,"accelerator":"cpu_metal","probe_ms":23}}`,
-		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu_metal","probe_ms":23}}`,
+		`{"readiness":{"models_loaded":4,"accelerator":"cpu+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-cpu"},"readiness":{"models_loaded":4,"accelerator":"cpu+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":3,"accelerator":"cpu+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-metal"},"readiness":{"models_loaded":3,"accelerator":"cpu+metal","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-cpu"},"readiness":{"models_loaded":5,"accelerator":"cpu+metal","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+metal","probe_ms":23}}`,
+
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu_vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-metal"},"readiness":{"models_loaded":5,"accelerator":"cpu_metal","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cuda+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+vulkan+cuda","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+vulkan+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+npu+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+cuda","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-cpu"},"readiness":{"models_loaded":5,"accelerator":"cpu+cuda+vulkan","probe_ms":23}}`,
+		`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+","probe_ms":23}}`,
 
 		`{"readiness":{"models_loaded":3,"accelerator":"cuda","probe_ms":23}}`,
 		`{"readiness":{"models_loaded":3,"accelerator":"directml","probe_ms":23}}`,
@@ -44,14 +54,19 @@ func TestRealReadinessCannotBeSpawnOrPlaceholder(t *testing.T) {
 	if err != nil || r == nil || r.Accelerator != "cpu" || r.ModelsLoaded != 4 || r.ProbeMS != 23 {
 		t.Fatalf("explicit CPU native correctness profile: %+v %v", r, err)
 	}
-	r, err = readinessReport(json.RawMessage(`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":4,"accelerator":"cpu_vulkan","probe_ms":23}}`), warm)
-	if err != nil || r == nil || r.Accelerator != "cpu_vulkan" || r.ModelsLoaded != 4 {
+	r, err = readinessReport(json.RawMessage(`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":4,"accelerator":"cpu+vulkan","probe_ms":23}}`), warm)
+	if err != nil || r == nil || r.Accelerator != "cpu+vulkan" || r.ModelsLoaded != 4 {
 		t.Fatalf("explicit native Vulkan TTS and CPU recognition profile: %+v %v", r, err)
 	}
+
+	r, err = readinessReport(json.RawMessage(`{"identity":{"backend":"native-common-vulkan"},"readiness":{"models_loaded":5,"accelerator":"cpu+cuda+vulkan","probe_ms":23}}`), warm)
+	if err != nil || r == nil || r.Accelerator != "cpu+cuda+vulkan" {
+		t.Fatalf("registered CUDA recognition and Vulkan speech: %+v %v", r, err)
+	}
 	for _, count := range []int{4, 5} {
-		input, _ := json.Marshal(map[string]any{"identity": map[string]string{"backend": "native-common-metal"}, "readiness": map[string]any{"models_loaded": count, "accelerator": "cpu_metal", "probe_ms": 23}})
+		input, _ := json.Marshal(map[string]any{"identity": map[string]string{"backend": "native-common-metal"}, "readiness": map[string]any{"models_loaded": count, "accelerator": "cpu+metal", "probe_ms": 23}})
 		r, err = readinessReport(input, warm)
-		if err != nil || r == nil || r.Accelerator != "cpu_metal" || r.ModelsLoaded != count {
+		if err != nil || r == nil || r.Accelerator != "cpu+metal" || r.ModelsLoaded != count {
 			t.Fatalf("explicit native Metal TTS and CPU acoustic profile: %+v %v", r, err)
 		}
 	}

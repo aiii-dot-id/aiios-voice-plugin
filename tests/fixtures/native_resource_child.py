@@ -66,7 +66,7 @@ def child(source, output, profile, arm):
     try:
         host = SDKHost(cfg, worker_command=[p['worker'], *p['model_paths'], p['backend'], p['uid_model'], p['policy']])
         result['readiness'] = host.readiness()
-        assert result['readiness']['models_loaded'] == 5 and result['readiness']['accelerator'] == 'cpu_vulkan'
+        assert result['readiness']['models_loaded'] == 5 and result['readiness']['accelerator'] == 'cpu+vulkan'
         result['loaded_worker'] = observe(host.process.pid, Path(p['worker']).parent, 'windows', p['libraries'])
         save()
         def broker():

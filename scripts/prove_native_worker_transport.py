@@ -97,7 +97,9 @@ class Worker:
     def configure(self,q,pause):self.send({'settings_reply':{**q,'values':{'turn_pause_ms':pause}}})
     def status(self,sid):return self.call('status',session_id=sid)[0]
     def close(self):
-        if not self.p.stdin.closed:self.p.stdin.close()
+        if not self.p.stdin.closed:
+            try:self.p.stdin.close()
+            except OSError:pass
         try:code=self.p.wait(timeout=8)
         except subprocess.TimeoutExpired:self.p.kill();self.p.wait(timeout=3);raise
         finally:
@@ -189,7 +191,8 @@ def main():
         new=w.open('new',False);w.configure(old,320);assert w.status('new')['lifecycle']=='opening';w.configure(new,1000)
         ready=w.event('session_ready','new')
         expected={'turn_pause_ms':1000,'vad_threshold':.5,'tts_voice':'alba','tts_language':'en',
-                  'stt_language':'en','tts_temperature':struct.unpack('f',struct.pack('f',.3))[0],'tts_seed':20260908,'capture_limit_minutes':30}
+                  'stt_language':'en','tts_temperature':struct.unpack('f',struct.pack('f',.3))[0],'tts_seed':20260908,'capture_limit_minutes':30,
+                  'anonymous_profiles':'on','anonymous_expiry_days':30}
         observed=w.status('new')['operator_settings']
         assert abs(observed['tts_temperature']-expected['tts_temperature'])<1e-12
         expected['tts_temperature']=observed['tts_temperature']

@@ -17,6 +17,8 @@ FILES = {
     'transformer_blocks.cpp': ('src/framework/modules/attention/transformer_blocks.cpp', 'engine'),
     'flow_lm.cpp': ('src/models/pocket_tts/flow_lm.cpp', 'engine'),
     'graph_common.h': ('src/models/pocket_tts/graph_common.h', 'engine'),
+    # From beta.12 (engine design, shared weights): one upload of a model's weights per device.
+    'backend_weights.cpp': ('src/models/pocket_tts/backend_weights.cpp', 'engine'),
 }
 OWNER = {'engine': ('Copyright 2026 ShugoAI LLC', 'Apache License, Version 2.0'),
          'ggml': ('Copyright (c) 2023-2026 The ggml authors', 'MIT License')}
@@ -28,7 +30,8 @@ SWITCH = {'graph_common.h': ('GeluApproximation::Tanh', 'GeluApproximation::Tanh
           'transformer_blocks.cpp': ('config_.gelu_approximation', 'gelu_approximation'),
           'transformer_blocks.h': ('GeluApproximation gelu_approximation', 'gelu_approximation'),
           'vec.h': ('GGML_GELU_FORCE_F32', 'GGML_GELU_FORCE_F32'),
-          'flow_lm.cpp': ('graph_common::pocket_transformer_config', 'pocket_transformer_config')}
+          'flow_lm.cpp': ('graph_common::pocket_transformer_config', 'pocket_transformer_config'),
+          'backend_weights.cpp': ('loaded_weights()[key].lock()', 'keeps, weakly, the weights it uploaded')}
 
 
 def entries(notice):

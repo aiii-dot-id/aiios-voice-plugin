@@ -19,6 +19,19 @@ TOPOLOGY = json.loads((VECTORS / 'session_topology.json').read_text())
 HOST = json.loads((VECTORS / 'host_session_opens.json').read_text())
 
 
+def queued_bytes(pipe):
+    if os.name == 'nt':
+        import _winapi
+        import msvcrt
+        available, _ = _winapi.PeekNamedPipe(msvcrt.get_osfhandle(pipe.fileno()), 0)
+        return available
+    import fcntl
+    import termios
+    queued = array.array('i', [0])
+    fcntl.ioctl(pipe.fileno(), termios.FIONREAD, queued)
+    return queued[0]
+
+
 def retire(w):
     if w.p.poll() is None and w.events and not any(e['type'] == 'failure' for e in w.events):
         sid = w.events[-1]['session_id']
@@ -199,23 +212,19 @@ def admission(case):
 
 def test_topology_vectors_are_the_hosts_file_as_it_was_taken():
     taken = HOST['taken_from']
-    raw = (VECTORS / 'session_topology.json').read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == taken['public_copy']['sha256']
-    def payload_digest(data):
-        value = json.loads(data)
-        value.pop('description', None)
-        encoded = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
-        return hashlib.sha256(encoded).hexdigest()
-    assert payload_digest(raw) == taken['public_copy']['payload_sha256']
+    copy = hashlib.sha256((VECTORS / 'session_topology.json').read_bytes()).hexdigest()
+    assert copy == taken['host']['topology_vectors_sha256'], \
+        'session_topology.json is not the bytes taken from the host (' + taken['host']['release'] + ')'
     root = Path(__file__).resolve().parents[1]
     pin = json.loads((root / 'plugin/sdk-source.json').read_text())
-    assert pin['revision'] == taken['kit']['pinned_revision'], 'SDK pin moved: recompare topology vectors'
-    assert taken['kit']['pinned_topology_vectors_sha256'] == taken['host']['topology_vectors_sha256']
+    assert pin['revision'] == taken['kit']['pinned_revision'], \
+        'the kit pin moved: compare its vectors/session_topology.json with the copy again and record the result'
+    assert taken['kit']['pinned_topology_vectors_sha256'] == copy, \
+        "the pinned kit's copy is stated as other bytes than the host's: say what differs, or take the host's"
     kit = root / pin['source'] / taken['kit']['topology_vectors']
     if kit.is_file():
-        upstream = kit.read_bytes()
-        assert hashlib.sha256(upstream).hexdigest() == taken['kit']['pinned_topology_vectors_sha256']
-        assert payload_digest(upstream) == taken['public_copy']['payload_sha256']
+        assert hashlib.sha256(kit.read_bytes()).hexdigest() == taken['kit']['pinned_topology_vectors_sha256'], \
+            "the pinned kit's vectors/session_topology.json is not the bytes stated for it"
     canonical = [c for c in TOPOLOGY['open_requests'] if c.get('canonical')]
     assert sorted((c['topology'], declared(c['arguments']) or 0) for c in canonical) == \
         [('duplex', 1), ('output_only', 0)]
@@ -580,10 +589,7 @@ def test_a_stalled_audio_write_retires_the_worker_at_the_tables_time(tmp_path, m
         retire(w)
 
 
-@pytest.mark.skipif(os.name == 'nt', reason='counts bytes queued in a POSIX pipe')
 def test_a_stalled_control_write_retires_the_worker_at_the_tables_time(tmp_path):
-    import fcntl
-    import termios
     stated = 1.2
     w = Worker(Path(os.environ['AII_NATIVE_INTERRUPT_FIXTURE']), tmp_path / 'worker',
                limits=limits(control_write_ms=int(stated * 1000)))
@@ -591,24 +597,23 @@ def test_a_stalled_control_write_retires_the_worker_at_the_tables_time(tmp_path)
     try:
         open_output(w, 'stalled')
         w.reading.clear()
-        queued, held, grew = array.array('i', [0]), -1, time.monotonic()
+        held, grew = -1, time.monotonic()
         deadline = grew + 10
         while True:
             assert time.monotonic() < deadline, 'the worker neither filled the control channel nor retired'
             try:
                 post(w, 'status', session_id='stalled')
-            except (BrokenPipeError, ValueError):
+            except (OSError, ValueError):
                 pass
             try:
                 w.p.wait(timeout=.005 if time.monotonic() - grew < .05 else .05)
                 break
             except subprocess.TimeoutExpired:
                 pass
-            fcntl.ioctl(w.p.stdout.fileno(), termios.FIONREAD, queued)
-            if queued[0] != held:
-                held, grew = queued[0], time.monotonic()
+            if (queued := queued_bytes(w.p.stdout)) > held:
+                held, grew = queued, time.monotonic()
         after = time.monotonic() - grew
-        assert w.p.returncode == 1 and held >= 4096, (w.p.returncode, held)
+        assert w.p.returncode == 1 and held >= (1 if os.name == 'nt' else 4096), (w.p.returncode, held)
         assert stated - .15 <= after < 2.5, (
             f'the worker retired {after:.2f} s after its control write stalled; the table gives a write {stated} s')
         while os.read(w.p.stdout.fileno(), 65536):

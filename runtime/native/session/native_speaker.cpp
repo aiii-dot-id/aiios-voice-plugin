@@ -11,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <limits>
 
 namespace aii::voice {
@@ -33,40 +34,17 @@ std::string decision_json(const aii::uid::Decision& d,const aii::uid::Sample& sa
   return encode(j);
 }
 }
-struct NativeSpeaker::Impl {
-  AiiUid* model=nullptr;
-  aii::uid::Policy policy;
-  std::optional<aii::uid::Policy> previous;
-  ReadSnapshot read;
-  ObserveTrack observe;
-  ObserveTrackAt observe_at;
-  uint64_t session_epoch=0;
-  std::atomic<bool> cancelled{false};
-  std::atomic<uint64_t> active{0};
+struct SpeakerModel {
+  AiiUid* handle=nullptr;
+  std::mutex lane;
   uint64_t next=0;
-  aii::uid::SessionEvidence evidence;
-  Impl(aii::uid::Policy p,ReadSnapshot r,std::optional<aii::uid::Policy> old)
-      :policy(std::move(p)),previous(std::move(old)),read(std::move(r)) {}
-  const aii::uid::Policy& expected(const aii::uid::Snapshot& snapshot) const {
-    const auto& selected=previous&&snapshot.policy.fingerprint==previous->fingerprint?*previous:policy;
-    aii::uid::validate(snapshot,selected);return selected;
-  }
-  ~Impl(){aii_uid_destroy(model);}
+  ~SpeakerModel(){aii_uid_destroy(handle);}
 };
-NativeSpeaker::NativeSpeaker(const std::string& path,const std::string& backend,aii::uid::Policy policy,ReadSnapshot read,
-    std::optional<aii::uid::Policy> previous)
-    :p_(std::make_unique<Impl>(std::move(policy),std::move(read),std::move(previous))) {
+std::shared_ptr<SpeakerModel> load_speaker_model(const std::string& path,const std::string& backend,
+    const std::string& embedding_binding) {
   StartupSpan profile("load_uid");
-  if(!p_->read)throw std::invalid_argument("authoritative UID snapshot reader required");
-  aii::uid::validate({p_->policy,0,{}},p_->policy);
-  if(p_->previous) {
-    const auto& old=*p_->previous;aii::uid::validate({old,0,{}},old);
-    if(old.minimum_enrollment_samples!=3||p_->policy.minimum_enrollment_samples!=1||
-        old.embedding_binding!=p_->policy.embedding_binding||old.threshold!=p_->policy.threshold||
-        old.minimum_margin!=p_->policy.minimum_margin||old.calibration_sha256==p_->policy.calibration_sha256)
-      throw std::invalid_argument("previous UID policy is not a compatible explicit transition");
-  }
-  const auto& contract=aii::uid::model_contract(p_->policy.embedding_binding);
+  auto model=std::make_shared<SpeakerModel>();
+  const auto& contract=aii::uid::model_contract(embedding_binding);
 #ifdef AII_UID_NCNN
   if(backend=="ncnn-cpu"||backend=="ncnn-vulkan") {
     auto read_bound=[&](const char* name,size_t size) {
@@ -82,9 +60,9 @@ NativeSpeaker::NativeSpeaker(const std::string& path,const std::string& backend,
     aii::uid::verify_ncnn(contract,graph.size(),aii::platform::sha256(graph.data(),graph.size()),
                         weights.size(),aii::platform::sha256(weights.data(),weights.size()));
     char error[1024]={};
-    p_->model=aii_uid_create_ncnn(graph.data(),graph.size(),weights.data(),weights.size(),backend.c_str(),error,sizeof(error));
-    if(!p_->model)throw std::runtime_error(error);
-    return;
+    model->handle=aii_uid_create_ncnn(graph.data(),graph.size(),weights.data(),weights.size(),backend.c_str(),error,sizeof(error));
+    if(!model->handle)throw std::runtime_error(error);
+    return model;
   }
 #endif
   std::ifstream file(std::filesystem::u8path(path),std::ios::binary|std::ios::ate);
@@ -93,8 +71,89 @@ NativeSpeaker::NativeSpeaker(const std::string& path,const std::string& backend,
   file.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
   if(!file)throw std::invalid_argument("bound UID model short read");
   aii::uid::verify_model(contract,bytes.size(),aii::platform::sha256(bytes.data(),bytes.size()));
-  char error[1024]={};p_->model=aii_uid_create(bytes.data(),bytes.size(),backend.c_str(),error,sizeof(error));
-  if(!p_->model)throw std::runtime_error(error);
+  char error[1024]={};model->handle=aii_uid_create(bytes.data(),bytes.size(),backend.c_str(),error,sizeof(error));
+  if(!model->handle)throw std::runtime_error(error);
+  return model;
+}
+namespace {
+struct LocalEmbedder final:SpeakerEmbedder {
+  std::shared_ptr<SpeakerModel> model;
+  std::atomic<bool> cancelled{false};
+  std::atomic<uint64_t> active{0};
+  explicit LocalEmbedder(std::shared_ptr<SpeakerModel> m):model(std::move(m)) {
+    if(!model||!model->handle)throw std::invalid_argument("loaded speaker model required");
+  }
+  aii::uid::Vector embed(const std::vector<uint8_t>& pcm,size_t dimensions) override {
+    std::lock_guard<std::mutex> lane(model->lane);
+    if(model->next==std::numeric_limits<uint64_t>::max())throw std::runtime_error("UID generation exhausted");
+    const auto id=++model->next;active=id;
+    if(cancelled) {active=0;throw Cancelled("UID cancelled");}
+    aii::uid::Vector embedding(dimensions);char error[1024]={};
+    const auto rc=aii_uid_embed(model->handle,id,pcm.data(),pcm.size(),16000,embedding.data(),embedding.size(),error,sizeof(error));
+    active=0;
+    if(rc==3)throw Cancelled("UID cancelled");
+    if(rc)throw std::runtime_error(error);
+    return embedding;
+  }
+  void cancel() noexcept override {
+    cancelled=true;
+    const auto id=active.load();
+    if(id)(void)aii_uid_cancel_through(model->handle,id);
+  }
+  void resume() override {cancelled=false;}
+};
+}
+std::unique_ptr<SpeakerEmbedder> local_speaker_embedder(std::shared_ptr<SpeakerModel> model) {
+  return std::make_unique<LocalEmbedder>(std::move(model));
+}
+struct NativeSpeaker::Impl {
+  std::shared_ptr<SpeakerModel> model;
+  aii::uid::Policy policy;
+  std::optional<aii::uid::Policy> previous;
+  ReadSnapshot read;
+  ObserveTrack observe;
+  ObserveTrackAt observe_at;
+  uint64_t session_epoch=0;
+  std::unique_ptr<SpeakerEmbedder> embedder;
+  std::atomic<bool> cancelled{false};
+  aii::uid::SessionEvidence evidence;
+  Impl(aii::uid::Policy p,ReadSnapshot r,std::optional<aii::uid::Policy> old)
+      :policy(std::move(p)),previous(std::move(old)),read(std::move(r)) {}
+  const aii::uid::Policy& expected(const aii::uid::Snapshot& snapshot) const {
+    const auto& selected=previous&&snapshot.policy.fingerprint==previous->fingerprint?*previous:policy;
+    aii::uid::validate(snapshot,selected);return selected;
+  }
+  void validate() const {
+    if(!read)throw std::invalid_argument("authoritative UID snapshot reader required");
+    aii::uid::validate({policy,0,{}},policy);
+    if(previous) {
+      const auto& old=*previous;aii::uid::validate({old,0,{}},old);
+      if(old.minimum_enrollment_samples!=3||policy.minimum_enrollment_samples!=1||
+          old.embedding_binding!=policy.embedding_binding||old.threshold!=policy.threshold||
+          old.minimum_margin!=policy.minimum_margin||old.calibration_sha256==policy.calibration_sha256)
+        throw std::invalid_argument("previous UID policy is not a compatible explicit transition");
+    }
+  }
+};
+NativeSpeaker::NativeSpeaker(std::shared_ptr<SpeakerModel> model,aii::uid::Policy policy,ReadSnapshot read,
+    std::optional<aii::uid::Policy> previous)
+    :p_(std::make_unique<Impl>(std::move(policy),std::move(read),std::move(previous))) {
+  if(!model||!model->handle)throw std::invalid_argument("loaded speaker model required");
+  p_->validate();p_->model=std::move(model);p_->embedder=local_speaker_embedder(p_->model);
+}
+NativeSpeaker::NativeSpeaker(std::unique_ptr<SpeakerEmbedder> embedder,aii::uid::Policy policy,ReadSnapshot read,
+    std::optional<aii::uid::Policy> previous)
+    :p_(std::make_unique<Impl>(std::move(policy),std::move(read),std::move(previous))) {
+  if(!embedder)throw std::invalid_argument("speaker embedder required");
+  p_->validate();p_->embedder=std::move(embedder);
+}
+std::shared_ptr<SpeakerModel> NativeSpeaker::model() const {return p_->model;}
+NativeSpeaker::NativeSpeaker(const std::string& path,const std::string& backend,aii::uid::Policy policy,ReadSnapshot read,
+    std::optional<aii::uid::Policy> previous)
+    :p_(std::make_unique<Impl>(std::move(policy),std::move(read),std::move(previous))) {
+  p_->validate();
+  p_->model=load_speaker_model(path,backend,p_->policy.embedding_binding);
+  p_->embedder=local_speaker_embedder(p_->model);
 }
 NativeSpeaker::~NativeSpeaker()=default;
 void NativeSpeaker::track_observer(ObserveTrack observer) {
@@ -132,26 +191,29 @@ std::string NativeSpeaker::identify_track(uint64_t final,const std::vector<float
   return result;
 }
 void NativeSpeaker::warm() {
-  if(p_->next==UINT64_MAX)throw std::runtime_error("UID generation exhausted");
-  std::vector<uint8_t> pcm(64000);aii::uid::Vector v(aii::uid::embedding_dimensions(p_->policy.embedding_binding));char error[1024]={};
+  std::vector<uint8_t> pcm(64000);
   for(size_t i=0;i<pcm.size()/2;++i) {
     const int16_t value=int16_t(4096*(std::sin(.017*double(i))+std::sin(.039*double(i))));
     pcm[2*i]=uint8_t(uint16_t(value)&255);pcm[2*i+1]=uint8_t(uint16_t(value)>>8);
   }
-  const auto rc=aii_uid_embed(p_->model,++p_->next,pcm.data(),pcm.size(),16000,v.data(),v.size(),error,sizeof error);
-  if(rc)throw std::runtime_error(error);
+  const bool fenced=p_->cancelled;
+  if(fenced)p_->embedder->resume();
+  aii::uid::Vector v;
+  try {v=p_->embedder->embed(pcm,aii::uid::embedding_dimensions(p_->policy.embedding_binding));}
+  catch(...) {if(fenced)p_->embedder->cancel();throw;}
+  if(fenced)p_->embedder->cancel();
   double norm=0;for(double x:v){if(!std::isfinite(x))throw std::runtime_error("nonfinite warm UID");norm+=x*x;}
   if(std::abs(norm-1)>1e-6)throw std::runtime_error("invalid warm UID norm");
 }
+void NativeSpeaker::cancel_fence() noexcept {p_->cancelled=true;p_->embedder->cancel();}
 void NativeSpeaker::open() {
   if(p_->session_epoch==UINT64_MAX)throw std::runtime_error("speaker session epoch exhausted");
-  ++p_->session_epoch;p_->evidence.begin();p_->cancelled=false;
+  ++p_->session_epoch;p_->evidence.begin();p_->cancelled=false;p_->embedder->resume();
 }
 void NativeSpeaker::cancel() noexcept {
   p_->cancelled=true;
   p_->evidence.cancel();
-  const auto id=p_->active.load();
-  if(id)(void)aii_uid_cancel_through(p_->model,id);
+  p_->embedder->cancel();
 }
 aii::uid::Sample NativeSpeaker::recording(const std::vector<float>& pcm) {
   if(p_->cancelled)throw Cancelled("UID cancelled");
@@ -162,17 +224,9 @@ aii::uid::Sample NativeSpeaker::recording(const std::vector<float>& pcm) {
     const auto n=static_cast<int>(std::nearbyint(std::clamp(double(pcm[i])*32768.,-32768.,32767.)));
     bytes[2*i]=uint8_t(n&255);bytes[2*i+1]=uint8_t((uint32_t(n)>>8)&255);
   }
-  if(p_->next==std::numeric_limits<uint64_t>::max())throw std::runtime_error("UID generation exhausted");
-  const auto id=++p_->next;p_->active=id;
-  if(p_->cancelled) {p_->active=0;throw Cancelled("UID cancelled");}
-  aii::uid::Vector embedding(aii::uid::embedding_dimensions(p_->policy.embedding_binding));char error[1024]={};
-  const auto rc=aii_uid_embed(p_->model,id,bytes.data(),bytes.size(),16000,
-                            embedding.data(),embedding.size(),error,sizeof(error));
-  p_->active=0;
-  if(rc==3)throw Cancelled("UID cancelled");
-  if(rc)throw std::runtime_error(error);
+  auto embedding=p_->embedder->embed(bytes,aii::uid::embedding_dimensions(p_->policy.embedding_binding));
   if(p_->cancelled)throw Cancelled("UID cancelled");
-  return {picosha2::hash256_hex_string(bytes),embedding};
+  return {picosha2::hash256_hex_string(bytes),std::move(embedding)};
 }
 aii::uid::PreparedEnrollment NativeSpeaker::prepare_enrollment(const std::string& current,
     const aii::uid::PolicyDocument& policy,const std::string& speaker_id,
@@ -185,9 +239,9 @@ aii::uid::PreparedEnrollment NativeSpeaker::prepare_enrollment(const std::string
   return aii::uid::prepare_enrollment(current,policy,speaker_id,label,samples,p_->policy.embedding_binding);
 }
 aii::uid::Sample NativeSpeaker::prepare_capture(const std::vector<float>& pcm) {
-  p_->cancelled=false;
-  try {auto sample=recording(pcm);p_->cancelled=true;return sample;}
-  catch(...) {p_->cancelled=true;throw;}
+  p_->cancelled=false;p_->embedder->resume();
+  try {auto sample=recording(pcm);cancel_fence();return sample;}
+  catch(...) {cancel_fence();throw;}
 }
 std::vector<uint64_t> NativeSpeaker::enrollment_finals() {return p_->evidence.available();}
 aii::uid::PreparedEnrollment NativeSpeaker::prepare_selected(const std::string& current,

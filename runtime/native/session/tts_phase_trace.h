@@ -41,13 +41,18 @@ private:
   }
 public:
   TtsPhaseTrace() noexcept {
-    const char* flag = std::getenv("AII_VOICE_TTS_PHASE_TRACE");
-    enabled_ = flag && std::strcmp(flag, "1") == 0;
 #ifdef _WIN32
+    char* flag = nullptr;
+    size_t length = 0;
+    enabled_ = !_dupenv_s(&flag, &length, "AII_VOICE_TTS_PHASE_TRACE") && flag && std::strcmp(flag, "1") == 0;
+    std::free(flag);
     if (enabled_) {
       const auto module = GetModuleHandleW(L"native_pocket_resident.dll");
       if (module) query_ = reinterpret_cast<Query>(GetProcAddress(module, "nv_profile_snapshot"));
     }
+#else
+    const char* flag = std::getenv("AII_VOICE_TTS_PHASE_TRACE");
+    enabled_ = flag && std::strcmp(flag, "1") == 0;
 #endif
   }
   TtsPhaseTrace(bool enabled, Query query, FILE* sink) noexcept

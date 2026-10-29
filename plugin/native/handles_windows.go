@@ -33,7 +33,8 @@ func inheritAudio(cmd *exec.Cmd) (func(), error) {
 		handles = append(handles, dup)
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%d", name, dup))
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{AdditionalInheritedHandles: handles}
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{AdditionalInheritedHandles: handles, CreationFlags: createSuspended}
 	if err := ownWorkerTree(); err != nil {
 		cleanup()
 		return nil, err
@@ -42,14 +43,12 @@ func inheritAudio(cmd *exec.Cmd) (func(), error) {
 }
 
 func killWorker(_ *exec.Cmd) error {
-	if workerTreeJob == 0 {
+	if workerJob == 0 {
 		return fmt.Errorf("worker ownership job is missing; retirement unproven")
 	}
 
-	fmt.Fprintln(os.Stderr, "aii-voice-t3: forced worker-tree termination; carrier exits with its ownership job")
-	ok, _, err := syscall.NewLazyDLL("kernel32.dll").NewProc("TerminateJobObject").Call(uintptr(workerTreeJob), 73)
-	if ok == 0 {
-		return fmt.Errorf("terminate worker ownership job: %w", err)
+	if ok, _, err := kernel32.NewProc("TerminateJobObject").Call(uintptr(workerJob), 73); ok == 0 {
+		return fmt.Errorf("terminate worker job: %w", err)
 	}
-	return fmt.Errorf("worker-tree termination requested; host must observe retirement")
+	return nil
 }

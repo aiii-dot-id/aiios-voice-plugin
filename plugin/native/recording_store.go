@@ -85,7 +85,7 @@ func expiredVoiceStage(directory string, row recordingEntry, now time.Time) bool
 			strings.HasSuffix(row.Name, ".pending") && hexDigest(row.Name[1:65]) && *row.Size <= 1<<20
 	}
 	if directory == "uid" {
-		for _, prefix := range []string{".speakers-", ".enrollment-", ".captures-", ".recovery-", ".corrections-"} {
+		for _, prefix := range []string{".speakers-", ".heard-", ".enrollment-", ".captures-", ".recovery-", ".corrections-"} {
 			if len(row.Name) == len(prefix)+64+len(".pending") && strings.HasPrefix(row.Name, prefix) &&
 				strings.HasSuffix(row.Name, ".pending") && hexDigest(row.Name[len(prefix):len(prefix)+64]) && *row.Size <= 12<<20 {
 				return true
@@ -181,6 +181,9 @@ func (c *carrier) ownStorageCall(call func(context.Context) (any, error)) (any, 
 func (c *carrier) recordingStoreCall(ctx context.Context, session privateStorageCaller, op string, args aiiosdk.Object) (any, error) {
 	if op == "recording.prune" {
 		return pruneVoiceStages(ctx, session, time.Now().UTC())
+	}
+	if recoveryArchiveOperation(op) {
+		return recoveryArchiveCall(ctx, session, op, args)
 	}
 	const directory = "recordings"
 	if op == "recording.list" {

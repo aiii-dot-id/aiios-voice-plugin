@@ -9,6 +9,12 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <cstdio>
+#ifndef _WIN32
+#include <unistd.h>
+#else
+#include <windows.h>
+#endif
 namespace {
 std::string fixture_setting(const char *name) {
 #ifdef _WIN32
@@ -261,6 +267,24 @@ extern "C" aii_voice_result aii_voice_models_load_uid_policies(const aii_voice_p
     aii_voice_models **out, aii_voice_error *error) {
   if(!backend || std::string(backend)!="cpu")return AII_VOICE_INVALID;
   return aii_voice_models_load(p,out,error);
+}
+extern "C" aii_voice_result aii_voice_model_server_run(const aii_voice_paths *, const char *, const char *,
+    const char *, size_t, const char *, const char *, size_t, uint32_t, uint32_t, uint32_t, uint32_t, aii_voice_model_server_ready,
+    void *, intptr_t, intptr_t, aii_voice_error *error) {
+  if(error)std::snprintf(error->message,sizeof error->message,"%s","the fixture has no model server");
+  return AII_VOICE_INVALID;
+}
+extern "C" aii_voice_result aii_voice_models_load_channel(intptr_t channel, intptr_t channel_out, const char *, const char *,
+    size_t, aii_voice_snapshot_reader, void *, const char *, size_t, aii_voice_models **, aii_voice_error *error) {
+#ifndef _WIN32
+  if(channel>=0&&channel<=INT32_MAX)::close(int(channel));
+  if(channel_out>=0&&channel_out<=INT32_MAX&&channel_out!=channel)::close(int(channel_out));
+#else
+  if(channel>0)CloseHandle(reinterpret_cast<HANDLE>(channel));
+  if(channel_out>0&&channel_out!=channel)CloseHandle(reinterpret_cast<HANDLE>(channel_out));
+#endif
+  if(error)std::snprintf(error->message,sizeof error->message,"%s","the fixture has no model server");
+  return AII_VOICE_INVALID;
 }
 extern "C" aii_voice_result aii_voice_models_load_with_backend(const aii_voice_paths *p,
     const char *backend, aii_voice_models **out, aii_voice_error *error) {

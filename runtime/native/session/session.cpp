@@ -65,6 +65,7 @@ struct Session::Impl {
   std::deque<std::shared_ptr<Query>> queries;
   std::map<uint64_t,std::shared_ptr<Job>> jobs;
   std::shared_ptr<Job> current;
+  std::shared_ptr<Job> running;
   SpeechState speech;
   std::optional<SpeechSettings> next_speech;
   bool speech_pending=false;
@@ -218,6 +219,16 @@ struct Session::Impl {
       queued_output=0;
     }
     changed.notify_all(); cancel_models();
+  }
+  void retire_locked(Job& job) {
+    job.retired=true;
+    job.segments.clear();
+    if(!stopping) {
+      const auto end=job.fenced?job.delivered:job.generated;
+      job.audio.push_back(Audio{job.id,end,true,{}});
+      emit_locked(Event{0,0,job.id,0,end,job.cancelled?"synthesis_cancelled":"synthesis_end",""});
+      maybe_close_locked();
+    }
   }
   void maybe_close_locked() {
     if(!closing || (hearing && !input_done) || speaker_busy) return;
@@ -426,11 +437,11 @@ struct Session::Impl {
         for(unsigned char c:segment.track)if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='-'||c=='_'||c=='.'))
           throw std::runtime_error("recognizer track identifier");
         if(!segment.evidence_unavailable.empty()) {
-          const auto& reason=segment.evidence_unavailable;
-          if(!segment.evidence.empty() || (reason!="speaker_evidence_expired" &&
-             reason!="speaker_overlap_without_isolated_evidence" && reason!="speaker_activity_uncertain" &&
-             reason!="speaker_evidence_too_short" && reason!="speaker_activity_unavailable" &&
-             reason!="speaker_track_coverage_unverified" && reason!="speaker_separation_failed"))
+          const auto& unavailable=segment.evidence_unavailable;
+          if(!segment.evidence.empty() || (unavailable!="speaker_evidence_expired" &&
+             unavailable!="speaker_overlap_without_isolated_evidence" && unavailable!="speaker_activity_uncertain" &&
+             unavailable!="speaker_evidence_too_short" && unavailable!="speaker_activity_unavailable" &&
+             unavailable!="speaker_track_coverage_unverified" && unavailable!="speaker_separation_failed"))
             throw std::runtime_error("contradictory or unknown speaker evidence failure");
         }
         if(!segment.evidence.empty()) {
@@ -526,9 +537,9 @@ struct Session::Impl {
           block=std::move(blocks.front()); blocks.pop_front();
         }
         position+=block_size; valid_position+=block.valid;
-        const bool speech=block.probability>=settings.speech_threshold;
+        const bool voiced=block.probability>=settings.speech_threshold;
         preroll.push_back(block); if(preroll.size()>32) preroll.pop_front();
-        if(!active && speech) {
+        if(!active && voiced) {
           active=true; ++turn; silence=0; last.clear(); boundary=false;
           { std::lock_guard<std::mutex> lock(mutex); recognition_active=true; }
           uint64_t retained=0; for(const auto& b:preroll) retained+=b.valid;
@@ -554,10 +565,10 @@ struct Session::Impl {
           push(block);
         }
         if(active && !stopping) {
-          silence=speech?0:silence+block_size;
-          const auto decision=gate.poll(speech,silence,position);
+          silence=voiced?0:silence+block_size;
+          const auto decision=gate.poll(voiced,silence,position);
           if(gate.pending() && !boundary) boundary=true;
-          if(boundary && (speech || (!gate.pending() && decision==Gate::Decision::None))) {
+          if(boundary && (voiced || (!gate.pending() && decision==Gate::Decision::None))) {
             for(const auto& b:provisional) push(b);
             provisional.clear(); boundary=false;
           }
@@ -639,7 +650,7 @@ struct Session::Impl {
         std::unique_lock<std::mutex> lock(mutex);
         changed.wait(lock,[&]{return stopping || (current && !current->retired);});
         if(stopping) return;
-        job=current;
+        job=current; running=job;
       }
       try {
         take_speech(*job);
@@ -647,12 +658,13 @@ struct Session::Impl {
           { std::lock_guard<std::mutex> lock(mutex); if(stopping || job->cancelled) break; }
           const auto text=strip_text(part); if(text.empty())continue;
           model_call(SynthesisWork,[&]{tts.start(job->id,text);});
+          const bool silent=tts.silent();
           uint64_t segment_samples=0; bool natural=false;
           for(;;) {
             { std::lock_guard<std::mutex> lock(mutex); if(stopping || job->cancelled) break; }
             auto pcm=model_call(SynthesisWork,[&]{return tts.next();});
             if(pcm.empty()) {
-              if(!segment_samples)throw std::runtime_error("empty synthesis segment");
+              if(!segment_samples && !silent)throw std::runtime_error("empty synthesis segment");
               natural=true;break;
             }
             require(pcm.size()<=output_bound,"synthesis chunk exceeds bounded queue");
@@ -684,14 +696,8 @@ struct Session::Impl {
       }
       {
         std::lock_guard<std::mutex> lock(mutex);
-        job->retired=true;
-        job->segments.clear();
-        if(!stopping) {
-          const auto end=job->fenced?job->delivered:job->generated;
-          job->audio.push_back(Audio{job->id,end,true,{}});
-          emit_locked(Event{0,0,job->id,0,end,job->cancelled?"synthesis_cancelled":"synthesis_end",""});
-          maybe_close_locked();
-        }
+        retire_locked(*job);
+        running.reset();
       }
       changed.notify_all();
     }
@@ -753,7 +759,8 @@ void Session::synthesize(uint64_t generation,const std::string& text) {
   std::lock_guard<std::mutex> lock(p_->mutex);
   require(!p_->stopping && !p_->closing,"synthesis admission closed");
   require(generation>p_->last_generation && p_->jobs.size()<64,"new generation and unresolved-work capacity required");
-  require(!p_->current || p_->current->retired,"prior synthesis has not retired");
+  require(!p_->current || p_->current->retired || p_->current->cancelled,"prior synthesis has not retired");
+  if(p_->current && !p_->current->retired && p_->current!=p_->running) p_->retire_locked(*p_->current);
   auto j=std::make_shared<Job>(); j->id=generation;j->segments=std::move(parts);
   for(const auto& part:j->segments)j->segment_count+=!strip_text(part).empty();
   p_->emit_locked(Event{0,0,generation,0,0,"synthesis_start",""});

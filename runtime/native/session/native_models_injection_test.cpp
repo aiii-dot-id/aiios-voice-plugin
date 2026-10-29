@@ -16,7 +16,10 @@
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 int defaults=0, destroyed=0, live_vad=0, live_endpoint=0, live_tts=0;
@@ -36,6 +39,7 @@ struct Speech {
 };
 std::mutex speech_guard; std::deque<Speech> speech_models;
 std::atomic<int> speech_loads{0}, refuse_speech{0};
+std::atomic<int> speech_starts{0}, speech_chunk{0};
 struct Gate {
   std::mutex m; std::condition_variable cv; bool armed=false, reached=false, opened=false;
   void arm(){std::lock_guard<std::mutex> lock(m);armed=true;reached=opened=false;}
@@ -62,8 +66,8 @@ int nv_execution_info(void* p,char* out,size_t n) noexcept {
   return written>0&&size_t(written)<n?0:-1;
 }
 #endif
-AiiAsr* aii_asr_create(const char*,const float*,size_t,int,char* error,size_t){
-  ++defaults;std::strcpy(error,"default ASR must be explicit");return nullptr;
+AiiAsr* aii_asr_create(const char*,const float*,size_t,int,char* error,size_t capacity){
+  ++defaults;std::snprintf(error,capacity,"%s","default ASR must be explicit");return nullptr;
 }
 void aii_asr_destroy(AiiAsr*){}
 AiiAsr* aii_asr_create_configured(const char* p,const float* f,size_t n,int t,const char*,char* e,size_t c){return aii_asr_create(p,f,n,t,e,c);}
@@ -75,8 +79,8 @@ int aii_asr_finish(AiiAsrStream*,char*,size_t){return 0;}
 int aii_asr_step(AiiAsrStream*,char*,size_t){return 0;}
 int aii_asr_result(AiiAsrStream*,char*,size_t,char*,size_t){return 0;}
 void aii_asr_cancel(AiiAsrStream*){}
-AiiVad* aii_vad_create(const void*,size_t,char* error,size_t){
-  if(refuse_vad){std::strcpy(error,"VAD admission failed");return nullptr;}
+AiiVad* aii_vad_create(const void*,size_t,char* error,size_t capacity){
+  if(refuse_vad){std::snprintf(error,capacity,"%s","VAD admission failed");return nullptr;}
   ++live_vad;return reinterpret_cast<AiiVad*>(new int(1));
 }
 int aii_vad_feed(AiiVad*,const float*,size_t,float* out,char*,size_t){*out=.1f;return 0;}
@@ -95,13 +99,89 @@ void* nv_create_bound(const char*,const char*,const char*,int,char* error,size_t
   ++live_tts;return &speech_models.emplace_back(++speech_loads);
 }
 int nv_configure_voice(void*,const char*,float,char*,size_t)noexcept{return 0;}
-int nv_start(void*,uint64_t,const char*,uint32_t,int,const char*,char*,size_t)noexcept{return 0;}
-int nv_next(void*,uint64_t,float* pcm,size_t,size_t* count,char*,size_t)noexcept{pcm[0]=.1f;*count=1;return 0;}
+int nv_start(void*,uint64_t,const char* text,uint32_t,int,const char*,char*,size_t)noexcept{
+  ++speech_starts;speech_chunk=std::strcmp(text,"Nothing.")==0?3:0;return 0;
+}
+int nv_next(void*,uint64_t,float* pcm,size_t capacity,size_t* count,char*,size_t)noexcept{
+  if(speech_chunk==3||capacity<240){*count=0;return 1;}
+  ++speech_chunk;for(size_t i=0;i<240;++i)pcm[i]=.1f;*count=240;return 0;
+}
 int nv_cancel(void*,uint64_t)noexcept{return 0;}
 int nv_reset(void*,uint64_t,char*,size_t)noexcept{return 0;}
 int nv_destroy(void* p)noexcept{
   {std::lock_guard<std::mutex> lock(speech_guard);--live_tts;}
   static_cast<Speech*>(p)->alive=false;releasing.pass();return 0;
+}
+}
+namespace {
+void silent_segment_contract(const std::filesystem::path& root,const std::string& f){
+  namespace fs=std::filesystem;
+  const auto speech=root/"silent-speech";
+  for(const auto& at:{speech,speech/"languages"/"french"}){
+    fs::create_directories(at/"embeddings");
+    for(const char* name:{"model.safetensors","tokenizer.model","embeddings/alba.safetensors"}){
+      std::ofstream out(at/name,std::ios::binary);out<<"fixture\n";need(bool(out),"speech fixture write");
+    }
+    std::ofstream config(at/"config.yaml",std::ios::binary);
+    config<<"replace_characters:\n  '\xC2\xAB': ''\n  '\xC2\xBB': ''\n  '(': ''\n  ')': ''\nother: 1\n";
+    need(bool(config),"speech fixture write");
+  }
+  const auto pocket=speech.string(),config=(speech/"config.yaml").string();
+  const aii_voice_paths paths{nullptr,f.c_str(),f.c_str(),f.c_str(),f.c_str(),pocket.c_str(),config.c_str()};
+  const aii_voice_speech_settings french{"alba","fr","en",.3f,20260908};
+  aii_voice_models* owner=nullptr;aii_voice_session* session=nullptr;aii_voice_error error{};
+  need(aii::voice::load_native_models(&paths,"cpu",nullptr,nullptr,0,nullptr,nullptr,&owner,&error,
+    std::make_unique<Replacement>())==AII_VOICE_OK&&owner,"speech fixture load failed");
+  const aii_voice_open_options options{nullptr,&french,0,0};
+  need(aii_voice_open_session(owner,&options,&session,&error)==AII_VOICE_OK&&session,error.message);
+  auto reply=[&](uint64_t generation,const std::string& text){
+    const int starts=speech_starts;
+    need(aii_voice_synthesize(session,generation,text.data(),text.size(),&error)==AII_VOICE_OK,error.message);
+    aii_voice_audio audio{};std::vector<float> pcm(4096);size_t n=0;uint64_t samples=0;
+    const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    for(;;){
+      const auto rc=aii_voice_next_audio(session,&audio,pcm.data(),pcm.size(),&n,&error);
+      need(rc==AII_VOICE_OK||rc==AII_VOICE_AGAIN,error.message);
+      if(rc==AII_VOICE_OK){need(audio.generation==generation,"audio of another reply");samples+=n;if(audio.end)break;continue;}
+      aii_voice_snapshot status{};
+      need(aii_voice_status(session,&status,&error)==AII_VOICE_OK,error.message);
+      if(status.stopping)throw std::runtime_error(std::string("the session stopped before a reply's END: ")+status.error);
+      need(std::chrono::steady_clock::now()<end,"a reply's END did not come");
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    need(aii_voice_playback(session,generation,samples,1,0,&error)==AII_VOICE_OK,error.message);
+    aii_voice_snapshot status{};
+    need(aii_voice_status(session,&status,&error)==AII_VOICE_OK,error.message);
+    if(status.stopping||status.error[0])throw std::runtime_error(std::string("the session stopped after a reply: ")+status.error);
+    return std::make_pair(samples,speech_starts-starts);
+  };
+  const auto removed=reply(1,"\xC2\xAB ( ) \xC2\xBB");
+  need(removed.first==0&&removed.second==0,"a reply of removed characters only gave audio, or reached the model");
+  const auto spoken=reply(2,"Bonjour.");
+  need(spoken.first==720&&spoken.second==1,"the reply after a silent one was not spoken whole");
+  const auto quoted=reply(3,"\xC2\xAB Bonjour. \xC2\xBB");
+  need(quoted.first==720&&quoted.second==1,"a quoted reply was not spoken as its words alone");
+  aii_voice_event event{};char text[1024];size_t n=0;int ended=0;
+  for(;;){
+    const auto rc=aii_voice_next_event(session,&event,text,sizeof text,&n,&error);
+    if(rc==AII_VOICE_AGAIN)break;
+    need(rc==AII_VOICE_OK,error.message);
+    ended+=std::string(event.kind)=="synthesis_end";
+    need(std::string(event.kind)!="synthesis_cancelled","a reply was cancelled");
+  }
+  need(ended==3,"not every reply ended by its synthesis_end");
+  need(aii_voice_synthesize(session,4,"Nothing.",8,&error)==AII_VOICE_OK,error.message);
+  aii_voice_snapshot status{};
+  for(const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);;){
+    need(aii_voice_status(session,&status,&error)==AII_VOICE_OK,error.message);
+    if(status.stopping)break;
+    need(std::chrono::steady_clock::now()<end,"a model that ended spoken words with no audio was not a fault");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  need(std::string(status.error)=="empty synthesis segment",status.error);
+  need(aii_voice_close(session,1,&error)==AII_VOICE_OK&&aii_voice_wait(session,5000,&error)==AII_VOICE_OK&&
+       aii_voice_release(&session,&error)==AII_VOICE_OK&&!session,error.message);
+  need(aii_voice_models_release(&owner,&error)==AII_VOICE_OK&&!owner&&!live_tts,"speech fixture release failed");
 }
 }
 #if defined(__linux__) && !defined(__ANDROID__)
@@ -243,9 +323,12 @@ int main(int argc,char** argv){
     need(std::string(ready.accelerator)=="external_recognizer","replacement was falsely labeled CPU");
     need(aii_voice_models_release(&owner,&error)==AII_VOICE_OK && !owner,"owner release failed");
     need(destroyed==3 && defaults==1 && !live_vad && !live_endpoint && !live_tts,"factory changed default or leaked component");
+    silent_segment_contract(root,f);
+    need(destroyed==4 && defaults==1 && !live_vad && !live_endpoint && !live_tts,"silent segment contract leaked a component");
+    std::cout<<"Removed-only text completes silently; its receipt is taken and the session speaks on PASS\n";
 #if defined(__linux__) && !defined(__ANDROID__)
     execution_readback_contract(root,f);
-    need(destroyed==4 && defaults==1 && !live_vad && !live_endpoint && !live_tts,"execution readback contract leaked a component");
+    need(destroyed==5 && defaults==1 && !live_vad && !live_endpoint && !live_tts,"execution readback contract leaked a component");
     std::cout<<"Speech execution readback during a change of language PASS\n";
 #endif
     std::cout<<"Native recognizer injection, default preservation, downstream-failure custody PASS\n";return 0;

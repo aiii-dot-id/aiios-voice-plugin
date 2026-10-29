@@ -7,7 +7,8 @@ import pytest
 from scripts.audit_native_desktop_family import executable_binding
 
 
-GO = shutil.which("go") or "/usr/local/go1.27/bin/go"
+from scripts import go_toolchain
+GO = shutil.which("go") or str(go_toolchain.default_go())
 DIGEST = "a" * 64
 SOURCE = '''package main
 import "fmt"

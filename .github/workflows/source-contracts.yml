@@ -61,7 +61,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.0'
+          go-version-file: plugin/native/go.mod
       - name: Install test dependencies (never shipped in the plugin)
         run: python -m pip install -r requirements-test.txt
       - name: Verify tracked source inventory
@@ -85,7 +85,7 @@ jobs:
       - name: Prove worker matches the copied host topology vectors
         env:
           AII_NATIVE_INTERRUPT_FIXTURE: ${{ github.workspace }}/.build/topology-contracts/aii_voice_worker_fixture
-        run: python -m pytest -q --fail-on-skips tests/test_native_output_only.py tests/test_native_model_progress.py tests/test_native_settings_packaging.py
+        run: python -m pytest -q --fail-on-skips tests/test_native_output_only.py tests/test_native_model_progress.py tests/test_native_settings_packaging.py tests/test_native_check_session.py
       - name: Hold the Python enrollment codec to the native one
         env:
           AII_UID_SNAPSHOT_PROBE: ${{ github.workspace }}/.build/topology-contracts/aii_uid_snapshot_probe
@@ -141,6 +141,7 @@ jobs:
           tests/test_android_override_notice.py
           tests/test_engine_override_notice.py
           tests/test_prepare_engine_source.py
+          tests/test_go_toolchain.py
           tests/test_native_checkpoint_binding.py
           tests/test_native_cuda_speech_candidate.py
           tests/test_native_desktop_package_audit.py
@@ -153,6 +154,7 @@ jobs:
           tests/test_release_checksums.py
           tests/test_restore_staged_native_checkpoint.py
           tests/test_runtime_limits.py
+          tests/test_session_process_does_not_warm.py
           tests/test_uid_gallery_readiness.py
           tests/test_windows_override_notice.py
       - name: Run the tests of the Python double (not of the engine that ships)

@@ -89,6 +89,16 @@ aii_voice_result aii_voice_models_execution(aii_voice_models* m,char* out,size_t
     *required=text.size()+1;if(capacity<*required)return AII_VOICE_CAPACITY;
     std::memcpy(out,text.c_str(),*required);return AII_VOICE_OK;});
 }
+aii_voice_result aii_voice_models_lost(aii_voice_models* m,uint8_t* lost,aii_voice_error* e) {
+  return call(e,[&]{need(m&&lost,"models and output required");*lost=m->owner->lost()?1:0;return AII_VOICE_OK;});
+}
+aii_voice_result aii_voice_models_admit(aii_voice_models* m,uint8_t* admitted,uint32_t* retry_after_ms,aii_voice_error* e) {
+  return call(e,[&]{need(m&&admitted&&retry_after_ms,"models and outputs required");
+    const auto given=m->owner->admit();*admitted=given.admitted?1:0;*retry_after_ms=given.retry_after_ms;return AII_VOICE_OK;});
+}
+aii_voice_result aii_voice_models_admission_release(aii_voice_models* m,aii_voice_error* e) {
+  return call(e,[&]{need(m,"models required");m->owner->release();return AII_VOICE_OK;});
+}
 aii_voice_result aii_voice_models_prefer(aii_voice_models* m,const char* const* terms,uint32_t count,uint32_t* accepted,aii_voice_error* e) {
   if(accepted)*accepted=0;
   return call(e,[&]{need(m && accepted && (terms||!count) && count<=64,"models, accepted count and at most 64 terms required");
@@ -245,8 +255,8 @@ aii_voice_result aii_voice_enroll_selected(aii_voice_session* s,const char* curr
     need(s&&current&&n&&n<=8u<<20&&id&&label&&finals&&count&&count<=8&&required&&
       (output||!capacity),"bounded enrollment preparation arguments required");
     *required=0;
-    auto bounded=[](const char* p,size_t max){size_t n=0;while(n<=max&&p[n])++n;
-      need(n&&n<=max,"bounded enrollment string required");return std::string(p,n);};
+    auto bounded=[](const char* p,size_t max){size_t length=0;while(length<=max&&p[length])++length;
+      need(length&&length<=max,"bounded enrollment string required");return std::string(p,length);};
     const auto speaker=bounded(id,128),name=bounded(label,512);
     const auto status=get(s).status();
     need(status.input_enabled,"session has no input direction");

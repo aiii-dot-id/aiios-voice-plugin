@@ -2,6 +2,7 @@
 #include "session.h"
 #include "../../native_uid/identity.h"
 #include "../../native_uid/enrollment.h"
+#include "speaker_embedder.h"
 #include <functional>
 #include <optional>
 
@@ -11,6 +12,11 @@ class NativeSpeaker final:public SpeakerIdentifier {
   using ReadSnapshot=std::function<aii::uid::Snapshot()>;
   NativeSpeaker(const std::string& verified_model,const std::string& backend,
                 aii::uid::Policy,ReadSnapshot,std::optional<aii::uid::Policy> previous = {});
+  NativeSpeaker(std::shared_ptr<SpeakerModel>,aii::uid::Policy,ReadSnapshot,
+                std::optional<aii::uid::Policy> previous = {});
+  NativeSpeaker(std::unique_ptr<SpeakerEmbedder>,aii::uid::Policy,ReadSnapshot,
+                std::optional<aii::uid::Policy> previous = {});
+  std::shared_ptr<SpeakerModel> model() const;
   ~NativeSpeaker() override;
   void open() override;
   void warm();
@@ -32,6 +38,7 @@ class NativeSpeaker final:public SpeakerIdentifier {
   void cancel() noexcept override;
  private:
   aii::uid::Sample recording(const std::vector<float>&);
+  void cancel_fence() noexcept;
   struct Impl;
   std::unique_ptr<Impl> p_;
 };

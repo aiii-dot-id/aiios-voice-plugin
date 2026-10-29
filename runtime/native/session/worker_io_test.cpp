@@ -18,6 +18,7 @@
 #include <unistd.h>
 #endif
 using aii::voice::wire::Pipe;
+using aii::voice::wire::UnframedWrite;
 using Clock = std::chrono::steady_clock;
 #define REQUIRE(x)                                                             \
   do {                                                                         \
@@ -145,9 +146,7 @@ int main(int argc, char **argv) {
       const std::string expiry = "native pipe write expired: " + std::to_string(limit.count()) +
                                  " ms, the time the limits table gives it (test_write_ms)";
       REQUIRE(p.out->expiry() == expiry);
-#ifndef _WIN32
       REQUIRE(said == expiry);
-#endif
     }
     for (const char *name : {"", static_cast<const char *>(nullptr)}) {
       bool unnamed = false;
@@ -186,6 +185,22 @@ int main(int argc, char **argv) {
     char raw[3];REQUIRE(p.in->exact(raw,3,stop) && !std::memcmp(raw,"raw",3));
     REQUIRE(!p.in->line(line,stop));writer.join();
     REQUIRE(p.in->read_operations()<512);
+  }
+  {
+    Pair p;
+    std::atomic<bool> stop{false};
+    p.in.reset();
+    std::string said;
+    bool unframed = false;
+    try {
+      p.out->write("frame", 5, stop);
+    } catch (const UnframedWrite &e) {
+      unframed = true;
+      said = e.what();
+    } catch (const std::exception &e) {
+      said = e.what();
+    }
+    REQUIRE(!unframed && said == "native pipe write failed");
   }
   {
     Pair p;std::atomic<bool> stop{false};p.out->write("unfinished",10,stop);p.out.reset();

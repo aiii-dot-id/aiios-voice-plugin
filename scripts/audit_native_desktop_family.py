@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from scripts.audit_native_desktop_packages import tar_files, assert_binary_target
+from scripts import go_toolchain
 
 
 def sha(path):
@@ -32,7 +33,7 @@ def declared_settings(raw):
 def executable_binding(raw, expected, go=None):
     """Read the initialized string from the actual binary's symbol/sections."""
     assert len(expected) == 64
-    go = go or shutil.which('go') or '/usr/local/go1.27/bin/go'
+    go = go or shutil.which('go') or str(go_toolchain.default_go())
     with tempfile.TemporaryDirectory(prefix='voice-binding-') as directory:
         path = Path(directory) / 'carrier'; path.write_bytes(raw)
         result = subprocess.run([go, 'run', str(Path(__file__).with_name('inspect_carrier_binding.go')), str(path), expected],

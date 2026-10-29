@@ -1,4 +1,5 @@
 #include "worker_io.h"
+#include "worker_liveness.h"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -19,6 +20,7 @@
 #include <csignal>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 namespace aii::voice::wire {
@@ -101,6 +103,31 @@ void nonblocking(int fd) {
   (void)fd;
 #endif
 }
+#ifdef _WIN32
+bool reader_closed(HANDLE pipe) {
+  struct Local {
+    ULONG type, configuration, maximum_instances, current_instances,
+        inbound_quota, read_data_available, outbound_quota,
+        write_quota_available, state, end;
+  } local{};
+  struct Status {
+    union {
+      LONG status;
+      void *pointer;
+    } u;
+    ULONG_PTR information;
+  } status{};
+  using Query = LONG(NTAPI *)(HANDLE, Status *, void *, ULONG, int);
+  static const auto query = reinterpret_cast<Query>(reinterpret_cast<void *>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile")));
+  constexpr int file_pipe_local_information = 24;
+  constexpr ULONG closing = 4;
+  return query &&
+         query(pipe, &status, &local, ULONG(sizeof local),
+               file_pipe_local_information) >= 0 &&
+         local.state == closing;
+}
+#endif
 }
 Pipe::Pipe(int fd) : fd_(fd), writing_(false), write_limit_ns_(0), limit_member_("") {
   nonblocking(fd_);
@@ -227,11 +254,19 @@ void Pipe::write(const void *source, size_t n, const std::atomic<bool> &stop) {
         throw UnframedWrite("native pipe write interrupted");
 #ifdef _WIN32
       register_thread();
-      DWORD count = 0;
-      if (!WriteFile(reinterpret_cast<HANDLE>(_get_osfhandle(fd_)), p + done,
-                     DWORD(n - done), &count, nullptr)) {
-        done += count;
+      const auto pipe = reinterpret_cast<HANDLE>(_get_osfhandle(fd_));
+      if (!done && reader_closed(pipe))
         refuse("native pipe write failed");
+      DWORD count = 0;
+      if (!WriteFile(pipe, p + done, DWORD(n - done), &count, nullptr)) {
+        done += count;
+        if (expired())
+          throw UnframedWrite(expiry());
+        if (stop)
+          throw UnframedWrite("native pipe write interrupted");
+        if (done)
+          refuse("native pipe write failed");
+        throw UnframedWrite("native pipe write failed, its frame possibly part-written");
       }
 #else
       pollfd fd{fd_, POLLOUT, 0};
@@ -275,6 +310,8 @@ std::string Pipe::expiry() const {
 void log_line(const std::string &text) {
   const std::string line = text + '\n';
 #ifdef _WIN32
+  static const int binary = _setmode(2, _O_BINARY);
+  (void)binary;
   (void)_write(2, line.data(), static_cast<unsigned>(line.size()));
 #else
   for (size_t done = 0; done < line.size();) {
@@ -284,6 +321,41 @@ void log_line(const std::string &text) {
     else if (count == 0 || errno != EINTR)
       return;
   }
+#endif
+}
+}
+namespace aii::voice {
+std::pair<intptr_t, intptr_t> inherited_ends(const char* descriptor, const char* in, const char* out) {
+#ifdef _WIN32
+  (void)descriptor;
+  const auto handle = [](const char* variable) {
+    char* snapshot = nullptr;
+    size_t length = 0;
+    if (_dupenv_s(&snapshot, &length, variable)) throw std::runtime_error(std::string("cannot read ") + variable);
+    std::unique_ptr<char, decltype(&std::free)> owned(snapshot, std::free);
+    const char* value = owned.get();
+    if (!value || !*value) throw std::runtime_error(std::string(variable) + " required");
+    char* end = nullptr;
+    const auto parsed = std::strtoull(value, &end, 10);
+    if (end == value || *end || !parsed) throw std::runtime_error(std::string("invalid ") + variable);
+    const auto h = reinterpret_cast<HANDLE>(uintptr_t(parsed));
+    if (GetFileType(h) != FILE_TYPE_PIPE) throw std::runtime_error(std::string(variable) + " is not a pipe");
+    (void)SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+    return intptr_t(parsed);
+  };
+  return {handle(in), handle(out)};
+#else
+  if (descriptor) {
+    const int fd = inherited_descriptor(descriptor);
+    return {fd, fd};
+  }
+  const auto pipe_end = [](const char* variable) {
+    const int fd = inherited_descriptor(variable);
+    struct stat st {};
+    if (::fstat(fd, &st) != 0 || !S_ISFIFO(st.st_mode)) throw std::runtime_error(std::string(variable) + " is not a pipe");
+    return fd;
+  };
+  return {pipe_end(in), pipe_end(out)};
 #endif
 }
 }

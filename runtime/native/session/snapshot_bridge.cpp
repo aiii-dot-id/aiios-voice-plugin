@@ -10,6 +10,7 @@ static size_t store_limit(SnapshotBridge::Store store) {
   if(store==SnapshotBridge::Store::Enrollment||store==SnapshotBridge::Store::SpeakerRegistry)return 8u<<20;
   if(store==SnapshotBridge::Store::Recovery)return 12u<<20;
   if(store==SnapshotBridge::Store::Waveform)return 1u<<20;
+  if(store==SnapshotBridge::Store::SpeakerHeard)return 65536;
   require(store==SnapshotBridge::Store::PendingCaptures,"unknown UID storage resource");return 65536;
 }
 static std::string store_name(SnapshotBridge::Store store) {
@@ -19,6 +20,7 @@ static std::string store_name(SnapshotBridge::Store store) {
     case SnapshotBridge::Store::Recovery: return "recovery archive";
     case SnapshotBridge::Store::SpeakerRegistry: return "speaker registry";
     case SnapshotBridge::Store::Waveform: return "waveform recording";
+    case SnapshotBridge::Store::SpeakerHeard: return "speaker heard days";
   }
   return "UID storage";
 }
@@ -54,6 +56,7 @@ Json SnapshotBridge::exchange(Json query,Clock::time_point deadline,Store store,
   if(store==Store::Waveform)put(query,"resource",string("waveform:"+archive));
   if(store==Store::PendingCaptures)put(query,"resource",string("captures"));
   if(store==Store::SpeakerRegistry)put(query,"resource",string("speaker_registry"));
+  if(store==Store::SpeakerHeard)put(query,"resource",string("speaker_heard"));
   std::unique_lock<std::mutex> l(mutex_);
   require(live_&&Clock::now()<deadline,"UID read cancelled/deadline");
   require(next_<9007199254740991ULL,"UID request IDs exhausted");

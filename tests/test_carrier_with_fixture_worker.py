@@ -6,7 +6,8 @@ from pathlib import Path
 
 from scripts.build_plugin_carrier import ROOT, verify_sdk
 
-GO = shutil.which("go") or "/usr/local/go1.27/bin/go"
+from scripts import go_toolchain
+GO = shutil.which("go") or str(go_toolchain.default_go())
 FIXTURE = "AII_NATIVE_INTERRUPT_FIXTURE"
 
 

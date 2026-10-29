@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "description":"List the speaker recovery archives: copies of speaker files set aside by a confirmed recovery, holding voiceprints and names. Each has an archive_sha256, its size and what it holds; truncated=true means the list is incomplete. Never returns their contents; no microphone required.",
+  "properties":{},
+  "additionalProperties":false
+}

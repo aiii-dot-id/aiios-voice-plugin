@@ -17,6 +17,7 @@ import subprocess
 
 from scripts.audit_native_desktop_packages import tar_files, assert_binary_target
 from scripts.build_plugin_carrier import ROOT, SDK_SOURCE, verify_sdk
+from scripts import go_toolchain
 
 
 def digest(raw): return hashlib.sha256(raw).hexdigest()
@@ -119,7 +120,7 @@ def main():
             path.write_bytes(parents[0]['files'][name])
     assembler = a.out / 'assemble'
     env = {**os.environ, 'GOTOOLCHAIN': 'local', 'GOWORK': 'off', 'GOPROXY': 'off'}
-    subprocess.run(['/usr/local/go1.27/bin/go', 'build', '-trimpath', '-buildvcs=false', '-o', str(assembler),
+    subprocess.run([str(go_toolchain.default_go()), 'build', '-trimpath', '-buildvcs=false', '-o', str(assembler),
                     str(ROOT / 'scripts/private_cp1_package.go')], cwd=SDK_SOURCE, env=env, check=True, timeout=120)
     run = subprocess.run([str(assembler), str(a.out)], capture_output=True, timeout=30)
     (a.out / 'assemble.stdout').write_bytes(run.stdout); (a.out / 'assemble.stderr').write_bytes(run.stderr)

@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,15 +48,36 @@ func readinessReport(raw json.RawMessage, warmProbe time.Duration) (*aiiosdk.Rea
 		return nil, errors.New("worker omitted measured readiness")
 	}
 	r := body.Readiness
-	native := map[string]string{"native-common-cpu": "cpu", "native-common-vulkan": "cpu_vulkan", "native-common-metal": "cpu_metal"}
-	accelerator, known := native[body.Identity.Backend]
-	if !known || r.Accelerator != accelerator || (r.Models != 4 && r.Models != 5) || r.ProbeMS <= 0 {
+	if !registeredAccelerators(body.Identity.Backend, r.Accelerator) || (r.Models != 4 && r.Models != 5) || r.ProbeMS <= 0 {
 		return nil, errors.New("invalid worker warm-inference readiness")
 	}
 	if int64(r.ProbeMS) > warmProbe.Milliseconds() {
 		return nil, fmt.Errorf("invalid worker warm-inference readiness: the warm inference took %d ms, more than the %d ms the limits table gives it (warm_probe_ms)", r.ProbeMS, warmProbe.Milliseconds())
 	}
 	return &aiiosdk.ReadyReport{ModelsLoaded: r.Models, Accelerator: r.Accelerator, ProbeMS: r.ProbeMS}, nil
+}
+
+var acceleratorWords = []string{"cpu", "cuda", "directml", "vulkan", "metal", "coreml"}
+
+func registeredAccelerators(backend, line string) bool {
+	speaking, known := map[string]string{"native-common-cpu": "", "native-common-vulkan": "vulkan", "native-common-metal": "metal"}[backend]
+	parts := strings.Split(line, "+")
+	if !known || len(parts) == 0 || parts[0] != "cpu" {
+		return false
+	}
+	next := 0
+	has := map[string]bool{}
+	for _, part := range parts {
+		at := slices.Index(acceleratorWords, part)
+		if at < next {
+			return false
+		}
+		next, has[part] = at+1, true
+	}
+	if speaking == "" {
+		return !has["vulkan"] && !has["metal"]
+	}
+	return has[speaking]
 }
 
 type carrier struct {
@@ -89,6 +112,8 @@ type carrier struct {
 	workerStarted time.Duration
 
 	vocabulary sync.Mutex
+
+	rule json.RawMessage
 }
 
 type privateRequest struct {
@@ -135,7 +160,7 @@ func (c *carrier) fail(err error) {
 		}
 		c.fault <- err
 		_ = c.in.Close()
-		c.interrupt()
+
 	})
 }
 
@@ -374,12 +399,20 @@ func (c *carrier) admit(control *aiiosdk.Control) {
 		control.Answer(nil, err)
 		return
 	}
+	if err := validateRecoveryArchive(control.Op, control.Args); err != nil {
+		control.Answer(nil, err)
+		return
+	}
 	if vocabularyOperation(control.Op) {
 		c.vocabularyStore(control)
 		return
 	}
-	if control.Op == "recording.list" || control.Op == "recording.delete" || control.Op == "recording.prune" {
+	if control.Op == "recording.list" || control.Op == "recording.delete" || control.Op == "recording.prune" || recoveryArchiveOperation(control.Op) {
 		c.recordingStore(control)
+		return
+	}
+	if registryOperation(control.Op) {
+		c.registryControl(control)
 		return
 	}
 	if err := c.enqueue(control.Session, control.Op, control.Args, control.Answer); err != nil {
@@ -459,6 +492,17 @@ func (c *carrier) endWorker(kill func() error) error {
 	return errors.Join(killErr, late, unseen)
 }
 
+func reapUnadopted(cmd *exec.Cmd, adoptErr error, reap time.Duration) error {
+	reaped := make(chan error, 1)
+	go func() { reaped <- cmd.Wait() }()
+	select {
+	case e := <-reaped:
+		return errors.Join(adoptErr, e)
+	case <-time.After(reap):
+		return errors.Join(adoptErr, fmt.Errorf("worker reap unproven: the worker the carrier could not adopt did not exit in %d ms, the time the limits table gives that (worker_reap_ms)", reap.Milliseconds()))
+	}
+}
+
 func run() (err error) {
 	p := declaredPlugin()
 	if os.Getenv(aiiosdk.DescribeEnv) == "1" {
@@ -490,6 +534,9 @@ func run() (err error) {
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	if err = adoptWorker(cmd); err != nil {
+		return reapUnadopted(cmd, err, waits.WorkerReap)
+	}
 	c.workerStarted = time.Since(c.began)
 	startupPhase("worker-started-awaiting-warm-inference", 0, 0)
 
@@ -503,6 +550,7 @@ func run() (err error) {
 		if settleEvents != nil {
 			err = errors.Join(err, settleEvents())
 		}
+		c.interrupt()
 		_ = out.Close()
 	}()
 	c.startPrivate()
