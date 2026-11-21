@@ -147,7 +147,8 @@ the macOS library, and the Linux library holds the second
 ## Carrier and package builds
 
 Follow [`plugin/NATIVE_BUILD.md`](../plugin/NATIVE_BUILD.md) for the pinned SDK
-and [`maintenance/README.md`](../maintenance/README.md) for the eight carriers.
+and the carrier build, with the Go the `go` line of `plugin/native/go.mod` names
+(`scripts/go_toolchain.py` reads it; `AII_GO` names another place for it).
 [`RUNTIME_COMPONENT_SELECTION.md`](RUNTIME_COMPONENT_SELECTION.md) documents
 runtime selection and package assembly inputs. Preserve each set's declared
 models, runtime hashes, permissions, and resource requirements.
@@ -167,20 +168,23 @@ worker and a verified source-bound carrier build. Prepare the pinned SDK and
 carrier as described in `plugin/NATIVE_BUILD.md`; its four-artifact builder
 currently runs on Apple Silicon. Other platforms can use those artifacts only
 when `--verify` confirms that every input matches their source checkout.
-For a Unix source checkout after that carrier preflight, ensure the `go` on
-`PATH` is Go 1.27.0, as required by the runtime rebind build contract:
+For a Unix source checkout after that carrier preflight, with the `go` on
+`PATH` the one the `go` line of `plugin/native/go.mod` names
+(`scripts/go_toolchain.py`):
 
 ```sh
 cmake -S runtime/native/session -B .build/native-contracts -DCMAKE_BUILD_TYPE=Release -DAII_WORKER_FIXTURE=ON
 cmake --build .build/native-contracts --parallel 2
 export AII_NATIVE_INTERRUPT_FIXTURE="$PWD/.build/native-contracts/aii_voice_worker_fixture"
 export AII_UID_SNAPSHOT_PROBE="$PWD/.build/native-contracts/aii_uid_snapshot_probe"
-export AII_TEST_CARRIER_BUILD="$PWD/.build/native-sdk-ca3a6f2"
+export AII_TEST_CARRIER_BUILD="$PWD/.build/native-sdk-32ccba4"
 python -m scripts.build_plugin_carrier --verify
 python -m pytest -q
 ```
 
-A custom carrier `--output` requires the matching path in both the verification
-command and `AII_TEST_CARRIER_BUILD`. External-model, operating-system and hardware
-contracts still require their declared inputs; report their skipped or unavailable
-coverage separately.
+The carrier directory is named by the first seven characters of the pinned
+SDK revision in `plugin/sdk-source.json`. A custom carrier `--output`
+requires the matching path in both the verification command and
+`AII_TEST_CARRIER_BUILD`. External-model, operating-system and hardware
+contracts still require their declared inputs; report their skipped or
+unavailable coverage separately.

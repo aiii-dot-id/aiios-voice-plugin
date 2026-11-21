@@ -113,6 +113,16 @@ int main() {
     require(InstalledProfile::read(root/"runtime",root/"models").arguments[8]==backend,"explicit accelerator profile not preserved");
   }
   auto refuse=[&](const std::string& s){write(s);bool failed=false;try{InstalledProfile::read(root/"runtime",root/"models");}catch(...){failed=true;}require(failed,"invalid installed profile admitted");};
+  for(uint32_t sessions:{1u,8u,64u}) {
+    write(good.substr(0,good.size()-1)+",\"max_sessions\":"+std::to_string(sessions)+"}");
+    require(InstalledProfile::read(root/"runtime",root/"models").max_sessions==sessions,"a stated max_sessions was not read as stated");
+  }
+  for(auto sessions:{"0","65"}) {
+    write(good.substr(0,good.size()-1)+",\"max_sessions\":"+sessions+"}");
+    std::string said;
+    try{InstalledProfile::read(root/"runtime",root/"models");}catch(const std::exception& e){said=e.what();}
+    require(said=="max_sessions must be 1 to 64",("max_sessions "+std::string(sessions)+" was not refused by its range; it said: "+(said.empty()?std::string("nothing, it was read"):said)).c_str());
+  }
   for(auto prior:{"../policy.json","resources/missing.json","resources","/policy.json"})
     refuse(good.substr(0,good.size()-1)+",\"uid_previous_policy\":\""+prior+"\"}");
   refuse(good.substr(0,good.size()-1)+",\"uid_previous_policy\":null}");

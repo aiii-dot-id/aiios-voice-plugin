@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from runtime.plugin_engine.audio import END, PCM, Frame
+from scripts.inherited_descriptors import inherit
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = Path(os.environ.get("AII_TEST_WAVEFORM_WORKER", ROOT / ".build-waveform/aii_voice_worker_fixture"))
@@ -26,11 +27,11 @@ def sha(raw):
 def run():
     input_read, input_write = os.pipe()
     output_read, output_write = os.pipe()
-    env = {**os.environ, "AII_AUDIO_IN_FD": str(input_read), "AII_AUDIO_OUT_FD": str(output_write)}
+    named, handover = inherit(input_read, output_write)
+    env = {**os.environ, "AII_AUDIO_IN_FD": named[0], "AII_AUDIO_OUT_FD": named[1]}
     process = subprocess.Popen(
         [str(WORKER), *["fixture-path"] * 7], stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
-        pass_fds=(input_read, output_write), bufsize=0,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, bufsize=0, **handover,
     )
     os.close(input_read)
     os.close(output_write)

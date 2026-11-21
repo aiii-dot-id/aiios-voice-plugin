@@ -42,6 +42,9 @@ class Microphone {
   aii::asr::Frontend frontend_;
   std::vector<float> mel_;
   size_t position_=0;
+  size_t real_samples_=0;
+  size_t real_end() const { return real_samples_?real_samples_:frontend_.samples(); }
+  static constexpr size_t final_lookahead_samples=17920;
   uint64_t epoch_=0,activity_frames_=0;
   uint64_t target_frames_=0;
   bool ended_=false,faulted_=false;

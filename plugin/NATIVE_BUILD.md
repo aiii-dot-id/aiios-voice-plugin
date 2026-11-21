@@ -1,14 +1,13 @@
 # Build the native voice carrier
 
-Use Go 1.27.0 and public Plugin SDK v0.1.15. `sdk-source.json` pins the exact
+Use the Go that the `go` line of `plugin/native/go.mod` names
+(`scripts/go_toolchain.py` reads it) and public Plugin SDK 0.1.16-sdk.1.
+`sdk-source.json` pins the exact
 SDK revision and source archive hash. Obtain that revision with `git archive`,
 place the unmodified archive at the declared path, and extract it at the
 declared source path. The builder compares every source file, refuses extra
 files and local module replacements, and runs offline. Populate its module
 cache through a verified Go module proxy first.
-
-For the eight runtime-bound beta11.4 carriers, follow
-[`maintenance/README.md`](../maintenance/README.md).
 
 The development builder runs on Apple Silicon and produces plain and race
 macOS arm64 carriers plus plain Linux and Windows amd64 carriers:

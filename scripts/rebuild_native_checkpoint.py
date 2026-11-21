@@ -331,6 +331,32 @@ def add_voice_presets(frozen, runtime, presets, declared, out, bindings):
                   voice_presets_added=sorted(source.stem for source in added.values()))
 
 
+def refuse_dropped_separator(parent, hearing_graphs):
+    """A hearing replacement never drops a configured separator without a word (VOICE-LIMITS V3(b), D390).
+
+    select_hearing_execution removes the old recognizer's whole placement
+    declaration, and with it a separator the parent runs (asr_execution's
+    "separator"); replace_hearing_models writes none back, so the candidate
+    would recognize without separation and say nothing. Until a rebuild can
+    carry a supported separator and bind its replacement model, a parent that
+    declares one is refused here, before any candidate is made, naming the
+    component. A parent with no separator, or a rebuild that keeps its
+    recognizer, goes on as before.
+    """
+    if hearing_graphs is None:
+        return
+    path = parent / 'runtime' / 'native-profile.json'
+    if not path.is_file():
+        return
+    execution = json.loads(path.read_text()).get('asr_execution')
+    separator = execution.get('separator') if isinstance(execution, dict) else None
+    if separator is not None:
+        backend = separator.get('backend') if isinstance(separator, dict) else None
+        raise ValueError(f'the parent hearing execution runs a {backend or "declared"} separator, and a hearing '
+                         'replacement would drop it: carrying a separator through a replacement is not built, so '
+                         'this rebuild is refused before any candidate is made')
+
+
 def select_hearing_execution(runtime, execution):
     """Never carry a previous recognizer's placement promise into new graphs."""
     path = runtime/'native-profile.json'
@@ -509,6 +535,7 @@ def main():
     parent, out = args.parent.resolve(), args.out.resolve()
     frozen, profile, bindings = parent_bytes(parent, args.parent_sha256, args.parent_models_root)
     refuse_interpreter_profile(profile)
+    refuse_dropped_separator(parent, args.hearing_graphs)
     limits = limits_to_state(profile, limits_table)
     if args.limits is not None:
         bindings[str(args.limits.resolve())] = limits_sha256

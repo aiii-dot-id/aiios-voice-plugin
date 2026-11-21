@@ -175,6 +175,9 @@ func TestALimitsTableThatCannotHoldIsRefused(t *testing.T) {
 		{profileLimits{SeparateMaxMS: ms(29501)}, "a separation may take 29501 ms (separation_max_ms)"},
 		{profileLimits{ModelCallMS: ms(25499), EndRetireMS: ms(30500)}, "the model call it runs in is given 25499 ms (model_call_ms)"},
 		{profileLimits{SeparateMinMS: ms(25001)}, "the most must not be the less"},
+
+		{profileLimits{ModelServerChannels: ms(0)}, "model_server_channels is 0; it must be 1 to 64"},
+		{profileLimits{ModelServerChannels: ms(65)}, "model_server_channels is 65; it must be 1 to 64"},
 	} {
 		if _, err := limitsFrom(&c.p); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: wanted a refusal naming %q, got %v", c.p, c.want, err)
@@ -218,6 +221,11 @@ func TestTheWorkersDefaultsAreWhatTheCarriersDefaultsComputeTo(t *testing.T) {
 		stated[m[1]], _ = strconv.ParseInt(m[2], 10, 64)
 	}
 	w := defaultLimits.forWorker()
+
+	if count := regexp.MustCompile(`uint32_t model_server_channels\{(\d+)\};`).FindStringSubmatch(string(header)); count == nil ||
+		count[1] != strconv.FormatInt(w.ModelServerChannels, 10) {
+		t.Errorf("the worker's default model_server_channels is %v; the carrier's default is %d", count, w.ModelServerChannels)
+	}
 	want := map[string]int64{"exchange_read": w.ExchangeReadMS, "exchange_write": w.ExchangeWriteMS, "opening": w.OpeningMS,
 		"whole_read": w.WholeReadMS, "whole_publication": w.WholePublicationMS, "drain_idle": w.DrainIdleMS, "reply_settings": w.ReplySettingsMS,
 		"abort": w.AbortMS, "capture_close": w.CaptureCloseMS, "session_open": w.SessionOpenMS, "opening_notice": w.OpeningNoticeMS,
@@ -348,6 +356,53 @@ func TestALimitThisCarrierDoesNotKnowIsRefused(t *testing.T) {
 	}
 }
 
+func TestTheModelServersChannelsAreACountTheTableStates(t *testing.T) {
+	read := func(table string) (limits, error) {
+		var p runtimeProfile
+		if err := json.Unmarshal([]byte(`{"limits":`+table+`}`), &p); err != nil {
+			return limits{}, err
+		}
+		return limitsFrom(p.Limits)
+	}
+	for _, c := range []struct {
+		table string
+		want  int64
+	}{{`{}`, 64}, {`{"model_server_channels":8}`, 8}, {`{"model_server_channels":1}`, 1}, {`{"model_server_channels":64}`, 64}} {
+		l, err := read(c.table)
+		if err != nil {
+			t.Errorf("%s: refused: %v", c.table, err)
+			continue
+		}
+		if got := handedChannels(t, l); got != c.want {
+			t.Errorf("%s: the worker is handed %d model server channels, wanted %d: %s", c.table, got, c.want, l.environment())
+		}
+	}
+	for _, c := range []struct{ table, want string }{
+		{`{"model_server_channels":0}`, "runtime limit model_server_channels is 0; it must be 1 to 64"},
+		{`{"model_server_channels":65}`, "runtime limit model_server_channels is 65; it must be 1 to 64"},
+		{`{"model_server_channels":null}`, "runtime limit model_server_channels must be a whole number of channels"},
+		{`{"model_server_channels":8.5}`, "runtime limit model_server_channels must be a whole number of channels"},
+		{`{"model_server_channels":"8"}`, "runtime limit model_server_channels must be a whole number of channels"},
+		{`{"model_server_channels":true}`, "runtime limit model_server_channels must be a whole number of channels"},
+	} {
+		if _, err := read(c.table); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: wanted a refusal saying %q, got %v", c.table, c.want, err)
+		}
+	}
+}
+
+func handedChannels(t *testing.T, l limits) int64 {
+	t.Helper()
+	var handed map[string]int64
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(l.environment(), limitsEnv+"=")), &handed); err != nil {
+		t.Fatalf("the worker's limits are not a table of whole numbers: %s: %v", l.environment(), err)
+	}
+	if n, ok := handed["model_server_channels"]; ok {
+		return n
+	}
+	return -1
+}
+
 func TestAProfileWhoseLimitsAreNotUnderstoodDoesNotStart(t *testing.T) {
 	t.Setenv("AII_MODELS_DIR", t.TempDir())
 
@@ -383,7 +438,8 @@ func TestAProfileWhoseLimitsAreNotUnderstoodDoesNotStart(t *testing.T) {
 		ModelCallMS: ms(d.ModelCall.Milliseconds()), InputTailMS: ms(d.InputTail.Milliseconds()), OutputTakeMS: ms(d.OutputTake.Milliseconds()),
 		SpeakerMatchMS: ms(d.SpeakerMatch.Milliseconds()), WarmProbeMS: ms(d.WarmProbe.Milliseconds()),
 		DecisionMS: ms(d.EndpointDecision.Milliseconds()), EndRetireMS: ms(d.EndpointRetire.Milliseconds()),
-		SeparateMinMS: ms(d.SeparationMin.Milliseconds()), SeparateMaxMS: ms(d.SeparationMax.Milliseconds())})
+		SeparateMinMS: ms(d.SeparationMin.Milliseconds()), SeparateMaxMS: ms(d.SeparationMax.Milliseconds()),
+		ModelServerChannels: ms(d.ModelServerChannels)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,11 +453,16 @@ func TestAProfileWhoseLimitsAreNotUnderstoodDoesNotStart(t *testing.T) {
 	if l, err := start(`{"host_read_ms":2000,"host_write_ms":8000,"storage_wait_ms":14000}`); err != nil || l.HostRead != 2*time.Second || l.HostWrite != 8*time.Second || l.StorageWait != 14*time.Second || l.Abort != d.Abort {
 		t.Fatalf("a profile that states three: %+v %v", l, err)
 	}
+
+	if l, err := start(`{"model_server_channels":8}`); err != nil || handedChannels(t, l) != 8 {
+		t.Errorf("a profile that states the model server's channels: %v; the worker's limits: %s", err, l.environment())
+	}
 	for _, c := range []struct{ table, want string }{
 		{`{"host_reed_ms":2000,"host_write_ms":8000,"storage_wait_ms":14000}`, "runtime limit host_reed_ms is not one this carrier knows"},
 		{`{"host_read_ms":null}`, "runtime limit host_read_ms must be a whole number of milliseconds"},
 		{`{"host_read_ms":100}`, "runtime limit host_read_ms is 100 ms"},
 		{`{"host_read_ms":6000,"host_write_ms":5000,"storage_wait_ms":20000}`, "a write must be given at least a read's time"},
+		{`{"model_server_channels":65}`, "runtime limit model_server_channels is 65; it must be 1 to 64"},
 	} {
 		if l, err := start(c.table); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: wanted the start refused saying %q, got %+v %v", c.table, c.want, l, err)

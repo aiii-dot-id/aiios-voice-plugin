@@ -106,8 +106,8 @@
   ],
   "apply": [
     {"rules": [{"heard": "Kwin", "meant": "Quinn"}, {"heard": "mapel", "meant": "Maple"}],
-     "text": "Kwin, tell Mapel that KWIN's notes are done. Kwintet and maplenna stay.",
-     "corrected": "Quinn, tell Maple that Quinn's notes are done. Kwintet and maplenna stay.", "applied": 3},
+     "text": "Kwin, tell Mapel that KWIN's notes are done. Kwintet and mapella stay.",
+     "corrected": "Quinn, tell Maple that Quinn's notes are done. Kwintet and mapella stay.", "applied": 3},
     {"rules": [{"heard": "say of", "meant": "Quinn"}, {"heard": "say", "meant": "SAY"}],
      "text": "I say of course. Say, of all people. say of",
      "corrected": "I Quinn course. SAY, of all people. Quinn", "applied": 3},

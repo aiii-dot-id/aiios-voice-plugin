@@ -14,6 +14,7 @@ import subprocess
 
 from scripts.audit_native_desktop_packages import tar_files
 from scripts.build_plugin_carrier import ROOT,SDK_SOURCE,verify_sdk
+from scripts import go_toolchain
 
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -67,7 +68,7 @@ def main():
     (a.out/'plugin.json').write_text(json.dumps(cfg,indent=2)+'\n')
     (a.out/'descriptors.json').write_text(json.dumps(descriptors,indent=2)+'\n')
     tool=a.out/'assemble';env={**os.environ,'GOTOOLCHAIN':'local','GOWORK':'off','GOPROXY':'off'}
-    build=subprocess.run(['/usr/local/go1.27/bin/go','build','-trimpath','-buildvcs=false','-o',str(tool),
+    build=subprocess.run([str(go_toolchain.default_go()),'build','-trimpath','-buildvcs=false','-o',str(tool),
                           str(ROOT/'scripts/private_cp1_package.go')],cwd=SDK_SOURCE,env=env,capture_output=True,timeout=60)
     (a.out/'build.stdout').write_bytes(build.stdout);(a.out/'build.stderr').write_bytes(build.stderr);assert build.returncode==0
     run=subprocess.run([str(tool),str(a.out)],capture_output=True,timeout=30)

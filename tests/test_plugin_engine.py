@@ -4,7 +4,6 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,6 +12,7 @@ from runtime.plugin_engine.audio import END, PCM, Frame, read_frame
 from runtime.plugin_engine.mlx import ResidentMLXModels
 from runtime.plugin_engine.session import Refused, ResidentEngine
 from runtime.speech_output.mlx_backend import MLXTTSBackend
+from scripts.build_plugin_carrier import SDK_SOURCE
 from tests.plugin_models import Models, open_args
 
 
@@ -60,8 +60,10 @@ def parts(request):
 
 
 def test_sdk_audio_vectors_and_truncation():
-    source = Path(__file__).resolve().parent / "vectors/audio_framing.json"
-    data = json.loads(source.read_text())
+    from scripts.sdk_vectors import vector
+    raw = vector(SDK_SOURCE, "audio_framing.json")
+    assert raw is not None, "the pinned SDK's audio framing vectors cannot be read; see plugin/NATIVE_BUILD.md"
+    data = json.loads(raw)
     encoded = bytes.fromhex(data["hex"])
     reader = io.BytesIO(encoded)
     frames = [read_frame(reader) for _ in data["frames"]]
@@ -478,4 +480,82 @@ async def test_shutdown_retains_cancel_hook_error_but_releases_tasks(parts):
         assert not e.tasks
     finally:
         del models.cancel_synthesis
+        await e.shutdown()
+
+
+@pytest.mark.cleanup_errors("injected fault on cancel")
+@pytest.mark.asyncio
+async def test_shutdown_retires_the_task_a_cancelled_tasks_fault_starts(parts):
+    e, _, events, _ = parts
+    started = asyncio.Event()
+
+    async def faults_on_cancel():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("injected fault on cancel") from None
+
+    try:
+        e.admit("speech.session.open", open_args())
+        await until(lambda: e.lifecycle == "open")
+        e.task(faults_on_cancel())
+        await started.wait()
+        errors = await e.shutdown()
+        assert not e.tasks, f"shutdown returned with {len(e.tasks)} task(s) its own cancellation started"
+        assert e.failure == "injected fault on cancel", e.failure
+        assert any("injected fault on cancel" in x for x in errors), errors
+    finally:
+        await e.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retires_what_closing_the_output_starts(parts):
+    e, _, _, _ = parts
+    try:
+        e.admit("speech.session.open", open_args())
+        await until(lambda: e.lifecycle == "open")
+        close = e.output.close
+
+        async def close_that_fails_the_engine(*args, **kwargs):
+            e.fail(RuntimeError("injected fault in closing"))
+            return await close(*args, **kwargs)
+
+        e.output.close = close_that_fails_the_engine
+        await e.shutdown()
+        assert not e.tasks, f"shutdown returned with {len(e.tasks)} task(s) closing started"
+        assert e.failure == "injected fault in closing", e.failure
+    finally:
+        await e.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_the_failures_own_retirement(parts):
+    e, _, _, _ = parts
+    held, finished = asyncio.Event(), []
+
+    async def retire_audio():
+        await held.wait()
+        finished.append(True)
+
+    e.retire_audio = retire_audio
+    try:
+        e.admit("speech.session.open", open_args())
+        await until(lambda: e.lifecycle == "open")
+        close = e.output.close
+
+        async def close_that_fails_the_engine(*args, **kwargs):
+            e.fail(RuntimeError("injected fault in closing"))
+            return await close(*args, **kwargs)
+
+        e.output.close = close_that_fails_the_engine
+        stopping = asyncio.create_task(e.shutdown())
+        await asyncio.sleep(0.2)
+        assert not stopping.done(), "shutdown returned while the failure's retirement still held retire_audio"
+        held.set()
+        await stopping
+        assert finished == [True], "retire_audio did not complete before shutdown returned"
+        assert not e.tasks
+    finally:
+        held.set()
         await e.shutdown()

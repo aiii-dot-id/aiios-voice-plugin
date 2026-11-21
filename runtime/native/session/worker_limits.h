@@ -32,12 +32,17 @@ struct WorkerLimits {
   std::chrono::milliseconds endpoint_retire{30500};
   std::chrono::milliseconds separation_min{4000};
   std::chrono::milliseconds separation_max{25000};
+  uint32_t model_server_channels{64};
 
   static constexpr const char* variable = "AII_VOICE_LIMITS";
   static constexpr int64_t floor_ms = 250, ceiling_ms = 600000;
   static constexpr int64_t reply_floor_ms = 10, reply_ceiling_ms = 2000;
+  static constexpr int64_t channels_floor = 1, channels_ceiling = 64;
 
   void validate() const {
+    if (model_server_channels < channels_floor || model_server_channels > channels_ceiling)
+      throw std::runtime_error("worker limits: model_server_channels is " + std::to_string(model_server_channels) +
+                               "; it must be " + std::to_string(channels_floor) + " to " + std::to_string(channels_ceiling));
     const auto in_range = [](std::chrono::milliseconds v) { return v.count() >= floor_ms && v.count() <= ceiling_ms; };
     if (!in_range(exchange_read) || !in_range(exchange_write) || !in_range(opening) || !in_range(whole_read) || !in_range(whole_publication) || !in_range(drain_idle) ||
         !in_range(abort) || !in_range(capture_close) || !in_range(session_open) || !in_range(opening_notice) || !in_range(audio_write) ||
@@ -55,6 +60,7 @@ struct WorkerLimits {
   static WorkerLimits parse(const std::string& text) {
     WorkerLimits limits;
     struct Member { const char* name; std::chrono::milliseconds* value; bool seen; };
+    struct Count { const char* name; uint32_t* value; bool seen; };
     Member members[] = {{"exchange_read_ms", &limits.exchange_read, false}, {"exchange_write_ms", &limits.exchange_write, false},
                         {"opening_ms", &limits.opening, false}, {"whole_read_ms", &limits.whole_read, false},
                         {"whole_publication_ms", &limits.whole_publication, false}, {"drain_idle_ms", &limits.drain_idle, false},
@@ -67,6 +73,7 @@ struct WorkerLimits {
                         {"speaker_match_ms", &limits.speaker_match, false}, {"warm_probe_ms", &limits.warm_probe, false},
                         {"endpoint_decision_ms", &limits.endpoint_decision, false}, {"endpoint_retire_ms", &limits.endpoint_retire, false},
                         {"separation_min_ms", &limits.separation_min, false}, {"separation_max_ms", &limits.separation_max, false}};
+    Count counts[] = {{"model_server_channels", &limits.model_server_channels, false}};
     const auto bad = [] { return std::runtime_error("malformed worker limits"); };
     size_t i = 0;
     const auto expect = [&](char c) { if (i >= text.size() || text[i] != c) throw bad(); ++i; };
@@ -87,15 +94,26 @@ struct WorkerLimits {
       if (i == digits || (text[digits] == '0' && i - digits > 1)) throw bad();
       Member* found = nullptr;
       for (auto& m : members) if (name == m.name) found = &m;
-      if (!found || found->seen) throw bad();
-      found->seen = true;
-      *found->value = std::chrono::milliseconds(value);
+      Count* count = nullptr;
+      for (auto& c : counts) if (name == c.name) count = &c;
+      if (found) {
+        if (found->seen) throw bad();
+        found->seen = true;
+        *found->value = std::chrono::milliseconds(value);
+      } else if (count) {
+        if (count->seen) throw bad();
+        count->seen = true;
+        *count->value = uint32_t(value);
+      } else {
+        throw bad();
+      }
       if (i < text.size() && text[i] == ',') { ++i; continue; }
       break;
     }
     expect('}');
     if (i != text.size()) throw bad();
     for (const auto& m : members) if (!m.seen) throw bad();
+    for (const auto& c : counts) if (!c.seen) throw bad();
     limits.validate();
     return limits;
   }

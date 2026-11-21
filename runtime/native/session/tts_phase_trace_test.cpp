@@ -1,14 +1,26 @@
 #include "tts_phase_trace.h"
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <iostream>
 namespace {
 unsigned calls = 0;
 int query(uint64_t* out, size_t count, int reset) {
-  if (reset || count != 4) throw std::runtime_error("trace reset global counters");
+  if (reset || count != 4) {
+    std::cerr << "trace reset global counters\n";
+    std::exit(1);
+  }
   ++calls;
   for (size_t i = 0; i < count; ++i) out[i] = calls * 10 + i;
   return 0;
+}
+FILE* scratch() {
+#ifdef _WIN32
+  FILE* f = nullptr;
+  return tmpfile_s(&f) ? nullptr : f;
+#else
+  return std::tmpfile();
+#endif
 }
 void require(bool value, const char* message) {
   if (!value) throw std::runtime_error(message);
@@ -21,7 +33,7 @@ std::string read(FILE* f) {
 }
 int main() {
   try {
-    FILE* f = std::tmpfile(); require(f, "test output unavailable");
+    FILE* f = scratch(); require(f, "test output unavailable");
     aii::voice::TtsPhaseTrace disabled(false, query, f);
     disabled.begin(1, 1); disabled.started(0); disabled.audio(1920); disabled.finish();
     require(calls == 0 && std::ftell(f) == 0, "disabled trace touched model or output");
@@ -40,7 +52,7 @@ int main() {
     require(both.substr(at).find("\"first_ns\":0") != std::string::npos, "cancelled generation inherited first PCM");
     require(both.substr(at).find("\"first\":[0,0,0,0]") != std::string::npos, "cancelled generation inherited counters");
     std::cout << both; std::fclose(f);
-    FILE* missing = std::tmpfile(); require(missing, "test output unavailable");
+    FILE* missing = scratch(); require(missing, "test output unavailable");
     aii::voice::TtsPhaseTrace absent(true, nullptr, missing);
     absent.begin(1, 1); absent.started(0); absent.audio(1920); absent.finish();
     require(read(missing).find("\"available\":false") != std::string::npos, "missing counter falsely certified");

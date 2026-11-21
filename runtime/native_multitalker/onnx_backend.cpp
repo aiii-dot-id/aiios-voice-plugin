@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #ifdef _WIN32
 #include "bound_session.h"
@@ -112,7 +113,7 @@ struct EncoderWeights {
   Ort::Session session{nullptr};
   const std::string root,profile_prefix;
   const int threads,cuda_device;
-  std::atomic<bool> running{false};
+  std::mutex lane;
   explicit EncoderWeights(const std::string& directory,const EncoderExecution& execution)
       :root(directory),profile_prefix(execution.profile_prefix),threads(execution.threads),cuda_device(execution.cuda_device) {
     env.DisableTelemetryEvents();
@@ -216,9 +217,11 @@ std::vector<float> OnnxEncoder::push(uint64_t epoch, uint32_t track, const float
   const char* in[]{"embeddings","lengths","channel","temporal","valid","foreground","background"};
   const char* out[]{"encoded","encoded_lengths","next_channel","next_temporal","next_valid"};
   try {
-    if(p_->weights->running.exchange(true))throw std::runtime_error("shared encoder inference is already active");
-    struct Retire {std::atomic<bool>& running;~Retire(){running.store(false);}} retired{p_->weights->running};
-    auto results=p_->weights->session.Run(p_->run,in,inputs.data(),inputs.size(),out,5);
+    auto results=[&]{
+      std::lock_guard<std::mutex> lane(p_->weights->lane);
+      if (p_->cancelled.load()) throw std::runtime_error("encoder cancelled");
+      return p_->weights->session.Run(p_->run,in,inputs.data(),inputs.size(),out,5);
+    }();
     if (p_->cancelled.load()) throw std::runtime_error("encoder cancelled");
     for (auto index : {1,4}) {
       auto info=results[index].GetTensorTypeAndShapeInfo();

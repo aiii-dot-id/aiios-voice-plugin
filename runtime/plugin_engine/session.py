@@ -137,6 +137,7 @@ class ResidentEngine:
         self.seq = 0
         self.tasks = set()
         self.failure = None
+        self.failure_task = None
         self.current = None
         self.output = None
         self.recognition = None
@@ -209,7 +210,7 @@ class ResidentEngine:
             cancel = getattr(self.models, "cancel_synthesis", None)
             if cancel is not None:
                 cancel()
-        self.task(self.retire_failure())
+        self.failure_task = self.task(self.retire_failure())
 
     async def retire_failure(self):
         errors = await self.abort_resources()
@@ -829,6 +830,15 @@ class ResidentEngine:
             },
         }
 
+    async def retire_tasks(self, results):
+        while self.tasks:
+            pending = tuple(self.tasks)
+            for task in pending:
+                if task is not self.failure_task:
+                    task.cancel()
+            results.extend(await asyncio.gather(*pending, return_exceptions=True))
+            self.tasks.difference_update(pending)
+
     async def shutdown(self):
         results = []
         if self.speaker is not None:
@@ -838,9 +848,7 @@ class ResidentEngine:
                 self.fence({}, cancel=True)
             except Exception as error:
                 results.append(error)
-        for task in tuple(self.tasks):
-            task.cancel()
-        results.extend(await asyncio.gather(*tuple(self.tasks), return_exceptions=True))
+        await self.retire_tasks(results)
         if self.output:
             results.extend(
                 await asyncio.gather(
@@ -851,6 +859,7 @@ class ResidentEngine:
             results.extend(
                 await asyncio.gather(self.speaker.close(), return_exceptions=True)
             )
+        await self.retire_tasks(results)
         self.cleanup_errors = [
             str(x)
             for x in results

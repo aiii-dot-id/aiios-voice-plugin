@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestWindowsKillWithoutOwnedJobRefuses(t *testing.T) {
-	if workerTreeJob != 0 {
+	if workerTreeJob != 0 || workerJob != 0 {
 		t.Fatal("fixture unexpectedly owns a process job")
 	}
 	if err := killWorker(nil); err == nil {
@@ -20,68 +21,87 @@ func TestWindowsKillWithoutOwnedJobRefuses(t *testing.T) {
 	}
 }
 
+type cleanupIdentities struct{ Carrier, Worker, Leaf int }
+
 func TestWindowsCleanupFixture(t *testing.T) {
-	role := os.Getenv("AII_TEST_CLEANUP_ROLE")
-	if role == "" {
-		return
-	}
-	if role == "leaf" {
-		fmt.Println(os.Getpid())
-		time.Sleep(60 * time.Second)
-		return
-	}
-	if role != "parent" {
-		t.Fatal("unknown fixture role")
-	}
-	if err := ownWorkerTree(); err != nil {
-		t.Fatal(err)
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := exec.Command(exe, "-test.run=^TestWindowsCleanupFixture$")
-	child.Env = append(os.Environ(), "AII_TEST_CLEANUP_ROLE=leaf")
-	child.Stderr = os.Stderr
-	out, err := child.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
+	start := func(role string, suspended bool) (*exec.Cmd, int) {
+		cmd := exec.Command(exe, "-test.run=^TestWindowsCleanupFixture$")
+		cmd.Env = append(os.Environ(), "AII_TEST_CLEANUP_ROLE="+role)
+		cmd.Stderr = os.Stderr
+		if suspended {
+			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createSuspended}
+		}
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		returned := false
+		defer func() {
+			if !returned {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			}
+		}()
+		if suspended {
+			if err := adoptWorker(cmd); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var pid int
+		if _, err := fmt.Fscanln(bufio.NewReader(out), &pid); err != nil || pid <= 0 {
+			t.Fatalf("the %s did not start: %d, %v", role, pid, err)
+		}
+		returned = true
+		return cmd, pid
 	}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
-	var ready int
-	if _, err := fmt.Fscanln(bufio.NewReader(out), &ready); err != nil || ready != child.Process.Pid {
-		t.Fatalf("descendant did not start: %d, %v", ready, err)
-	}
-	if err := json.NewEncoder(os.Stdout).Encode(map[string]int{"parent": os.Getpid(), "child": ready}); err != nil {
-		t.Fatal(err)
-	}
-	trigger := make(chan bool, 1)
-	go func() {
+	switch os.Getenv("AII_TEST_CLEANUP_ROLE") {
+	case "":
+		return
+	case "leaf":
+		fmt.Println(os.Getpid())
+		time.Sleep(60 * time.Second)
+	case "worker":
+		leaf, pid := start("leaf", false)
+		defer func() { _ = leaf.Process.Kill(); _ = leaf.Wait() }()
+		fmt.Println(pid)
+		time.Sleep(60 * time.Second)
+	case "carrier":
+		if err := ownWorkerTree(); err != nil {
+			t.Fatal(err)
+		}
+		worker, leaf := start("worker", true)
+		waited := make(chan error, 1)
+		go func() { waited <- worker.Wait() }()
+		if err := json.NewEncoder(os.Stdout).Encode(cleanupIdentities{os.Getpid(), worker.Process.Pid, leaf}); err != nil {
+			t.Fatal(err)
+		}
 		var line string
-		_, err := fmt.Fscanln(os.Stdin, &line)
-		trigger <- err == nil && line == "terminate"
-	}()
-	select {
-	case yes := <-trigger:
-		if !yes {
-			t.Fatal("missing termination command")
+		if _, err := fmt.Fscanln(os.Stdin, &line); err != nil || line != "terminate" {
+			t.Fatalf("missing termination command: %q, %v", line, err)
 		}
-		if err := killWorker(child); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		if err := killWorker(worker); err != nil {
+			t.Fatal(err)
 		}
-
-		time.Sleep(5 * time.Second)
-		t.Fatal("job termination did not retire its owner")
-	case <-time.After(60 * time.Second):
-		t.Fatal("fixture owner deadline")
+		select {
+		case <-waited:
+			fmt.Printf("worker exit %d\n", worker.ProcessState.ExitCode())
+		case <-time.After(5 * time.Second):
+			t.Fatal("the worker's job ended and its exit was not seen")
+		}
+	default:
+		t.Fatal("unknown fixture role")
 	}
 }
 
-func TestWindowsKillWorkerWithoutPATHRetiresDescendant(t *testing.T) {
-
+func startCleanupCarrier(t *testing.T) (*exec.Cmd, <-chan error, cleanupIdentities, io.Writer, *bufio.Reader) {
+	t.Helper()
 	t.Setenv("PATH", "")
 	t.Setenv("NoDefaultCurrentDirectoryInExePath", "1")
 	exe, err := os.Executable()
@@ -89,13 +109,13 @@ func TestWindowsKillWorkerWithoutPATHRetiresDescendant(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(exe, "-test.run=^TestWindowsCleanupFixture$")
-	cmd.Env = append(os.Environ(), "AII_TEST_CLEANUP_ROLE=parent")
+	cmd.Env = append(os.Environ(), "AII_TEST_CLEANUP_ROLE=carrier")
 	cmd.Stderr = os.Stderr
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	t.Cleanup(func() { _ = in.Close() })
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -103,65 +123,105 @@ func TestWindowsKillWorkerWithoutPATHRetiresDescendant(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waited := make(chan error, 1)
-	go func() { waited <- cmd.Wait() }()
-	reaped := false
+	waited, reaped := make(chan error, 1), make(chan struct{})
+	go func() { waited <- cmd.Wait(); close(reaped) }()
 	t.Cleanup(func() {
-		if !reaped {
-			_ = cmd.Process.Kill()
-			select {
-			case <-waited:
-			case <-time.After(5 * time.Second):
-				t.Error("fixture parent cleanup not reaped")
-			}
+		_ = cmd.Process.Kill()
+		select {
+		case <-reaped:
+		case <-time.After(5 * time.Second):
+			t.Error("fixture carrier cleanup not reaped")
 		}
 	})
-	type identity struct{ Parent, Child int }
-	ready := make(chan identity, 1)
+	rest := bufio.NewReader(out)
+	ready := make(chan cleanupIdentities, 1)
 	go func() {
-		var ids identity
-		_ = json.NewDecoder(out).Decode(&ids)
+		var ids cleanupIdentities
+		line, _ := rest.ReadBytes('\n')
+		_ = json.Unmarshal(line, &ids)
 		ready <- ids
 	}()
-	var ids identity
+	var ids cleanupIdentities
 	select {
 	case ids = <-ready:
 	case <-time.After(20 * time.Second):
-		t.Fatal("worker fixture readiness timed out")
+		t.Fatal("cleanup fixture readiness timed out")
 	}
-	if ids.Parent != cmd.Process.Pid || ids.Child <= 0 || ids.Child == ids.Parent {
+	if ids.Carrier != cmd.Process.Pid || ids.Worker <= 0 || ids.Leaf <= 0 || ids.Worker == ids.Carrier || ids.Leaf == ids.Worker {
 		t.Fatalf("unproven fixture identities: %+v", ids)
 	}
-	child, err := syscall.OpenProcess(syscall.SYNCHRONIZE|syscall.PROCESS_TERMINATE, false, uint32(ids.Child))
+	return cmd, waited, ids, in, rest
+}
+
+func watchProcess(t *testing.T, pid int, role string) syscall.Handle {
+	t.Helper()
+	h, err := syscall.OpenProcess(syscall.SYNCHRONIZE|syscall.PROCESS_TERMINATE|syscall.PROCESS_QUERY_INFORMATION, false, uint32(pid))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open the fixture's %s: %v", role, err)
 	}
 	t.Cleanup(func() {
-		_ = syscall.TerminateProcess(child, 1)
-		status, err := syscall.WaitForSingleObject(child, 5000)
-		_ = syscall.CloseHandle(child)
+		_ = syscall.TerminateProcess(h, 1)
+		status, err := syscall.WaitForSingleObject(h, 5000)
+		_ = syscall.CloseHandle(h)
 		if err != nil || status != syscall.WAIT_OBJECT_0 {
-			t.Errorf("fixture descendant cleanup unproven: %d, %v", status, err)
+			t.Errorf("fixture %s cleanup unproven: %d, %v", role, status, err)
 		}
 	})
-	if status, err := syscall.WaitForSingleObject(child, 0); err != nil || status != syscall.WAIT_TIMEOUT {
-		t.Fatalf("descendant was not alive before forced cleanup: %d, %v", status, err)
+	if status, err := syscall.WaitForSingleObject(h, 0); err != nil || status != syscall.WAIT_TIMEOUT {
+		t.Fatalf("the fixture's %s was not alive: %d, %v", role, status, err)
 	}
+	return h
+}
+
+func ended(t *testing.T, h syscall.Handle, role, after string) uint32 {
+	t.Helper()
+	if status, err := syscall.WaitForSingleObject(h, 5000); err != nil || status != syscall.WAIT_OBJECT_0 {
+		t.Fatalf("%s left the %s alive: %d, %v", after, role, status, err)
+	}
+	var code uint32
+	if err := syscall.GetExitCodeProcess(h, &code); err != nil {
+		t.Fatal(err)
+	}
+	return code
+}
+
+func TestWindowsKillWorkerWithoutPATHRetiresItsTreeAndNotTheCarrier(t *testing.T) {
+	_, waited, ids, in, rest := startCleanupCarrier(t)
+	worker, leaf := watchProcess(t, ids.Worker, "worker"), watchProcess(t, ids.Leaf, "worker's child")
 	started := time.Now()
 	if _, err := fmt.Fprintln(in, "terminate"); err != nil {
 		t.Fatal(err)
 	}
+	if code := ended(t, worker, "worker", "forced cleanup"); code != 73 {
+		t.Fatalf("forced cleanup must end the worker abnormally with 73, not %d", code)
+	}
+	ended(t, leaf, "worker's child", "forced cleanup")
+	line, _ := rest.ReadString('\n')
+	if line != "worker exit 73\n" {
+		t.Fatalf("the carrier did not see its worker's exit after the kill: %q", line)
+	}
 	select {
 	case err := <-waited:
-		reaped = true
-		if err == nil || cmd.ProcessState.ExitCode() != 73 {
-			t.Fatalf("forced job retirement must be abnormal exit 73: %v (%v)", cmd.ProcessState, err)
+		if err != nil {
+			t.Fatalf("the carrier did not outlive its worker's cleanup: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("forced cleanup did not reap worker")
+		t.Fatal("the carrier did not end after its worker's cleanup")
 	}
-	if status, err := syscall.WaitForSingleObject(child, 5000); err != nil || status != syscall.WAIT_OBJECT_0 {
-		t.Fatalf("forced cleanup left descendant alive: %d, %v", status, err)
+	t.Logf("PATH absent; worker %d and its child %d ended, carrier %d ended by itself; elapsed=%s", ids.Worker, ids.Leaf, ids.Carrier, time.Since(started))
+}
+
+func TestWindowsCarrierDeathRetiresItsWorkersTree(t *testing.T) {
+	cmd, waited, ids, _, _ := startCleanupCarrier(t)
+	worker, leaf := watchProcess(t, ids.Worker, "worker"), watchProcess(t, ids.Leaf, "worker's child")
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("PATH absent; parent %d reaped, descendant %d exited; elapsed=%s", ids.Parent, ids.Child, time.Since(started))
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the killed carrier was not reaped")
+	}
+	ended(t, worker, "worker", "the carrier's death")
+	ended(t, leaf, "worker's child", "the carrier's death")
 }

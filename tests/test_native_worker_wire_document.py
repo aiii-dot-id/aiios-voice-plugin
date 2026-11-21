@@ -61,7 +61,7 @@ def core_event_kinds():
 
 
 def worker_limit_members():
-    return set(re.findall(r'\{"([a-z_]+_ms)",\s*&limits\.', LIMITS_HEADER))
+    return set(re.findall(r'\{"([a-z_]+)",\s*&limits\.', LIMITS_HEADER))
 
 
 WIRE_STRUCTS = ("workerMessage", "privateRequest", "settingsQuery", "settingsRequest", "settingsReply", "snapshotQuery", "snapshotReply")
@@ -105,7 +105,7 @@ NAMES = {
     "exit statuses": (
         set(re.findall(r"\babandon\((\d+)\)", WORKER))
         | {n for pair in re.findall(r"_Exit\(count == 0 \? (\d+) : (\d+)\)", LIVENESS) for n in pair}
-        | set(re.findall(r"workerTreeJob\),\s*(\d+)\)", CARRIER)),
+        | set(re.findall(r"worker(?:Tree)?Job\),\s*(\d+)\)", CARRIER)),
         {"72", "73", "74", "75"}),
     "storage words": (
         set(re.findall(r'"resource"\s*,\s*string\("([a-z_:]+)"', BRIDGE))
@@ -187,7 +187,7 @@ def test_the_table_of_differences_says_what_the_source_does():
 
 def test_the_three_copies_of_the_limits_table_name_the_same_members():
     carrier, worker = go_struct_tags("workerLimits"), worker_limit_members()
-    tests = set(re.findall(r'"([a-z_]+_ms)":\s*\d+', text(ROOT / "tests/native_limits.py")))
+    tests = set(re.findall(r'"([a-z_]+)":\s*\d+', text(ROOT / "tests/native_limits.py")))
     assert carrier == worker == tests and len(carrier) >= 10, (
         f"the carrier hands over {sorted(carrier)}, the worker parses {sorted(worker)}, the tests state {sorted(tests)}")
 

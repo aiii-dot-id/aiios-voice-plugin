@@ -1,8 +1,7 @@
 {
   "repository": "https://github.com/aiii-dot-id/aii-plugin-sdk",
-  "revision": "ca3a6f2fdd69af0c42dfedb83d7e1bca66eb4809",
-  "archive": ".build/aii-plugin-sdk-ca3a6f2.tar",
-  "archive_sha256": "2d0b3360d0d427476fe5995108640d5db8b3dfe92d9f16f1c9001d0d081bd581",
-  "source": ".build/aii-plugin-sdk-ca3a6f2",
-  "version": "v0.1.15"
+  "revision": "32ccba4f2a06282f60649d2422d615e0e1113b81",
+  "archive": ".build/aii-plugin-sdk-32ccba4.tar",
+  "archive_sha256": "c39915ce0efaf81ea3b126a9672049d9effcf02678718527f2c3a6b41901f584",
+  "source": ".build/aii-plugin-sdk-32ccba4"
 }

@@ -33,6 +33,17 @@ def operation(host, name, args, *, confirmed=False):
     return reply['result']['operation_result']
 
 
+REGULAR = ('uid/speakers.json', 'uid/speakers-heard.json', 'uid/enrollment.json', 'uid/captures.json', 'uid/corrections.json')
+STAGED = {'speakers': (lambda sha: 'uid/speakers.json', 8 << 20),
+          'heard': (lambda sha: 'uid/speakers-heard.json', 65536),
+          'recovery': (lambda sha: 'uid/recovery-' + sha + '.json', 12 << 20)}
+
+
+def staged_kind(name):
+    match = re.fullmatch(r'uid/\.(speakers|heard|recovery)-[0-9a-f]{64}\.pending', name)
+    return match and match.group(1)
+
+
 class RegistryBroker:
     def __init__(self, host, storage=None):
         self.host = host
@@ -47,9 +58,10 @@ class RegistryBroker:
         op, target, args = params['operation'], params['target'], params['arguments']
         name = target['path']
         assert target['root'] == 'private'
-        regular = name in ('uid/speakers.json', 'uid/enrollment.json', 'uid/captures.json', 'uid/corrections.json')
-        stage = re.fullmatch(r'uid/\.speakers-[0-9a-f]{64}\.pending', name)
-        assert regular or stage, 'unexpected private-store target'
+        regular, stage = name in REGULAR, staged_kind(name)
+        source = staged_kind(args.get('from', '')) if op == 'fs.publish' else None
+        destination = source and STAGED[source][0](args.get('sha256', '')) == name
+        assert regular or stage or destination, 'unexpected private-store target'
         if op == 'fs.read':
             assert regular and set(args)=={'offset','length','digest'} and args['length']==65536
             if name not in self.storage:
@@ -67,12 +79,11 @@ class RegistryBroker:
             raw = base64.b64decode(args['data_b64'], validate=True)
             assert 0 < len(raw) <= 65536
             self.storage[name] = (self.storage.get(name,b'') if args['append'] else b'')+raw
-            assert len(self.storage[name]) <= 8<<20
+            assert len(self.storage[name]) <= STAGED[stage][1]
             value = dict(**target, bytes=len(raw), size=len(self.storage[name]), appended=args['append'])
         elif op == 'fs.publish':
-            assert name=='uid/speakers.json' and set(args) in (
+            assert destination and set(args) in (
                 {'from','sha256','expected_absent'}, {'from','sha256','expected_sha256'})
-            assert re.fullmatch(r'uid/\.speakers-[0-9a-f]{64}\.pending', args['from'])
             raw, before = self.storage[args['from']], self.storage.get(name)
             assert digest(raw)==args['sha256']
             conflict = before is not None if args.get('expected_absent') else before is None or digest(before)!=args['expected_sha256']

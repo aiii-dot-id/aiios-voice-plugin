@@ -4,7 +4,7 @@ using namespace aii::voice::wire;
 int main(int argc,char** argv) {
   try {
     if(argc==2&&std::string(argv[1])=="describe") {std::cout<<encode(OperatorSettings::declarations())<<'\n';return 0;}
-    auto decls=OperatorSettings::declarations(),declared=object();require(cJSON_GetArraySize(decls.get())==8,"settings declaration incomplete");
+    auto decls=OperatorSettings::declarations(),declared=object();require(cJSON_GetArraySize(decls.get())==10,"settings declaration incomplete");
     size_t vad=0;for(auto* row=decls->child;row;row=row->next) {
       const auto key=str(field(row,"key"),32);
       require(str(field(row,"scope"))==(key.rfind("tts_",0)==0?"speaking":"hearing"),"compiled setting scope differs");
@@ -59,6 +59,20 @@ int main(int argc,char** argv) {
       catch(const Refused&){refused=true;}
       require(refused,"invalid capture duration accepted");
     }
-    std::cout<<"typed voice/language/pause/VAD/sampling settings and truthful readback\n";
+    require(d.anonymous_profiles=="on"&&d.anonymous_expiry_days==default_anonymous_expiry_days&&default_anonymous_expiry_days==30,
+      "voiceprint retention default changed");
+    for(const char* choice:{"on","off"}) {
+      auto j=object();put(j,"anonymous_profiles",string(choice));const auto chosen=OperatorSettings::read(j.get());
+      require(chosen.anonymous_profiles==choice&&str(field(chosen.effective().get(),"anonymous_profiles"))==choice,"voiceprint switch selection/readback changed");
+    }
+    for(uint32_t days:{1u,7u,365u,max_anonymous_expiry_days}) {
+      auto j=object();put(j,"anonymous_expiry_days",number(days));const auto chosen=OperatorSettings::read(j.get());
+      require(chosen.anonymous_expiry_days==days&&integer(field(chosen.effective().get(),"anonymous_expiry_days"))==days,"voiceprint expiry selection/readback changed");
+    }
+    for(const char* bad:{R"({"anonymous_profiles":"yes"})",R"({"anonymous_profiles":true})",R"({"anonymous_profiles":"ON"})",
+        R"({"anonymous_expiry_days":0})",R"({"anonymous_expiry_days":3651})",R"({"anonymous_expiry_days":-1})",R"({"anonymous_expiry_days":1.5})",R"({"anonymous_expiry_days":"30"})"}) {
+      bool refused=false;try{auto j=parse(bad);OperatorSettings::read(j.get());}catch(const Refused&){refused=true;}require(refused,"invalid voiceprint retention accepted");
+    }
+    std::cout<<"typed voice/language/pause/VAD/sampling/voiceprint-retention settings and truthful readback\n";
   } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

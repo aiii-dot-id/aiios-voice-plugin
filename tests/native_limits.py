@@ -7,7 +7,7 @@ TABLE = {
     "audio_write_ms": 3000, "control_write_ms": 3000, "retire_ms": 5000, "capture_tail_ms": 2000,
     "model_call_ms": 30000, "input_tail_ms": 3000, "output_take_ms": 15000, "speaker_match_ms": 15000,
     "warm_probe_ms": 40000, "endpoint_decision_ms": 1000, "endpoint_retire_ms": 30500,
-    "separation_min_ms": 4000, "separation_max_ms": 25000,
+    "separation_min_ms": 4000, "separation_max_ms": 25000, "model_server_channels": 64,
 }
 
 

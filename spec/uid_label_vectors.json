@@ -17,7 +17,7 @@
     {"name": "surrogate", "utf8_hex": "eda080", "accepted": false},
     {"name": "truncated", "utf8_hex": "f09f8e", "accepted": false},
     {"name": "literal_escape", "utf8_hex": "5c7530303030", "accepted": true},
-    {"name": "ordinary_name", "utf8_hex": "4578616d706c65", "accepted": true},
+    {"name": "ordinary_name", "utf8_hex": "4a616d6573", "accepted": true},
     {"name": "persian_word_with_non_joiner", "utf8_hex": "d985db8ce2808cd8aed988d8a7d987d985", "accepted": true},
     {"name": "sinhala_word_with_joiner", "utf8_hex": "e0b781e0b78ae2808de0b6bbe0b793", "accepted": true},
     {"name": "emoji_joined", "utf8_hex": "f09f91a9e2808df09f9a80", "accepted": true},

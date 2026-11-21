@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import ctypes
-import subprocess
-import sys
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Self
 
@@ -16,31 +16,24 @@ SOURCE = HERE / "src" / "aiii_voice_frontend.c"
 FRONTEND_ABI_VERSION = 1
 
 
-def build_shared_library(output: Path, *, compiler: str = "cc") -> Path:
+def build_shared_library(output: Path) -> Path:
+    from scripts import native_probe
+
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    shared_flag = "-dynamiclib" if sys.platform == "darwin" else "-shared"
-    subprocess.run(
-        [
-            compiler,
-            "-std=c99",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-pedantic",
-            "-fPIC",
-            "-DAIII_VOICE_FRONTEND_BUILD",
-            shared_flag,
-            "-I",
-            str(HEADER_DIR),
-            str(SOURCE),
-            "-o",
-            str(output),
-            "-lm",
-        ],
-        check=True,
-    )
+    with tempfile.TemporaryDirectory(prefix=f".{output.name}.build-", dir=output.parent) as scratch:
+        built = native_probe.build(
+            Path(scratch),
+            "aiii_voice_frontend",
+            [SOURCE],
+            kind="shared",
+            language="C",
+            standard=99,
+            pedantic=True,
+            defines=["AIII_VOICE_FRONTEND_BUILD"],
+            includes=[HEADER_DIR],
+        )
+        shutil.copyfile(built.path, output)
     return output
 
 

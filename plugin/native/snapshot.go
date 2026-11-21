@@ -13,6 +13,8 @@ import (
 const snapshotPath = "uid/enrollment.json"
 const pendingCapturesPath = "uid/captures.json"
 const speakerRegistryPath = "uid/speakers.json"
+
+const speakerHeardPath = "uid/speakers-heard.json"
 const snapshotPageBytes = 65536
 
 type snapshotQuery struct {
@@ -34,7 +36,7 @@ func hexDigest(s string) bool {
 	return e == nil && len(b) == 32 && hex.EncodeToString(b) == s
 }
 func (q snapshotQuery) valid() bool {
-	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && q.Resource != "speaker_registry" && q.Resource != correctionsResource && !q.recovery() && !q.waveform()) || q.Offset > q.limit() {
+	if !q.settingsQuery.valid() || (q.Resource != "" && q.Resource != "captures" && q.Resource != "speaker_registry" && q.Resource != "speaker_heard" && q.Resource != correctionsResource && !q.recovery() && !q.waveform()) || q.Offset > q.limit() {
 		return false
 	}
 	if q.waveform() && q.Action != "" && q.Upload != strings.TrimPrefix(q.Resource, "waveform:") {
@@ -72,7 +74,7 @@ func (q snapshotQuery) limit() uint64 {
 	if q.recovery() {
 		return 12 << 20
 	}
-	if q.Resource == "captures" || q.Resource == correctionsResource {
+	if q.Resource == "captures" || q.Resource == "speaker_heard" || q.Resource == correctionsResource {
 		return snapshotPageBytes
 	}
 	return 8 << 20
@@ -83,6 +85,9 @@ func (q snapshotQuery) stagePath() string {
 	}
 	if q.Resource == "speaker_registry" {
 		return "uid/.speakers-" + q.Upload + ".pending"
+	}
+	if q.Resource == "speaker_heard" {
+		return "uid/.heard-" + q.Upload + ".pending"
 	}
 	if q.recovery() {
 		return "uid/.recovery-" + q.Upload + ".pending"
@@ -104,6 +109,9 @@ func (q snapshotQuery) target() string {
 	}
 	if q.Resource == "speaker_registry" {
 		return speakerRegistryPath
+	}
+	if q.Resource == "speaker_heard" {
+		return speakerHeardPath
 	}
 	if q.recovery() {
 		return "uid/recovery-" + strings.TrimPrefix(q.Resource, "recovery:") + ".json"

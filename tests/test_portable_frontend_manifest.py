@@ -18,6 +18,17 @@ def library(tmp_path_factory):
     return build_shared_library(tmp_path_factory.mktemp("frontend") / "frontend.so")
 
 
+def test_a_second_build_and_a_retry_after_a_failed_one_both_build(tmp_path):
+    out = tmp_path / "frontend.so"
+    build_shared_library(out)
+    (tmp_path / "frontend.so.build" / "aiii_voice_frontend-project").mkdir(parents=True)
+    build_shared_library(out)
+    left = sorted(p.name for p in tmp_path.iterdir())
+    assert left == ["frontend.so", "frontend.so.build"], left
+    lib = ctypes.CDLL(str(out))
+    assert lib.vf_frontend_abi_version() == 1
+
+
 def native_accepts(library, raw):
     lib = ctypes.CDLL(str(library))
     lib.vf_frontend_create.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]

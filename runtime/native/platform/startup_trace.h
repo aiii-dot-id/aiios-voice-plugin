@@ -16,8 +16,14 @@ class StartupSpan {
 public:
   explicit StartupSpan(const char* label, const char* component="native-startup-profile") noexcept
       :label_(label),component_(component),enabled_(false),exceptions_(std::uncaught_exceptions()),began_(Clock::now()) {
+#ifdef _WIN32
+    char* value=nullptr;size_t length=0;
+    enabled_=!_dupenv_s(&value,&length,"AII_VOICE_STARTUP_TRACE")&&value&&std::strcmp(value,"1")==0;
+    std::free(value);
+#else
     const char* value=std::getenv("AII_VOICE_STARTUP_TRACE");
     enabled_=value&&std::strcmp(value,"1")==0;
+#endif
   }
   ~StartupSpan() noexcept {
     if(!enabled_)return;

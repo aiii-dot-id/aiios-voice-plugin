@@ -7,7 +7,20 @@
 #include <vector>
 
 namespace aii::multitalker {
-struct NemotronConfig {std::string model;int gpu=-1;bool share_dormant=true;bool refine_evidence=false;};
+class NemotronModel;
+struct NemotronConfig {std::string model;int gpu=-1;bool share_dormant=true;bool refine_evidence=false;
+  std::shared_ptr<NemotronModel> loaded{};};
+class NemotronModel {
+ public:
+  explicit NemotronModel(const NemotronConfig&);
+  ~NemotronModel();
+  NemotronModel(const NemotronModel&)=delete;
+  NemotronModel& operator=(const NemotronModel&)=delete;
+  struct Impl;
+  Impl& impl() const {return *p_;}
+ private:
+  std::unique_ptr<Impl> p_;
+};
 class Nemotron {
  public:
   explicit Nemotron(const NemotronConfig&);

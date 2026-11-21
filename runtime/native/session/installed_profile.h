@@ -1,5 +1,6 @@
 #pragma once
 #include "worker_json.h"
+#include "worker_limits.h"
 #include "../platform/paths.h"
 #include <array>
 #include <cstdlib>
@@ -10,6 +11,7 @@ struct InstalledProfile {
   std::array<std::string,11> arguments;
   std::string asr_execution;
   std::string previous_uid_policy;
+  uint32_t max_sessions=0;
   static std::filesystem::path host_model_root() {
 #ifdef _WIN32
     const auto required=GetEnvironmentVariableW(L"AII_MODELS_DIR",nullptr,0);
@@ -49,7 +51,8 @@ struct InstalledProfile {
     auto j=parse(std::string(bytes,size_t(in.gcount())));
     const auto* execution=field(j.get(),"asr_execution");
     const auto* previous=field(j.get(),"uid_previous_policy");
-    require(cJSON_IsObject(j.get())&&cJSON_GetArraySize(j.get())==4+bool(execution)+bool(previous),"native profile fields differ");
+    const auto* sessions=field(j.get(),"max_sessions");
+    require(cJSON_IsObject(j.get())&&cJSON_GetArraySize(j.get())==4+bool(execution)+bool(previous)+bool(sessions),"native profile fields differ");
     require(str(field(j.get(),"schema"))=="aiii.voice.native-profile","native profile schema differs");
     auto backend=str(field(j.get(),"backend"));require(backend=="cpu"||backend=="vulkan"||backend=="metal","native backend differs");
     const auto* paths=field(j.get(),"models");
@@ -64,6 +67,11 @@ struct InstalledProfile {
     for(size_t i=0;i<keys.size();++i)p.arguments[i<7?i+1:9]=within(models,str(field(paths,keys[i]),1024),i==0||i==5).u8string();
     p.arguments[10]=within(runtime,str(field(j.get(),"uid_policy"),1024),false).u8string();
     if(previous)p.previous_uid_policy=within(runtime,str(previous,1024),false).u8string();
+    if(sessions) {
+      const auto stated=integer(sessions);
+      require(stated>=1&&stated<=uint64_t(aii::voice::WorkerLimits::channels_ceiling),"max_sessions must be 1 to 64");
+      p.max_sessions=uint32_t(stated);
+    }
     return p;
   }
 };

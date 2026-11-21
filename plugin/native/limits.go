@@ -52,6 +52,8 @@ type limits struct {
 
 	SeparationMin time.Duration
 	SeparationMax time.Duration
+
+	ModelServerChannels int64
 }
 
 var defaultLimits = limits{HostRead: 5 * time.Second, HostWrite: 12 * time.Second, StorageWait: 12 * time.Second, DrainIdle: 15 * time.Second, ReplySettings: 150 * time.Millisecond,
@@ -59,7 +61,8 @@ var defaultLimits = limits{HostRead: 5 * time.Second, HostWrite: 12 * time.Secon
 	Control: 2 * time.Second, AudioWrite: 3 * time.Second, Ready: 175 * time.Second, ControlWrite: 3 * time.Second,
 	Retire: 5 * time.Second, CaptureTail: 2 * time.Second, WorkerExit: 5500 * time.Millisecond, WorkerReap: 5 * time.Second, LaneFlush: 2 * time.Second,
 	ModelCall: 30 * time.Second, InputTail: 3 * time.Second, OutputTake: 15 * time.Second, SpeakerMatch: 15 * time.Second, WarmProbe: 40 * time.Second,
-	EndpointDecision: 1000 * time.Millisecond, EndpointRetire: 30500 * time.Millisecond, SeparationMin: 4 * time.Second, SeparationMax: 25 * time.Second}
+	EndpointDecision: 1000 * time.Millisecond, EndpointRetire: 30500 * time.Millisecond, SeparationMin: 4 * time.Second, SeparationMax: 25 * time.Second,
+	ModelServerChannels: 64}
 
 const hostInvokeAllowance = 90 * time.Second
 
@@ -76,6 +79,11 @@ const (
 
 	readyFloor   = 1000 * time.Millisecond
 	readyCeiling = 3600 * time.Second
+)
+
+const (
+	channelsFloor   = 1
+	channelsCeiling = 64
 )
 
 type profileLimits struct {
@@ -106,6 +114,8 @@ type profileLimits struct {
 	EndRetireMS    *int64 `json:"endpoint_retire_ms,omitempty"`
 	SeparateMinMS  *int64 `json:"separation_min_ms,omitempty"`
 	SeparateMaxMS  *int64 `json:"separation_max_ms,omitempty"`
+
+	ModelServerChannels *int64 `json:"model_server_channels,omitempty"`
 }
 
 func limitsFrom(p *profileLimits) (limits, error) {
@@ -123,6 +133,10 @@ func limitsFrom(p *profileLimits) (limits, error) {
 			if m.ms != nil {
 				*m.set = time.Duration(*m.ms) * time.Millisecond
 			}
+		}
+
+		if p.ModelServerChannels != nil {
+			l.ModelServerChannels = *p.ModelServerChannels
 		}
 	}
 	return l, l.valid()
@@ -147,6 +161,9 @@ func (l limits) valid() error {
 	}
 	if l.Ready < readyFloor || l.Ready > readyCeiling {
 		return fmt.Errorf("runtime limit ready_ms is %d ms; it must be %d to %d", l.Ready.Milliseconds(), readyFloor.Milliseconds(), readyCeiling.Milliseconds())
+	}
+	if l.ModelServerChannels < channelsFloor || l.ModelServerChannels > channelsCeiling {
+		return fmt.Errorf("runtime limit model_server_channels is %d; it must be %d to %d", l.ModelServerChannels, channelsFloor, channelsCeiling)
 	}
 	if l.HostWrite < l.HostRead {
 		return errors.New("runtime limits: a write must be given at least a read's time")
@@ -218,6 +235,13 @@ func (l limits) playbackReport() time.Duration { return l.AudioWrite + l.Control
 
 func (l limits) ownStorage() time.Duration { return 2*l.HostRead + 2*l.HostWrite }
 
+func (l limits) retentionRead() time.Duration {
+	if left := hostInvokeAllowance - hostAnswerMargin - l.storageOperation(); left < l.HostRead {
+		return left
+	}
+	return l.HostRead
+}
+
 type workerLimits struct {
 	ExchangeReadMS     int64 `json:"exchange_read_ms"`
 	ExchangeWriteMS    int64 `json:"exchange_write_ms"`
@@ -243,34 +267,37 @@ type workerLimits struct {
 	EndpointRetireMS   int64 `json:"endpoint_retire_ms"`
 	SeparationMinMS    int64 `json:"separation_min_ms"`
 	SeparationMaxMS    int64 `json:"separation_max_ms"`
+
+	ModelServerChannels int64 `json:"model_server_channels"`
 }
 
 func (l limits) forWorker() workerLimits {
 	return workerLimits{
-		ExchangeReadMS:     l.workerExchange("").Milliseconds(),
-		ExchangeWriteMS:    l.workerExchange("stage").Milliseconds(),
-		OpeningMS:          l.workerOpening().Milliseconds(),
-		WholeReadMS:        l.wholeRead().Milliseconds(),
-		WholePublicationMS: l.wholePublication().Milliseconds(),
-		DrainIdleMS:        l.DrainIdle.Milliseconds(),
-		ReplySettingsMS:    l.ReplySettings.Milliseconds(),
-		AbortMS:            l.Abort.Milliseconds(),
-		CaptureCloseMS:     l.CaptureClose.Milliseconds(),
-		SessionOpenMS:      l.SessionOpen.Milliseconds(),
-		OpeningNoticeMS:    l.OpeningNotice.Milliseconds(),
-		AudioWriteMS:       l.AudioWrite.Milliseconds(),
-		ControlWriteMS:     l.ControlWrite.Milliseconds(),
-		RetireMS:           l.Retire.Milliseconds(),
-		CaptureTailMS:      l.CaptureTail.Milliseconds(),
-		ModelCallMS:        l.ModelCall.Milliseconds(),
-		InputTailMS:        l.InputTail.Milliseconds(),
-		OutputTakeMS:       l.OutputTake.Milliseconds(),
-		SpeakerMatchMS:     l.SpeakerMatch.Milliseconds(),
-		WarmProbeMS:        l.WarmProbe.Milliseconds(),
-		EndpointDecisionMS: l.EndpointDecision.Milliseconds(),
-		EndpointRetireMS:   l.EndpointRetire.Milliseconds(),
-		SeparationMinMS:    l.SeparationMin.Milliseconds(),
-		SeparationMaxMS:    l.SeparationMax.Milliseconds(),
+		ExchangeReadMS:      l.workerExchange("").Milliseconds(),
+		ExchangeWriteMS:     l.workerExchange("stage").Milliseconds(),
+		OpeningMS:           l.workerOpening().Milliseconds(),
+		WholeReadMS:         l.wholeRead().Milliseconds(),
+		WholePublicationMS:  l.wholePublication().Milliseconds(),
+		DrainIdleMS:         l.DrainIdle.Milliseconds(),
+		ReplySettingsMS:     l.ReplySettings.Milliseconds(),
+		AbortMS:             l.Abort.Milliseconds(),
+		CaptureCloseMS:      l.CaptureClose.Milliseconds(),
+		SessionOpenMS:       l.SessionOpen.Milliseconds(),
+		OpeningNoticeMS:     l.OpeningNotice.Milliseconds(),
+		AudioWriteMS:        l.AudioWrite.Milliseconds(),
+		ControlWriteMS:      l.ControlWrite.Milliseconds(),
+		RetireMS:            l.Retire.Milliseconds(),
+		CaptureTailMS:       l.CaptureTail.Milliseconds(),
+		ModelCallMS:         l.ModelCall.Milliseconds(),
+		InputTailMS:         l.InputTail.Milliseconds(),
+		OutputTakeMS:        l.OutputTake.Milliseconds(),
+		SpeakerMatchMS:      l.SpeakerMatch.Milliseconds(),
+		WarmProbeMS:         l.WarmProbe.Milliseconds(),
+		EndpointDecisionMS:  l.EndpointDecision.Milliseconds(),
+		EndpointRetireMS:    l.EndpointRetire.Milliseconds(),
+		SeparationMinMS:     l.SeparationMin.Milliseconds(),
+		SeparationMaxMS:     l.SeparationMax.Milliseconds(),
+		ModelServerChannels: l.ModelServerChannels,
 	}
 }
 
@@ -283,11 +310,13 @@ func (l limits) environment() string {
 
 func profileLimitNames() map[string]json.RawMessage {
 	v := int64(0)
-	all, _ := json.Marshal(profileLimits{&v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v})
+	all, _ := json.Marshal(profileLimits{&v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v, &v})
 	var names map[string]json.RawMessage
 	_ = json.Unmarshal(all, &names)
 	return names
 }
+
+const channelsMember = "model_server_channels"
 
 func (p *profileLimits) UnmarshalJSON(data []byte) error {
 	var stated map[string]json.RawMessage
@@ -311,7 +340,16 @@ func (p *profileLimits) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("runtime limit %s is not one this carrier knows", *unknown)
 	}
 	if null != nil {
+		if *null == channelsMember {
+			return fmt.Errorf("runtime limit %s must be a whole number of channels", *null)
+		}
 		return fmt.Errorf("runtime limit %s must be a whole number of milliseconds", *null)
+	}
+	if raw, ok := stated[channelsMember]; ok {
+		var count int64
+		if err := json.Unmarshal(raw, &count); err != nil {
+			return fmt.Errorf("runtime limit %s must be a whole number of channels: %w", channelsMember, err)
+		}
 	}
 
 	type members profileLimits

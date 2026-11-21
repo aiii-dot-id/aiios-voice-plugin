@@ -3,15 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <mutex>
 #include <stdexcept>
 
 namespace aii::multitalker {
-struct OnnxSeparator::Impl {
+struct OnnxSeparatorModel::Impl {
   Ort::Env env{ORT_LOGGING_LEVEL_ERROR,"source-separation"};
   Ort::Session session{nullptr};
-  Ort::RunOptions run;
-  std::atomic<bool> cancelled{false},running{false};
   bool cuda_enabled=false;
+  std::mutex lane;
   Impl(const void* graph,size_t bytes,int threads,int cuda,const std::string& profile) {
     if(!graph||!bytes||bytes>512u*1024*1024||threads<1||threads>64||cuda< -1||cuda>63)
       throw std::invalid_argument("separator model/execution bound");
@@ -43,10 +43,23 @@ struct OnnxSeparator::Impl {
       throw std::runtime_error("separator model signature");
   }
 };
-OnnxSeparator::OnnxSeparator(const void* graph,size_t bytes,int threads,int cuda,const std::string& profile)
+OnnxSeparatorModel::OnnxSeparatorModel(const void* graph,size_t bytes,int threads,int cuda,const std::string& profile)
   :p_(std::make_unique<Impl>(graph,bytes,threads,cuda,profile)){}
+OnnxSeparatorModel::~OnnxSeparatorModel()=default;
+struct OnnxSeparator::Impl {
+  std::shared_ptr<OnnxSeparatorModel> model;
+  Ort::RunOptions run;
+  std::atomic<bool> cancelled{false},running{false};
+  explicit Impl(std::shared_ptr<OnnxSeparatorModel> m):model(std::move(m)) {
+    if(!model)throw std::invalid_argument("separator model required");
+  }
+  OnnxSeparatorModel::Impl& loaded() const {return model->impl();}
+};
+OnnxSeparator::OnnxSeparator(const void* graph,size_t bytes,int threads,int cuda,const std::string& profile)
+  :OnnxSeparator(std::make_shared<OnnxSeparatorModel>(graph,bytes,threads,cuda,profile)){}
+OnnxSeparator::OnnxSeparator(std::shared_ptr<OnnxSeparatorModel> model):p_(std::make_unique<Impl>(std::move(model))){}
 OnnxSeparator::~OnnxSeparator()=default;
-std::string OnnxSeparator::provider() const {return p_->cuda_enabled?"CUDAExecutionProvider":"CPUExecutionProvider";}
+std::string OnnxSeparator::provider() const {return p_->loaded().cuda_enabled?"CUDAExecutionProvider":"CPUExecutionProvider";}
 void OnnxSeparator::open() {
   if(p_->running.load())throw std::runtime_error("separator inference has not retired");
   p_->run.UnsetTerminate();p_->cancelled.store(false);
@@ -65,7 +78,11 @@ Waveforms OnnxSeparator::separate(const std::vector<float>& pcm) {
     const int64_t shape[]={1,static_cast<int64_t>(pcm.size())};
     auto input=Ort::Value::CreateTensor<float>(memory,const_cast<float*>(pcm.data()),pcm.size(),shape,2);
     const char* inputs[]={"pcm"};const char* outputs[]={"sources"};
-    auto result=p_->session.Run(p_->run,inputs,&input,1,outputs,1);
+    auto result=[&]{
+      std::lock_guard<std::mutex> lane(p_->loaded().lane);
+      if(p_->cancelled.load())throw aii::voice::Cancelled("separator cancelled");
+      return p_->loaded().session.Run(p_->run,inputs,&input,1,outputs,1);
+    }();
     if(p_->cancelled.load())throw aii::voice::Cancelled("separator cancelled");
     const auto info=result[0].GetTensorTypeAndShapeInfo();
     if(info.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT||info.GetShape()!=std::vector<int64_t>{1,2,shape[1]})
@@ -83,6 +100,7 @@ Waveforms OnnxSeparator::separate(const std::vector<float>& pcm) {
 std::string OnnxSeparator::end_profile() {
   if(p_->running.load())throw std::runtime_error("separator inference has not retired");
   Ort::AllocatorWithDefaultOptions allocator;
-  auto path=p_->session.EndProfilingAllocated(allocator);return path.get()?path.get():"";
+  std::lock_guard<std::mutex> lane(p_->loaded().lane);
+  auto path=p_->loaded().session.EndProfilingAllocated(allocator);return path.get()?path.get():"";
 }
 }

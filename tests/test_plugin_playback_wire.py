@@ -146,3 +146,16 @@ def test_public_receipts_reject_replaced_session_and_bad_format_without_effect(
             assert host.event("session_end", session_id=sid)["status"] == "completed"
     finally:
         assert host.close() == 0
+
+
+def test_the_host_reads_every_form_of_the_readiness_line():
+    import re
+    from scripts.prove_plugin_sdk_engine import READY_LINE
+    for line, want in (("AII_VOICE_READY event=ready models_loaded=5 accelerator=cpu+metal+coreml probe_ms=424 sdk=(devel)", ("5", "cpu+metal+coreml", "424")),
+                       ("AII_VOICE_READY event=ready models_loaded=5 accelerator=cpu+cuda+vulkan probe_ms=9 sdk=github.com/aiii-dot-id/aii-plugin-sdk@v0.1.16", ("5", "cpu+cuda+vulkan", "9")),
+                       ("AII_VOICE_READY event=ready models_loaded=5 accelerator=cpu_metal probe_ms=424", ("5", "cpu_metal", "424"))):
+        assert re.fullmatch(READY_LINE.strip("^$"), line).groups() == want, line
+    for line in ("AII_VOICE_READY event=ready models_loaded=5 accelerator=cpu+ probe_ms=1",
+                 "AII_VOICE_READY event=ready models_loaded=5 accelerator=cpu probe_ms=1 sdk="):
+        assert re.fullmatch(READY_LINE.strip("^$"), line) is None, line
+

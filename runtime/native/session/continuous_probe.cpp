@@ -38,6 +38,7 @@ struct Observed final:Synthesizer {
     try{auto v=inner.next();in_next=false;return v;}
     catch(...){in_next=false;throw;}
   }
+  bool silent()const override{return inner.silent();}
   void reset()override{inner.reset();}
   void cancel(uint64_t id)noexcept override{inner.cancel(id);}
 };

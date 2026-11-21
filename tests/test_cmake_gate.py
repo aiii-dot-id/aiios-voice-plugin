@@ -4,11 +4,12 @@ import pytest
 
 from tests.conftest import unusable_cmake
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="the fake executables are POSIX shell scripts")
-
-
 def executable(path, status):
     path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        path.write_text(f"@exit /b {status}\r\n", encoding="utf-8", newline="")
+        return path
     path.write_text(f"#!/bin/sh\nexit {status}\n")
     path.chmod(0o755)
     return path

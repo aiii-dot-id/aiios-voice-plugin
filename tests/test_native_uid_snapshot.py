@@ -48,7 +48,7 @@ def test_canonical_snapshot_exact_bytes(codec):
     assert result.returncode == 0, result.stderr
     assert result.stdout == raw
 
-@pytest.mark.parametrize('label', ['Speaker One', 'Éponine', '聲音', '😀'*128, 'a"b\\c', r'literal\u0000', 'DEL\x7f', 'line\u2028separator'])
+@pytest.mark.parametrize('label', ['Alex', 'Éponine', '聲音', '😀'*128, 'a"b\\c', r'literal\u0000', 'DEL\x7f', 'line\u2028separator'])
 @pytest.mark.parametrize('revision', [1, 2**53+1, 2**63-1])
 def test_labels_embeddings_revision_round_trip(codec, label, revision):
     p = dict(POLICY)

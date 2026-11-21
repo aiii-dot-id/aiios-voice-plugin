@@ -110,16 +110,23 @@ def runtime_extent(decls, minimum_host_version):
             raise ValueError('runtime ' + name + ': depth ' + str(depth) + ' is outside 1..' + str(MAX_RUNTIME_DEPTH))
 
 
-def authoring_extent_floor(sdk):
+def authoring_extent_floor(sdk, go=None):
     """The verified authoring SDK must read the extent at the same floor.
 
     An SDK that predates the fields refuses them as unknown members; one
-    with another floor would disagree with this assembler's rule.
+    with another floor would disagree with this assembler's rule. The floor
+    is read where the SDK publishes it for every reader, its own vector file
+    (vectors/runtime_extent.json, "floor"), and not out of its Go source.
     """
-    source = (Path(sdk) / 'pkg/aiiospkg/runtime.go').read_text()
-    if re.findall(r'^const RuntimeExtentMinHost = "([^"]*)"$', source, re.M) != [RUNTIME_EXTENT_MIN_HOST]:
+    from scripts.sdk_vectors import vector
+    try:
+        floor = json.loads(vector(sdk, 'runtime_extent.json', go) or b'null').get('floor')
+    except (OSError, ValueError, AttributeError):
+        floor = None
+    if floor != RUNTIME_EXTENT_MIN_HOST:
         raise ValueError('authoring SDK does not read runtime extents from host ' + RUNTIME_EXTENT_MIN_HOST
-                         + '; use one that declares RuntimeExtentMinHost (the SDK runtime-extent contract)')
+                         + ' (its vectors/runtime_extent.json says ' + repr(floor)
+                         + '); use aii-plugin-sdk f8b4961 or later')
 
 
 def accelerator_domains(variant):
@@ -233,9 +240,13 @@ def candidate_inputs(path):
             row[key] = value
         return row
     declaration = json.loads(path.read_text(), object_pairs_hook=unique_object)
-    if not isinstance(declaration, dict) or set(declaration) != {'variants', 'variant_preference'}:
+    if not isinstance(declaration, dict) or set(declaration) - {'desktops'} != {'variants', 'variant_preference'}:
         raise ValueError('explicit variants and variant_preference required')
     rows, order = declaration['variants'], declaration['variant_preference']
+    desktops = declaration.get('desktops', sorted(PLATFORMS))
+    if (not isinstance(desktops, list) or not desktops or len(set(desktops)) != len(desktops)
+            or not set(desktops) <= PLATFORMS):
+        raise ValueError('desktops must name one or more of ' + ', '.join(sorted(PLATFORMS)) + ', each once')
     if (not isinstance(rows, dict) or not 1 <= len(rows) <= 64
             or not isinstance(order, list) or any(not isinstance(v, str) for v in order)
             or len(order) != len(rows) or len(set(order)) != len(order) or set(order) != set(rows)):
@@ -265,8 +276,9 @@ def candidate_inputs(path):
                 raise ValueError('reservation evidence changed: ' + variant)
             binding['measured_reservation'] = json.loads(path.read_text(), object_pairs_hook=unique_object)
         bindings[variant] = binding
-    if {r['platform'] for r in bindings.values()} != PLATFORMS:
-        raise ValueError('all three desktop bindings required')
+    if {r['platform'] for r in bindings.values()} != set(desktops):
+        raise ValueError('the bindings cover exactly the desktops named: ' + ', '.join(sorted(desktops))
+                         + ('' if 'desktops' in declaration else ' (inputs that name none are for all three)'))
     return bindings, list(order)
 
 
@@ -287,6 +299,12 @@ def bind_variants(cfg, bindings, order):
     cfg['variants'] = variants
     cfg['variant_preference'] = list(order)
     cfg.pop('default_variant', None)
+
+
+def desktop_words(desktops):
+    """The desktops a package is for, as its description names them: all three read as before."""
+    names = [n for p, n in (('macos', 'macOS'), ('windows', 'Windows'), ('linux', 'Ubuntu')) if p in desktops]
+    return names[0] if len(names) == 1 else ', '.join(names[:-1]) + ' and ' + names[-1]
 
 
 def operator_setup(platform):
@@ -321,12 +339,14 @@ def release_contract(cfg, minimum_host_version, measured=None):
         raise ValueError('minimum host ' + minimum_host_version + ' predates the documented '
                          'component-selection floor ' + COMPONENT_SELECTION_MIN_HOST)
     keys = {'stt_language', 'turn_pause_ms', 'capture_limit_minutes', 'vad_threshold',
-            'tts_voice', 'tts_language', 'tts_temperature', 'tts_seed'}
+            'tts_voice', 'tts_language', 'tts_temperature', 'tts_seed',
+            'anonymous_profiles', 'anonymous_expiry_days'}
     variants = cfg['variants']
     names = [v['variant_id'] for v in variants]
-    if ({v['platform'] for v in variants} != PLATFORMS or not 3 <= len(variants) <= 64
+    desktops = {v['platform'] for v in variants}
+    if (not desktops or not desktops <= PLATFORMS or not len(desktops) <= len(variants) <= 64
             or len(set(names)) != len(names)):
-        raise ValueError('unique variants covering every desktop required')
+        raise ValueError('unique variants covering every desktop they are for required')
     preference = cfg.get('variant_preference')
     if (not isinstance(preference, list) or len(preference) != len(names)
             or any(not isinstance(v, str) for v in preference)
@@ -648,7 +668,7 @@ def apply_hearing_disposition(index, cfg, notices, source, digest):
     index['hearing_distribution_disposition'] = dict(source_sha256=digest, **review)
 
 
-def notice_coverage(index, profiles, census, notices):
+def notice_coverage(index, profiles, census, notices, desktops=PLATFORMS):
     """Bind third-party notices and shipped binaries in both directions.
 
     Each library row names exact shipped bytes on every composition it covers
@@ -661,7 +681,13 @@ def notice_coverage(index, profiles, census, notices):
         raise ValueError('third-party library notice inventory required')
     included = {n['path'] for n in notices if n.get('size')}
     covered = {}
+    if any(not isinstance(lib, dict) or lib.get('platform') not in PLATFORMS for lib in libraries):
+        raise ValueError('third-party library names no desktop: ' + next(
+            str(lib.get('component')) if isinstance(lib, dict) else str(lib)
+            for lib in libraries if not isinstance(lib, dict) or lib.get('platform') not in PLATFORMS))
     for lib in libraries:
+        if lib['platform'] not in desktops:
+            continue
         group = lib.get('notice_group')
         if (not isinstance(group, str) or not group or group != group.strip() or group.startswith('/')
                 or '..' in group.split('/') or '\\' in group
@@ -787,11 +813,12 @@ def main():
     a=p.parse_args();out=a.out.resolve();pin,_=verify_sdk()
     template=a.author_template.resolve()
     bindings, preference = candidate_inputs(a.inputs)
+    desktops = frozenset(row['platform'] for row in bindings.values())
     carriers = {v: row['carrier'] for v, row in bindings.items()}
     authoring_sdk = a.authoring_sdk.resolve()
     sdk_archive = a.authoring_sdk_archive.resolve()
     sdk_inventory = verify_sdk_source(authoring_sdk, sdk_archive, a.authoring_sdk_archive_sha256)
-    authoring_extent_floor(authoring_sdk)
+    authoring_extent_floor(authoring_sdk, a.go.resolve())
     cfg,index,notice_rows=authoring_template(template,a.author_template_sha256)
     uid_files={}
     if any((a.uid_model_template,a.uid_notices,a.uid_model_template_sha256,a.uid_notices_sha256)):
@@ -813,7 +840,7 @@ def main():
             if model['url'].startswith(old_base):model['url']=new_base+model['url'][len(old_base):]
         cfg['version']=a.version
     cfg['title']='AII Voice'
-    cfg['description']='On-device speech for macOS, Windows and Ubuntu: English recognition that separates speakers, with a correction list the identity can teach; twenty selectable voices in seven speaking languages; adjustable VAD, interruption/recovery and durable anonymous speaker UUIDs with later naming. Speaker attribution is a model estimate, not authentication or authority.'
+    cfg['description']='On-device speech for '+desktop_words(desktops)+': English recognition that separates speakers, with a correction list the identity can teach; twenty selectable voices in seven speaking languages; adjustable VAD, interruption/recovery and durable anonymous speaker UUIDs with later naming. Speaker attribution is a model estimate, not authentication or authority.'
     cfg['runtimes']=[]
     bound={};profiles={};census={}
     settings = None
@@ -848,6 +875,8 @@ def main():
     expected_schemas={'schemas/speaker-'+name+'.input.json' for name in
         ('list','enroll','remove','reset','discard_capture','upgrade_policy','buckets','associate','link','forget')}
     expected_schemas.update(('schemas/speaker.output.json','schemas/speaker-buckets.output.json'))
+    expected_schemas.update('schemas/speaker-'+name+'.'+part+'.json' for name in ('recovery_list','recovery_delete')
+                            for part in ('input','output'))
     expected_schemas.update(('schemas/recording-record.input.json',
                              'schemas/recording-status.input.json',
                              'schemas/recording-list.input.json',
@@ -883,7 +912,7 @@ def main():
     emit(out/'operator-setup.json',dict(
         scope='Operator-reviewed merge into existing host config; never replace config.json. No plugin self-authorization.',
         restart_required=False,
-        platforms={p:operator_setup(p) for p in sorted(PLATFORMS)},
+        platforms={p:operator_setup(p) for p in sorted(desktops)},
         rationale='AII OS consumes each selected set\'s explicit startup allowance subject to operator ceilings and overrides. Host/device memory are supplied reservations, not measured peaks or invented by assembly; every GPU reservation covers its stage-bound measured complete-composition peak.',
         automatic_configuration=False))
     if uid_files:notice_rows=[r for r in notice_rows if not r['path'].startswith('notices/wespeaker-uid/')]
@@ -897,7 +926,8 @@ def main():
         put(author/name,raw)
         notice_rows.append(dict(path=name,sha256=hashlib.sha256(raw).hexdigest(),size=len(raw)))
     index['original_notice_files']=copy.deepcopy(notice_rows)
-    notice_coverage(index, profiles, census, notice_rows)
+    notice_coverage(index, profiles, census, notice_rows, desktops)
+    index['libraries'] = [lib for lib in index['libraries'] if lib['platform'] in desktops]
     separator_attribution(index, cfg, notice_rows)
     index['release_notice_packaging']=dict(notices='included_and_byte_bound',
         declared_urls='pinned_upstream_and_new_release_destinations',
@@ -913,6 +943,15 @@ def main():
     emit(author/'notices/INDEX.json',index)
     notice_rows.append(dict(path='notices/INDEX.json',size=(author/'notices/INDEX.json').stat().st_size,sha256=sha(author/'notices/INDEX.json')))
     for name in schemas:put(author/name,(ROOT/'plugin/native'/name).read_bytes())
+    checks=ROOT/'plugin/native/validation.json'
+    if checks.is_file():
+        put(author/'validation.json',checks.read_bytes())
+        for check in json.loads(checks.read_text())['checks']:
+            audio=(check.get('input') or {}).get('audio')
+            if audio:
+                if Path(audio).is_absolute() or '..' in Path(audio).parts:raise ValueError('a check names a recording outside the plugin: '+audio)
+                put(author/audio,(ROOT/'plugin/native'/audio).read_bytes())
+        cfg['validation_file']='validation.json'
     emit(author/'plugin.json',cfg);emit(author/'descriptors.json',descriptors)
     emit(author/'release-notices.json',notice_rows)
     env={**os.environ,'GOTOOLCHAIN':'local','GOWORK':'off','GOPROXY':'off','GOSUMDB':'off',
@@ -948,9 +987,10 @@ def main():
             distribution_review='complete' if index['distribution_review_complete'] else 'open',publication='not_performed_by_assembly'),
         package_metadata_privacy=metadata_privacy,
         third_party_images={v: sorted(n for n, r in c.items() if r['role'] == 'third_party') for v, c in census.items()},
-        windows_authenticode_verified=windows_authenticode(bound, profiles),
+        windows_authenticode_verified=(windows_authenticode(bound, profiles) if 'windows' in desktops
+                                       else 'not_applicable: the package has no Windows set'),
         windows_authenticode_images={v: bound[v].get('authenticode_images') for v in profiles_on(profiles, 'windows')},
-        required_before_release=([] if windows_authenticode(bound, profiles)
+        required_before_release=([] if 'windows' not in desktops or windows_authenticode(bound, profiles)
             else ['Authenticode and rebind Windows runtime/carrier'])+[
           'host guided capture, UID ingress filters and AI-visible policy',
           'final signed fresh-cache installed journeys','authorized T3 signature and host verification',

@@ -171,12 +171,16 @@ func speakerUUID(s string) bool {
 	}
 	return true
 }
+
+const bucketsSummary = "List persistent speaker UUIDs, labels, linked legacy enrollment IDs, acoustic matching readiness and the exact revision for later naming. Stored anonymous singleton profiles retain history but are not ready for recognition. No open microphone required. Listing also removes the voiceprints of people not enrolled that have passed their expiry and names them."
+
 func declaredPlugin() *aiiosdk.Plugin {
 	p := aiiosdk.New("id.aiii.voice").DeclareSession()
 	for _, name := range []string{"list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget", "link"} {
 		op := "speaker." + name
+
 		effect := aiiosdk.EffectsWriteLocal
-		if name == "list" || name == "buckets" {
+		if name == "list" {
 			effect = aiiosdk.EffectsReadInternal
 		}
 		output := "schemas/speaker.output.json"
@@ -193,7 +197,7 @@ func declaredPlugin() *aiiosdk.Plugin {
 			"reset":           "Reset enrolled speakers after operator confirmation; no microphone required.",
 			"discard_capture": "Discard one pending capture after operator confirmation without changing enrolled speakers.",
 			"upgrade_policy":  "With speech closed and operator confirmation, upgrade to the runtime-bound policy, preserving usable speakers and refusing incomplete profiles.",
-			"buckets":         "List persistent speaker UUIDs, labels, linked legacy enrollment IDs, acoustic matching readiness and the exact revision for later naming. Stored anonymous singleton profiles retain history but are not ready for recognition. No open microphone required.",
+			"buckets":         bucketsSummary,
 			"link":            "After operator confirmation, correct two acoustic UUIDs known to be the same person to one future output UUID without averaging profiles, relaxing matching or rewriting history. Self-target undoes the correction; no microphone required.",
 			"associate":       "Associate a chosen name or external ID with an existing speaker UUID at an exact registry revision after operator confirmation; no microphone required or authority granted.",
 			"forget":          "Forget one speaker UUID's profile and labels at an exact revision after operator confirmation. Remove a linked enrollment first with speaker.remove. Historic transcripts are not deleted or reassigned; future observations after explicit removal may create a new UUID.",
@@ -217,6 +221,25 @@ func declaredPlugin() *aiiosdk.Plugin {
 				"link":            {`{"speaker_uuid":"12345678-1234-4234-8234-123456789abc","target_uuid":"12345678-1234-4234-8234-123456789abd","registry_revision":"2"}`},
 				"associate":       {`{"speaker_uuid":"12345678-1234-4234-8234-123456789abc","registry_revision":"1","display_label":"Chosen name"}`},
 				"forget":          {`{"speaker_uuid":"12345678-1234-4234-8234-123456789abc","registry_revision":"1"}`},
+			}[name],
+		})
+	}
+	for _, name := range []string{"recovery_list", "recovery_delete"} {
+		op := "speaker." + name
+		effect, maxResult := aiiosdk.EffectsReadInternal, 262144
+		if name == "recovery_delete" {
+			effect, maxResult = aiiosdk.EffectsWriteLocal, 65536
+		}
+		p.Handle(op, func(aiiosdk.Call) (any, error) {
+			return nil, errors.New("speaker operations require the resident plugin transport")
+		}).Describe(op, aiiosdk.Descriptor{
+			Summary: map[string]string{"recovery_list": recoveryListSummary, "recovery_delete": recoveryDeleteSummary}[name],
+			Input:   "schemas/speaker-" + name + ".input.json", Output: "schemas/speaker-" + name + ".output.json", Effects: effect,
+			Capabilities: []string{"fs.private"}, OperatorConfirms: name == "recovery_delete", MaxResultBytes: maxResult,
+			Family: "speaker", Keywords: []string{"voice", "UID", "speaker identity", "recovery"},
+			Examples: map[string][]string{
+				"recovery_list":   {`{}`},
+				"recovery_delete": {`{"archive_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`},
 			}[name],
 		})
 	}

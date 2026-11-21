@@ -77,7 +77,7 @@ struct Host {
         gate_changed.wait(lock,[&]{return !hold_registry_read;});
       }
     }
-    check(key=="captures"||key=="enrollment"||key=="speaker_registry"||key.rfind("recovery:",0)==0,"arbitrary private resource");
+    check(key=="captures"||key=="enrollment"||key=="speaker_registry"||key=="speaker_heard"||key.rfind("recovery:",0)==0,"arbitrary private resource");
     const auto fault_key=key.rfind("recovery:",0)==0?"recovery":key;
     const auto faulted=[&](const std::string& fault){return fault==key||fault==fault_key;};
     auto& current=key=="captures"?pending:key=="enrollment"?profile:archives[key];
@@ -142,13 +142,13 @@ void complete_and_reopen(){
   Host host;const auto p=policy();const auto c=evidence();retained(host,p,c);
   host.bridge.cancel();host.bridge.begin("new-activation-after-capture");
   CaptureEnrollment flow(host.bridge,p);check(flow.list()[0].id==c.id,"capture expired with session");
-  auto r=flow.confirm(c.id,"speaker-1","Speaker One",hash("confirm"));
+  auto r=flow.confirm(c.id,"alex","Alex",hash("confirm"));
   check(r.enrollment_durable&&r.capture_retirement_durable&&!r.reconciled,"complete confirmation not durable");
   check(host.publications==std::vector<std::string>{"enrollment","captures"},"capture retired before profile publication");
   const auto enrolled=read_snapshot(*host.profile,p);
   check(enrolled.revision==1&&enrolled.speakers.size()==1&&enrolled.speakers[0].samples.size()==1,"single capture did not enroll exactly once");
   check(flow.list().empty(),"committed capture still pending");
-  const auto before=*host.profile;refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("repeat"));},"selected pending capture unavailable");
+  const auto before=*host.profile;refused([&]{flow.confirm(c.id,"alex","Alex",hash("repeat"));},"selected pending capture unavailable");
   check(*host.profile==before,"missing capture replay changed enrollment");
 }
 void interrupted_publication(){
@@ -160,15 +160,15 @@ void interrupted_publication(){
     if(fault=="lost")host.lost_receipt="enrollment";
     if(fault=="bad-readback")host.corrupt_readback="enrollment";
     if(fault=="unsynced"){
-      auto r=flow.confirm(c.id,"speaker-1","Speaker One",hash("first"));
+      auto r=flow.confirm(c.id,"alex","Alex",hash("first"));
       check(!r.enrollment_durable&&!r.capture_retirement_durable&&!r.cleanup_detail.empty(),"unsynced profile became completed enrollment");
-    }else refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("first"));},fault=="failed"?"not published":"publication/readback unresolved");
+    }else refused([&]{flow.confirm(c.id,"alex","Alex",hash("first"));},fault=="failed"?"not published":"publication/readback unresolved");
     check(host.pending&&*host.pending==original&&host.publications==std::vector<std::string>{"enrollment"},"failed/uncertain profile erased pending evidence");
     check(host.profile.has_value()==(fault!="failed"),"test did not exercise the published-but-uncertain path");
     const auto prior=host.profile;
     host.fail_publish.clear();host.unsynced.clear();host.lost_receipt.clear();host.bad_read.clear();host.corrupt_readback.clear();host.publications.clear();
     host.bridge.cancel();host.bridge.begin("restart-reconcile");CaptureEnrollment fresh(host.bridge,p);
-    auto r=fresh.confirm(c.id,"speaker-1","Speaker One",hash("explicit-new-confirmation"));
+    auto r=fresh.confirm(c.id,"alex","Alex",hash("explicit-new-confirmation"));
     check(r.enrollment_durable&&r.capture_retirement_durable&&r.reconciled==(fault!="failed"),"explicit reconciliation failed");
     if(prior)check(*prior==*host.profile,"reconciliation duplicated evidence or advanced profile revision");
     check(host.publications==std::vector<std::string>{"enrollment","captures"},"existing bytes bypassed durability re-attestation");
@@ -180,13 +180,13 @@ void interrupted_cleanup(){
     if(fault=="conflict")host.fail_publish="captures";
     if(fault=="unsynced")host.unsynced="captures";
     if(fault=="lost")host.lost_receipt="captures";
-    CaptureEnrollment flow(host.bridge,p);auto r=flow.confirm(c.id,"speaker-1","Speaker One",hash("confirm"));
+    CaptureEnrollment flow(host.bridge,p);auto r=flow.confirm(c.id,"alex","Alex",hash("confirm"));
     check(r.enrollment_durable&&!r.capture_retirement_durable&&!r.cleanup_detail.empty(),"cleanup failure misreported committed enrollment");
     const auto profile=*host.profile;
     if(fault=="conflict")check(*host.pending==original,"cleanup conflict overwrote pending captures");
     host.pending=original;host.fail_publish.clear();host.unsynced.clear();host.lost_receipt.clear();host.publications.clear();
     host.bridge.cancel();host.bridge.begin("cleanup-restart");CaptureEnrollment next(host.bridge,p);
-    auto again=next.confirm(c.id,"speaker-1","Speaker One",hash("new-act"));
+    auto again=next.confirm(c.id,"alex","Alex",hash("new-act"));
     check(again.reconciled&&again.enrollment_durable&&again.capture_retirement_durable&&*host.profile==profile,
         "recovered pending capture duplicated/replaced profile");
   }
@@ -194,23 +194,23 @@ void interrupted_cleanup(){
 void refusals(){
   Host host;const auto p=policy();const auto c=evidence();retained(host,p,c);CaptureEnrollment flow(host.bridge,p);
   const auto before_reads=host.reads;
-  refused([&]{flow.confirm(c.id,"speaker-1","Speaker One","arbitrary");},"upload identity invalid");
+  refused([&]{flow.confirm(c.id,"alex","Alex","arbitrary");},"upload identity invalid");
   check(host.reads==before_reads,"invalid confirmation accessed evidence");
   host.denied_read="captures";refused([&]{flow.list();},"unavailable");host.denied_read.clear();
-  host.denied_read="enrollment";refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("x"));},"unavailable");host.denied_read.clear();
+  host.denied_read="enrollment";refused([&]{flow.confirm(c.id,"alex","Alex",hash("x"));},"unavailable");host.denied_read.clear();
   check(host.publications.empty(),"read failure became missing profile");
   const auto blank=write_snapshot({p.policy,0,{}},p);
   host.profile=prepare_enrollment(blank,p,"other","Other",{c.recording},c.embedding_binding).snapshot;
-  refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("x"));},"conflicts with already enrolled");
-  host.profile=prepare_enrollment(blank,p,"speaker-1","Wrong label",{c.recording},c.embedding_binding).snapshot;
-  refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("x"));},"conflicts with already enrolled");
+  refused([&]{flow.confirm(c.id,"alex","Alex",hash("x"));},"conflicts with already enrolled");
+  host.profile=prepare_enrollment(blank,p,"alex","Wrong label",{c.recording},c.embedding_binding).snapshot;
+  refused([&]{flow.confirm(c.id,"alex","Alex",hash("x"));},"conflicts with already enrolled");
   auto changed=c.recording;changed.embedding=Vector(256);changed.embedding[9]=1;
-  host.profile=prepare_enrollment(blank,p,"speaker-1","Speaker One",{changed},c.embedding_binding).snapshot;
-  refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("x"));},"conflicts with already enrolled");
+  host.profile=prepare_enrollment(blank,p,"alex","Alex",{changed},c.embedding_binding).snapshot;
+  refused([&]{flow.confirm(c.id,"alex","Alex",hash("x"));},"conflicts with already enrolled");
   check(host.publications.empty(),"conflicting existing identity/evidence was overwritten");
   refused([&]{CaptureEnrollment wrong(host.bridge,policy(3));},"verified guided-enrollment policy required");
   host.profile=write_snapshot({policy(3).policy,0,{}},policy(3));
-  refused([&]{flow.confirm(c.id,"speaker-1","Speaker One",hash("x"));},"policy");
+  refused([&]{flow.confirm(c.id,"alex","Alex",hash("x"));},"policy");
   check(host.publications.empty(),"old profile policy silently replaced");
 }
 void process_step(const std::string& mode,const std::filesystem::path& directory){
@@ -224,7 +224,7 @@ void process_step(const std::string& mode,const std::filesystem::path& directory
   if(mode=="retain")retained(host,p,c);
   else if(mode=="confirm"){
     check(!host.profile&&flow.list().at(0).id==c.id,"fresh process did not recover selected evidence");
-    const auto result=flow.confirm(c.id,"speaker-1","Speaker One",hash("fresh-process-confirmation"));
+    const auto result=flow.confirm(c.id,"alex","Alex",hash("fresh-process-confirmation"));
     check(result.enrollment_durable&&result.capture_retirement_durable,"fresh-process confirmation failed");
   }else if(mode=="verify"){
     check(host.profile&&flow.list().empty(),"fresh process lost completed publication");
@@ -233,7 +233,7 @@ void process_step(const std::string& mode,const std::filesystem::path& directory
     Vector unknown(256);unknown[20]=1;
     const auto other=identify(snapshot,p.policy,unknown,c.embedding_binding);
     check(snapshot.revision==1&&snapshot.speakers.size()==1&&snapshot.speakers[0].samples.size()==1&&
-        known.speaker_id=="speaker-1"&&other.speaker_id.empty(),"restarted profile changed known/unknown identity");
+        known.speaker_id=="alex"&&other.speaker_id.empty(),"restarted profile changed known/unknown identity");
   }else throw std::invalid_argument("unknown process step");
   std::cout<<"fresh-process "<<mode<<" PASS; fixture broker, no host durability or acoustic claim\n";
 }
@@ -827,7 +827,7 @@ void recovery_contract(){
     check(decode_base64(str(field(saved.get(),"captures_b64"),100000),65536)==before.captures,"old capture not preserved");
     check(bound.read(*host.profile).speakers.empty()&&read_captures(*host.pending,p.policy.embedding_binding).captures.empty(),"recovery did not establish current empty stores");
     CaptureEnrollment flow(host.bridge,p);auto c=evidence();flow.retain(c,hash("fresh"));
-    auto enrolled=flow.confirm(c.id,"speaker-1","Speaker One",hash("fresh confirmation"));
+    auto enrolled=flow.confirm(c.id,"alex","Alex",hash("fresh confirmation"));
     check(enrolled.enrollment_durable&&bound.read(*host.profile).speakers.size()==1,"fresh enrollment after recovery failed");
     refused([&]{recover_uid(host.bridge,bound,before.profile_hash(),before.captures_hash(),hash("stale confirmation"));},"changed since confirmation");
   }
@@ -861,7 +861,7 @@ std::string policy_bytes(const std::string& binding,const char* rule){
 }
 std::string stored_enrollment(const std::string& binding,size_t dimensions,double value=1){
   Vector v(dimensions);v[0]=value;
-  return "{\"policy\":"+policy_bytes(binding,earlier_rule)+",\"revision\":2,\"speakers\":[{\"id\":\"speaker-1\",\"label\":\"Speaker One\","
+  return "{\"policy\":"+policy_bytes(binding,earlier_rule)+",\"revision\":2,\"speakers\":[{\"id\":\"alex\",\"label\":\"Alex\","
     "\"samples\":[{\"audio_sha256\":\""+hash("earlier enrollment")+"\",\"embedding_f64le_b64\":\""+encode_vector(v)+"\"}]}]}";
 }
 std::string stored_captures(const std::string& binding,size_t dimensions,double value=1){
@@ -957,9 +957,9 @@ void earlier_registry_contract(){
   CaptureEnrollment flow(host.bridge,runtime);Vector v(192);v[5]=1;
   const auto capture=make_pending_capture(hash("re-enroll request"),1,160000,ecapa_binding,{hash("re-enroll audio"),v});
   flow.retain(capture,hash("re-enroll retain"));
-  check(flow.confirm(capture.id,"speaker-1","Speaker One",hash("re-enroll confirm")).enrollment_durable,"re-enrollment failed");
+  check(flow.confirm(capture.id,"alex","Alex",hash("re-enroll confirm")).enrollment_durable,"re-enrollment failed");
   const auto known=observe_live(store,2,AII_VOICE_OK);
-  check(str(field(known.get(),"outcome"))=="known"&&str(field(known.get(),"speaker_id"))=="speaker-1",
+  check(str(field(known.get(),"outcome"))=="known"&&str(field(known.get(),"speaker_id"))=="alex",
       "identification did not resume after recovery and re-enrollment");
   for(const std::string kind:{"current","corrupt"}){
     Host other;other.profile=stored_enrollment(resnet152_binding,256);
@@ -1078,19 +1078,111 @@ void earlier_registry_failure_contract(){
       CaptureEnrollment flow(next.bridge,runtime);Vector v(192);v[5]=1;
       const auto capture=make_pending_capture(hash("re-enroll request"),1,160000,ecapa_binding,{hash("re-enroll audio"),v});
       flow.retain(capture,hash("re-enroll retain"));
-      check(flow.confirm(capture.id,"speaker-1","Speaker One",hash("re-enroll confirm")).enrollment_durable,"re-enrollment failed");
+      check(flow.confirm(capture.id,"alex","Alex",hash("re-enroll confirm")).enrollment_durable,"re-enrollment failed");
       SpeakerRegistryStore store(next.bridge,runtime);const auto known=observe_live(store,2,AII_VOICE_OK);
-      check(str(field(known.get(),"outcome"))=="known"&&str(field(known.get(),"speaker_id"))=="speaker-1",
+      check(str(field(known.get(),"outcome"))=="known"&&str(field(known.get(),"speaker_id"))=="alex",
           "identification did not resume after recovery and re-enrollment");
     }catch(const std::exception& e){throw std::runtime_error(fault+": "+e.what());}
   }
 }
 }
+const cJSON* speaker_row(const Json& list,const std::string& id){
+  for(const auto* row=field(list.get(),"speakers")->child;row;row=row->next)if(str(field(row,"speaker_uuid"))==id)return row;
+  return nullptr;
+}
+void unenrolled_voiceprint_expiry_contract(){
+  const auto p=policy();uint64_t today=20000;
+  const auto voice=[&](size_t axis,const std::string& name){
+    aii_voice_capture s{};s.samples=64000;s.embedding[axis]=1;
+    std::snprintf(s.embedding_binding,sizeof s.embedding_binding,"%s",p.policy.embedding_binding.c_str());
+    std::snprintf(s.pcm_sha256,sizeof s.pcm_sha256,"%s",hash(name).c_str());return s;
+  };
+  Vector v(256);v[0]=1;
+  Host host;host.profile=write_snapshot({p.policy,1,{{"enrolled-id","Enrolled person",{{hash("enrolled-origin"),v}}}}},p);
+  SpeakerRegistryStore store(host.bridge,p);store.clock([&]{return today;});
+  std::vector<size_t> said;store.on_expired([&](size_t n){said.push_back(n);});
+  check(!field(store.list().get(),"anonymous_expiry_days"),"a rule was reported before the settings gave one");
+  store.retain({true,30});
+  auto enrolled_voice=voice(0,"enrolled speech");
+  const auto enrolled_id=str(field(store.observe(&enrolled_voice,1,1).get(),"speaker_uuid"));
+  const auto stranger=corroborated(store,voice(5,"stranger speech"));
+  const auto stranger_id=str(field(stranger.get(),"speaker_uuid"));
+  check(enrolled_id.size()==36&&stranger_id.size()==36&&str(field(stranger.get(),"continuity"))=="new_profile",
+    "fixture did not make an enrolled UUID and a stranger's voiceprint");
+  auto list=store.list();
+  check(str(field(list.get(),"anonymous_profiles"))=="on"&&integer(field(list.get(),"anonymous_expiry_days"))==30,"the rule in force was not told");
+  const auto* row=speaker_row(list,stranger_id);
+  check(row&&str(field(row,"heard_on"))=="2024-10-04"&&str(field(row,"expires_on"))=="2024-11-03","the stranger's days were not told");
+  row=speaker_row(list,enrolled_id);
+  check(row&&!field(row,"expires_on")&&!field(row,"heard_on"),"an enrolled person was given an expiry");
+  today=20029;check(speaker_row(store.list(),stranger_id)&&said.empty(),"a voiceprint was deleted before its period ended");
+  today=20030;list=store.list();
+  const auto* gone=field(list.get(),"expired_speaker_uuids");
+  check(!speaker_row(list,stranger_id)&&gone&&cJSON_GetArraySize(gone)==1&&str(gone->child)==stranger_id&&said==std::vector<size_t>{1},
+    "a never-enrolled voiceprint outlived its period or its deletion was not told");
+  const auto stored=read_registry(*host.archives.at("speaker_registry"),p);
+  check(stored.profiles.speakers.empty()&&stored.buckets.size()==1&&stored.buckets[0].uuid==enrolled_id,
+    "the stranger's voiceprint is still stored, or the enrolled person's UUID went with it");
+  check(host.archives.at("speaker_heard")&&read_heard(*host.archives.at("speaker_heard")).empty()&&
+    host.archives.at("speaker_registry")->find("heard")==std::string::npos&&
+    write_registry(stored,p)==*host.archives.at("speaker_registry"),"the heard days are not kept apart from the registry");
+  store.retain({true,7});
+  const auto second=str(field(corroborated(store,voice(9,"second stranger")).get(),"speaker_uuid"));
+  today=20036;check(speaker_row(store.list(),second),"the shorter period ended early");
+  today=20037;check(!speaker_row(store.list(),second),"the shorter period was not applied");
+  today=20040;
+  const auto third=str(field(corroborated(store,voice(13,"third stranger")).get(),"speaker_uuid"));
+  const auto revision=str(field(store.list().get(),"registry_revision"));
+  today=20045;auto returning=voice(13,"third stranger again");
+  check(str(field(store.observe(&returning,2,1).get(),"speaker_uuid"))==third,"the returning stranger was not matched");
+  list=store.list();
+  check(str(field(speaker_row(list,third),"heard_on"))=="2024-11-18"&&str(field(list.get(),"registry_revision"))==revision,
+    "a match did not move the stranger's day, or it moved the revision");
+  today=20047;check(speaker_row(store.list(),third),"a returning voice expired from its first day");
+  today=20052;check(!speaker_row(store.list(),third),"a returning voice outlived its period from the last match");
+  today=20053;
+  const auto fourth=str(field(corroborated(store,voice(21,"fourth stranger")).get(),"speaker_uuid"));
+  check(fourth.size()==36,"fixture did not make the fourth stranger's voiceprint");
+  store.retain({false,7});
+  const auto publications=host.publications.size();
+  for(uint64_t utterance:{3,4,5}) {
+    auto known_voice=voice(21,"fourth stranger heard while off "+std::to_string(utterance));
+    auto new_voice=voice(17,"unasked stranger "+std::to_string(utterance));
+    for(auto* heard:{&known_voice,&new_voice}) {
+      const auto out=store.observe(heard,3,utterance);
+      check(str(field(out.get(),"reason"))=="anonymous_profiles_off"&&!field(out.get(),"speaker_uuid")&&!field(out.get(),"match"),
+        "with the switch off a voiceprint was matched or begun");
+    }
+  }
+  check(host.publications.size()==publications,"with the switch off the speaker files were written");
+  list=store.list();
+  check(str(field(list.get(),"anonymous_profiles"))=="off"&&str(field(speaker_row(list,fourth),"heard_on"))=="2024-11-26",
+    "the switch was not told, or a voice heard while off was kept fresh");
+  today=20059;check(speaker_row(store.list(),fourth),"a voiceprint was deleted before its period while off");
+  today=20060;check(!speaker_row(store.list(),fourth),"with the switch off a voiceprint did not expire on schedule");
+  check(str(field(store.observe(&enrolled_voice,4,1).get(),"speaker_uuid"))==enrolled_id,"the enrolled person's UUID did not survive");
+}
+void a_check_observes_nothing(){
+  const auto p=policy();Host h;SpeakerRegistryStore store(h.bridge,p);
+  aii_voice_capture s{};s.samples=64000;s.embedding[0]=1;
+  std::snprintf(s.embedding_binding,sizeof s.embedding_binding,"%s",p.policy.embedding_binding.c_str());
+  std::snprintf(s.pcm_sha256,sizeof s.pcm_sha256,"%s",hash("a check's voice").c_str());
+  h.late_read="speaker_registry";store.checking(true);
+  const auto reads=h.reads;
+  for(uint64_t utterance:{1,2,3}) {
+    const auto out=store.observe(&s,1,utterance);
+    check(str(field(out.get(),"reason"))=="session_is_a_check"&&!field(out.get(),"speaker_uuid"),"a check's voice was observed");
+  }
+  check(h.reads==reads&&h.publications.empty()&&store.kept_observations()==0&&store.kept_publications()==0,
+    "a check read, published or kept speaker work");
+  store.checking(false);h.late_read.clear();
+  check(str(field(store.observe(&s,2,1).get(),"reason"))!="session_is_a_check","a real session after a check is still treated as a check");
+}
 int main(int argc,char** argv){try{
   if(argc==6&&std::string(argv[1])=="--observation-panel")real_observation_panel(argv);
   else if(argc==3)process_step(argv[1],argv[2]);
   else{
-  check(argc==1,"unexpected arguments");inherited_label_clear_contract();enrolled_uuid_contract();legacy_singleton_competition_contract();joint_gallery_margin_contract();complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();earlier_model_contract();earlier_registry_contract();earlier_registry_failure_contract();late_storage_is_kept_and_finished();registry_contract();registry_management_does_not_discard_live_observation();registry_policy_transition_contract();
+  check(argc==1,"unexpected arguments");inherited_label_clear_contract();enrolled_uuid_contract();legacy_singleton_competition_contract();joint_gallery_margin_contract();complete_and_reopen();interrupted_publication();interrupted_cleanup();refusals();recovery_contract();earlier_model_contract();earlier_registry_contract();earlier_registry_failure_contract();late_storage_is_kept_and_finished();registry_contract();registry_management_does_not_discard_live_observation();registry_policy_transition_contract();a_check_observes_nothing();unenrolled_voiceprint_expiry_contract();
   std::cout<<"guided enrollment publication: closed-mic confirmation, profile-first durable readback, explicit restart reconciliation, no duplicated identity, cleanup uncertainty and fail-closed reads PASS\n";
   }
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

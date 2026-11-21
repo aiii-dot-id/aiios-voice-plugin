@@ -275,7 +275,7 @@ def test_nemo_replacement_refuses_partial_unknown_or_undeclared_sets(tmp_path, f
         rebuild.nemo_libraries(profile, sources)
 
 
-def sealed_windows_parent(tmp_path):
+def sealed_windows_parent(tmp_path, extra=None):
     from scripts import rebuild_native_checkpoint as rebuild
     from scripts.package_native_runtime import runtime_inventory
     parent = tmp_path / 'parent'
@@ -285,6 +285,7 @@ def sealed_windows_parent(tmp_path):
               'bin/nemo_speech_asr.dll': b'parent nemo', 'bin/nemo_speech_asr_c.dll': b'parent nemo c api',
               'resources/settings.json': b'[{"key":"fixture"}]\n',
               'resources/notices/nemo-speech/LICENSE': b'license'}
+    images.update(extra or {})
     for name, raw in images.items():
         (runtime / name).parent.mkdir(parents=True, exist_ok=True)
         (runtime / name).write_bytes(raw)
@@ -632,3 +633,59 @@ def test_a_rebuild_that_adds_no_preset_does_not_repeat_what_its_parent_added(tmp
     sources = nemo_sources(tmp_path, NEMO['windows'])
     out, result = run_rebuild(tmp_path, monkeypatch, parent, [a for s in sources for a in ('--nemo', str(s))])
     assert 'voice_presets_added' not in result and result['models_copied'] == 0
+
+
+def hearing_profile(execution):
+    return (json.dumps(dict(models={'asr': 'stt'}, asr_execution=execution), indent=2) + '\n').encode()
+
+
+def test_a_rebuild_that_keeps_its_recognizer_keeps_the_stated_encoder_threads(tmp_path, monkeypatch):
+    profile = hearing_profile(dict(diarizer='nemotron', gpu=-1, encoder_cuda=-1, encoder_threads=8))
+    parent, _ = sealed_windows_parent(tmp_path, extra={'native-profile.json': profile})
+    sources = nemo_sources(tmp_path, NEMO['windows'])
+    out, _ = run_rebuild(tmp_path, monkeypatch, parent, [a for s in sources for a in ('--nemo', str(s))])
+    raw = (out / 'runtime/native-profile.json').read_bytes()
+    assert raw == profile
+    assert json.loads(raw)['asr_execution']['encoder_threads'] == 8
+
+
+def test_a_hearing_replacement_refuses_to_drop_a_separator(tmp_path, monkeypatch):
+    execution = dict(diarizer='nemotron', gpu=-1, encoder_cuda=-1, separator=dict(backend='onnx', threads=2, cuda=-1))
+    parent, _ = sealed_windows_parent(tmp_path, extra={'native-profile.json': hearing_profile(execution)})
+    graphs, frontend = tmp_path / 'graphs', tmp_path / 'frontend'
+    graphs.mkdir(); frontend.mkdir()
+    refused = None
+    try:
+        run_rebuild(tmp_path, monkeypatch, parent, ['--hearing-graphs', str(graphs), '--hearing-frontend', str(frontend),
+                                                    '--hearing-execution', 'cpu'])
+    except Exception as e:
+        refused = e
+    made = tmp_path / 'candidate'
+    candidate = made / 'runtime/native-profile.json'
+    kept = json.loads(candidate.read_text()).get('asr_execution') if candidate.is_file() else None
+    assert isinstance(refused, ValueError) and 'separator' in str(refused), (
+        f'no refusal naming the separator (stopped by: {refused!r}); a candidate was made: {made.exists()}; '
+        f"its hearing execution: {kept!r}")
+    assert not made.exists(), 'the refusal came after a candidate was made'
+
+
+@pytest.mark.parametrize('execution, graphs, refused', [
+    (dict(diarizer='nemotron', gpu=-1, encoder_cuda=-1, separator=dict(backend='onnx', threads=2, cuda=-1)), True, True),
+    (dict(diarizer='nemotron', gpu=-1, encoder_cuda=-1, separator=dict(backend='coreml')), True, True),
+    (dict(diarizer='nemotron', gpu=-1, encoder_cuda=-1, separator=dict(backend='onnx', threads=2, cuda=-1)), False, False),
+    (dict(diarizer='nemotron', gpu=-1, encoder_cuda=-1, encoder_threads=8), True, False),
+    (dict(provider='directml', adapter='high_performance'), True, False),
+    (None, True, False),
+])
+def test_only_a_separator_a_replacement_would_drop_is_refused(tmp_path, execution, graphs, refused):
+    from scripts.rebuild_native_checkpoint import refuse_dropped_separator
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir()
+    if execution is not None:
+        (runtime / 'native-profile.json').write_bytes(hearing_profile(execution))
+    call = lambda: refuse_dropped_separator(tmp_path, tmp_path / 'graphs' if graphs else None)
+    if refused:
+        with pytest.raises(ValueError, match='separator'):
+            call()
+    else:
+        call()

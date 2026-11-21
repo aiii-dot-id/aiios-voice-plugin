@@ -4,8 +4,9 @@ The speaking libraries of this plugin are built from audio.cpp,
 Copyright 2026 ShugoAI LLC, at revision
 3174e6b26f11a0e39b4f150961dce98f43ba860d, under the Apache License, Version
 2.0, which is this repository's licence too (LICENSE, at its root). The builds
-do not take that revision's source as it stands. The five files in this
-directory stand in place of the engine's own files of the same path, and two
+do not take that revision's source as it stands. The six files in this
+directory stand in place of the engine's own files of the same path (the
+sixth, backend_weights.cpp, from beta.12 on; see its entry), and two
 more of the engine's files are replaced by the two files in
 ../windows_resident/overrides, which the notice there states.
 
@@ -69,6 +70,21 @@ graph_common.h
   writes where it is used (those four values, no bias) with
   gelu_approximation set to GeluApproximation::Tanh. Nothing else differs.
 
+backend_weights.cpp
+  Upstream: src/models/pocket_tts/backend_weights.cpp
+  Upstream sha256: d6015ab3dc9d8889d74bd07ee3230b530b857128614b42ce0db2e4d6968f8370
+  As built sha256: 4e7b2aae805c239ae1d70806612a9a38999480eab289f1bd50a7bb89cd8b5369
+  Added in beta.12; no library built before beta.12 holds it. Changed: 33
+  lines added in five places, none removed. load_pocket_tts_backend_weights
+  keeps, weakly, the weights it uploaded, keyed by the model's asset root, its
+  language, the backend's device, the backend type, the two storage types and
+  the three context sizes. A session that asks for weights already uploaded
+  under the same key is given those, and the manifest's host copy is released
+  as upstream releases it; the last session to let go frees them. The lock is
+  held through an upload. So several sessions of the speaking library over one
+  model hold its weights once (beta.12's engine design, shared weights), each
+  with its own backend, cache, graphs and voice. Nothing else differs.
+
 "As built" is the file that stood in the engine source the Windows and the
 macOS libraries were built from, which is the file here without its four-line
 head comment; a test holds the two to that. "Upstream" is the file of the
@@ -77,7 +93,8 @@ upstream repository at the revision above.
 WHAT WAS COMPARED. The engine source the Windows libraries were built from and
 the one the macOS libraries were built from were each compared with the
 upstream revision file by file: 4,524 files, none missing and none added.
-Each differs from upstream in the five files here and in mimi_decoder.cpp; the
+(Those libraries are beta.11's and earlier, built before backend_weights.cpp
+was added here.) Each differs from upstream in the first five files here and in mimi_decoder.cpp; the
 macOS one also in acoustic_model.cpp and in the bundled ggml's Metal backend
 (../metal-library-beside.patch), which that build applies in the source, where
 the Windows build compiles its two replaced files from their own directory. A
@@ -88,7 +105,7 @@ own.
 
 The Linux library is stated apart, in ../engine_overrides_linux/NOTICE: how
 it was built is not recorded, an engine source of that time is kept, and it
-differs from upstream in the five files here, in three more, and in the three
+differs from upstream in the first five files here, in three more, and in the three
 files scripts/stage_native_path_shim.py derives.
 
 --------------------------------------------------------------------------

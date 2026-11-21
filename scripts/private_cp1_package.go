@@ -227,6 +227,12 @@ func main() {
 		files[pkg.SettingsFile] = s
 	}
 	must(addNotices(files, root))
+
+	if cfg.ValidationFile != "" {
+		raw, e := packChecks(dir, cfg, files, desc)
+		must(e)
+		files[pkg.ValidationFile] = raw
+	}
 	manifest, e := pkg.BuildManifest(cfg, methods, files)
 	must(e)
 	tree := pkg.NewTree(cfg.Root())
@@ -260,4 +266,82 @@ func main() {
 	b, e := json.MarshalIndent(out, "", "  ")
 	must(e)
 	fmt.Println(string(b))
+}
+
+func packChecks(dir string, cfg *pkg.AuthorConfig, install map[string][]byte, descriptors []byte) ([]byte, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, cfg.ValidationFile))
+	if err != nil {
+		return nil, err
+	}
+	staged, err := pkg.ParseValidation(raw, func(rel string) ([]byte, bool, error) {
+		if b, ok := install[rel]; ok {
+			return b, true, nil
+		}
+		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return b, err == nil, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range staged.Checks {
+		if c.Lane != pkg.LaneSession || c.Audio == "" {
+			continue
+		}
+		if c.Unresolved != "" {
+			return nil, fmt.Errorf("%s: check %q can never pass: %s", pkg.ValidationFile, c.Name, c.Unresolved)
+		}
+		if _, packed := install[c.Audio]; !packed {
+			install[c.Audio] = c.WAV
+		}
+	}
+	v, err := pkg.ParseValidation(raw, func(rel string) ([]byte, bool, error) {
+		b, ok := install[rel]
+		return b, ok, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	p := pkg.PackageChecks{Operations: map[string]pkg.OperationContract{},
+		SpeechEngine: cfg.PluginFamily == "voice_interface", Native: map[string]bool{}}
+	for _, variant := range cfg.Variants {
+		p.Variants = append(p.Variants, variant.VariantID)
+		if variant.ExecutionRuntime == "native_t3_component" {
+			p.Native[variant.VariantID] = true
+		}
+	}
+	if b, ok := install[pkg.EmbeddingsFile]; ok {
+		if p.Source, err = pkg.ParseEmbeddings(b); err != nil {
+			return nil, err
+		}
+	}
+	var ops []struct {
+		ID               string `json:"id"`
+		Effects          string `json:"effects"`
+		OperatorConfirms bool   `json:"operator_confirms"`
+	}
+	if err := json.Unmarshal(descriptors, &ops); err != nil {
+		return nil, fmt.Errorf("the descriptor emission is not a list: %v", err)
+	}
+	session := map[string]bool{}
+	methods := make([]string, 0, len(ops))
+	for _, op := range ops {
+		methods = append(methods, op.ID)
+	}
+	if byIface, perr := pkg.PartitionMethods(cfg.InterfaceList(), methods); perr == nil {
+		for _, m := range byIface[pkg.SessionInterfaceID] {
+			session[m] = true
+		}
+	}
+	for _, op := range ops {
+		if !session[op.ID] {
+			p.Operations[op.ID] = pkg.OperationContract{Effects: op.Effects, OperatorConfirms: op.OperatorConfirms}
+		}
+	}
+	if err := pkg.ValidatePackageChecks(v, p); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }

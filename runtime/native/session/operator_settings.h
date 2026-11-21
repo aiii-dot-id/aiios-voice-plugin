@@ -9,12 +9,22 @@ inline constexpr std::array<const char*,20> native_voices={"alba","marius","jave
   "anna","charles","eve","george","jane","mary","michael","paul","vera","estelle"};
 inline constexpr std::array<const char*,20> native_voice_labels={"Alba - casual dialogue","Marius","Javert","Fantine","Éponine","Azelma","Bill Boerst - audiobook narrator","Peter Yearsley - audiobook narrator","Stuart Bell - audiobook narrator","Caro Davy - audiobook narrator",
   "Anna","Charles","Eve","George","Jane","Mary","Michael","Paul","Vera","Estelle - French speaker"};
+inline constexpr uint32_t default_anonymous_expiry_days=30;
+inline constexpr uint32_t max_anonymous_expiry_days=3650;
+inline constexpr const char* anonymous_setting_profiles_title="Voiceprints of people not enrolled";
+inline constexpr const char* anonymous_setting_profiles_description="On: a voice heard clearly twice is kept as an anonymous voiceprint, so its words can be told apart before anyone is named. Off: none is made, matched or kept fresh; kept ones are deleted when due. Enrolled speakers are unaffected. Applies next session.";
+inline constexpr const char* anonymous_setting_profiles_on="On";
+inline constexpr const char* anonymous_setting_profiles_off="Off";
+inline constexpr const char* anonymous_setting_expiry_title="Delete the voiceprint of someone not enrolled after (days)";
+inline constexpr const char* anonymous_setting_expiry_description="Days after a person who has not enrolled was last heard before their voiceprint, labels and speaker UUID are deleted. Transcripts are kept; enrolled speakers are kept until removed. Applies next session.";
 struct OperatorSettings {
   aii_voice_settings control{768,0,.5f};
   std::string voice="alba",tts_language="en",stt_language="en";
   float temperature=.3f;
   uint32_t seed=20260908;
   uint32_t capture_limit_minutes=aii::voice::default_capture_limit_minutes;
+  std::string anonymous_profiles="on";
+  uint32_t anonymous_expiry_days=default_anonymous_expiry_days;
   aii_voice_speech_settings speech() const {return {voice.c_str(),tts_language.c_str(),stt_language.c_str(),temperature,seed};}
   static double fraction(const cJSON* v,double low,double high) {
     require(cJSON_IsNumber(v) && std::isfinite(v->valuedouble) && v->valuedouble>=low && v->valuedouble<=high,"numeric setting outside supported range");return v->valuedouble;
@@ -35,6 +45,12 @@ struct OperatorSettings {
         result.tts_language=str(v,16);require(aii::voice::speech_language(result.tts_language),"unsupported speaking language");
       } else if(key=="stt_language") {
         result.stt_language=str(v,16);require(result.stt_language=="en","this recognition model supports English only");
+      } else if(key=="anonymous_profiles") {
+        result.anonymous_profiles=str(v,8);
+        require(result.anonymous_profiles=="on"||result.anonymous_profiles=="off","anonymous_profiles is on or off");
+      } else if(key=="anonymous_expiry_days") {
+        result.anonymous_expiry_days=uint32_t(integer(v,max_anonymous_expiry_days));
+        require(result.anonymous_expiry_days>=1,"anonymous_expiry_days must be 1..3650");
       } else throw Refused("setting unsupported by this explicit native profile");
     }
     return result;
@@ -44,7 +60,8 @@ struct OperatorSettings {
     put(j,"capture_limit_minutes",number(capture_limit_minutes));
     put(j,"vad_threshold",own(cJSON_CreateNumber(control.speech_threshold)));
     put(j,"tts_voice",string(voice));put(j,"tts_language",string(tts_language));put(j,"stt_language",string(stt_language));
-    put(j,"tts_temperature",own(cJSON_CreateNumber(temperature)));put(j,"tts_seed",number(seed));return j;
+    put(j,"tts_temperature",own(cJSON_CreateNumber(temperature)));put(j,"tts_seed",number(seed));
+    put(j,"anonymous_profiles",string(anonymous_profiles));put(j,"anonymous_expiry_days",number(anonymous_expiry_days));return j;
   }
   static Json declarations() {
     auto out=own(cJSON_CreateArray());const auto defaults=OperatorSettings{}.effective();
@@ -70,11 +87,20 @@ struct OperatorSettings {
     auto numeric=[&](const char* key,const char* scope,const char* type,const char* title,double low,double high,const char* description){
       auto row=add(key,scope,type,title,description);put(row,"minimum",own(cJSON_CreateNumber(low)));put(row,"maximum",own(cJSON_CreateNumber(high)));cJSON_AddItemToArray(out.get(),row.release());
     };
+    {
+      auto row=add("anonymous_profiles","hearing","enum",anonymous_setting_profiles_title,anonymous_setting_profiles_description);
+      auto values=own(cJSON_CreateArray()),names=object();
+      for(const auto& choice:{std::make_pair("on",anonymous_setting_profiles_on),std::make_pair("off",anonymous_setting_profiles_off)}) {
+        cJSON_AddItemToArray(values.get(),string(choice.first).release());put(names,choice.first,string(choice.second));
+      }
+      put(row,"values",std::move(values));put(row,"labels",std::move(names));cJSON_AddItemToArray(out.get(),row.release());
+    }
     numeric("turn_pause_ms","hearing","integer","Speaking pause (VAD, ms)",320,5000,"Voice activity detection is always enabled. Minimum silence before turn completion; short pauses retain speech and semantic handling may extend it. Applies next session; does not delay interruption.");
     numeric("capture_limit_minutes","hearing","integer","Listening session limit (minutes; 0 = no automatic stop)",0,UINT32_MAX,"Captured audio minutes, including silence. 0 means no automatic stop. Positive limits finalize accepted input. Applies next session; separate from VAD pause and enrollment. Stop, Finish and Abort remain available.");
     numeric("vad_threshold","hearing","number","Speech detection (VAD) threshold",.05,.95,"Voice activity detection is always enabled. Higher values require stronger speech evidence. Applies next session; changing this can miss quiet speech.");
     numeric("tts_temperature","speaking","number","Voice variation",0,1,"Advanced sampling control. Applies from the next reply; higher values may reduce consistency.");
     numeric("tts_seed","speaking","integer","Synthesis seed",0,4294967295.0,"Stable sampling seed. Applies from the next reply. Does not enroll or identify a speaker.");
+    numeric("anonymous_expiry_days","hearing","integer",anonymous_setting_expiry_title,1,max_anonymous_expiry_days,anonymous_setting_expiry_description);
     return out;
   }
 };

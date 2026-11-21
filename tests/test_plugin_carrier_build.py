@@ -25,7 +25,7 @@ def tree(tmp_path):
     pin = {**build.PIN, "archive_sha256": build.digest(archive)}
     (tmp_path / "plugin/sdk-source.json").write_text(json.dumps(pin))
     (tmp_path / "plugin/native/go.mod").write_text(
-        "module fixture\nrequire github.com/aiii-dot-id/aii-plugin-sdk " + pin["version"] + "\n"
+        "module fixture\nreplace github.com/aiii-dot-id/aii-plugin-sdk => ../../" + pin["source"] + "\n"
     )
     return tmp_path
 
@@ -35,7 +35,7 @@ def test_sealed_sdk_matches(tree):
     assert entries == {"hello.go": hashlib.sha256(b"package hello\n").hexdigest()}
 
 
-@pytest.mark.parametrize("damage", ["archive", "source", "extra", "missing", "link", "old_pin", "wrong_version", "replace_block"])
+@pytest.mark.parametrize("damage", ["archive", "source", "extra", "missing", "link", "old_pin"])
 def test_sdk_refuses_altered_or_old_inputs(tree, damage):
     source = tree / build.PIN["source"]
     if damage == "archive":
@@ -48,14 +48,9 @@ def test_sdk_refuses_altered_or_old_inputs(tree, damage):
         (source / "hello.go").unlink()
     elif damage == "link":
         (source / "linked.go").symlink_to(source / "hello.go")
-    elif damage == "wrong_version":
-        (tree / "plugin/native/go.mod").write_text("require github.com/aiii-dot-id/aii-plugin-sdk v0.1.14\n")
-    elif damage == "replace_block":
-        p = tree / "plugin/native/go.mod"
-        p.write_text(p.read_text() + "replace (\n github.com/aiii-dot-id/aii-plugin-sdk => ./unexpected\n)\n")
     else:
         (tree / "plugin/native/go.mod").write_text(
-            "replace github.com/aiii-dot-id/aii-plugin-sdk => ./unexpected\n"
+            "replace github.com/aiii-dot-id/aii-plugin-sdk => ../../.build/aii-plugin-sdk-41eef1f\n"
         )
     with pytest.raises(ValueError):
         build.verify_sdk(tree)

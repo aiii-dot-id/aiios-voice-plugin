@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from scripts.prove_native_worker_transport import Worker
-from tests.native_limits import limits
+from tests.native_limits import TABLE, limits
 
 PCM, GAP, END = 1, 2, 3
 
@@ -200,16 +200,24 @@ def test_a_settings_read_that_failed_says_which_of_three_it_was(tmp_path):
 
 def test_a_limits_table_that_does_not_hold_stops_the_worker_before_it_is_ready(tmp_path):
     binary = Path(os.environ["AII_NATIVE_INTERRUPT_FIXTURE"])
-    for name, table in (
-        ("not-nesting", limits(exchange_write_ms=250)),
-        ("out-of-range", limits(opening_ms=1)),
-        ("a-member-missing", '{"exchange_read_ms":500}'),
-        ("not-the-table", "fast"),
+    def channels(count):
+        return json.dumps({**TABLE, "model_server_channels": count}, separators=(",", ":"))
+    older = json.dumps({member: value for member, value in TABLE.items() if member != "model_server_channels"},
+                       separators=(",", ":"))
+    for name, table, named in (
+        ("not-nesting", limits(exchange_write_ms=250), None),
+        ("out-of-range", limits(opening_ms=1), None),
+        ("a-member-missing", '{"exchange_read_ms":500}', None),
+        ("not-the-table", "fast", None),
+        ("channels-0", channels(0), b"model_server_channels"),
+        ("channels-65", channels(65), b"model_server_channels"),
+        ("older-carrier", older, None),
     ):
         done = subprocess.run([str(binary), *["fixture"] * 7], env={**os.environ, "AII_VOICE_LIMITS": table},
                               stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
         assert done.returncode != 0, name
         assert b"worker limits" in done.stderr, (name, done.stderr[-200:])
+        assert named is None or named in done.stderr, (name, done.stderr[-200:])
         assert b'"ready"' not in done.stdout, (name, done.stdout[-200:])
     w = worker(tmp_path, "holds", limits())
     try:
@@ -261,7 +269,7 @@ def test_each_session_says_in_the_log_which_settings_it_was_given(tmp_path):
     assert [(l["component"], l["event"], l["session_id"]) for l in lines] == [("voice-worker", "session_settings", "first"), ("voice-worker", "session_settings", "second")], lines
     assert [l["settings"]["turn_pause_ms"] for l in lines] == [768, 1200], lines
     assert all(l["settings"]["tts_voice"] == "alba" and l["settings"]["tts_language"] == "en" and l["settings"]["stt_language"] == "en" for l in lines), lines
-    assert all(set(l["settings"]) == {"turn_pause_ms", "capture_limit_minutes", "vad_threshold", "tts_voice", "tts_language", "stt_language", "tts_temperature", "tts_seed"} for l in lines), lines
+    assert all(set(l["settings"]) == {"turn_pause_ms", "capture_limit_minutes", "vad_threshold", "tts_voice", "tts_language", "stt_language", "tts_temperature", "tts_seed", "anonymous_profiles", "anonymous_expiry_days"} for l in lines), lines
 
 
 def foreign_lines(w):
@@ -462,6 +470,35 @@ def test_the_same_engine_failure_alone_fails_the_exit(tmp_path):
     finally:
         code = w.close()
     assert code == 1
+
+
+def test_an_engine_failure_retires_the_worker_with_its_input_still_open(tmp_path):
+    w = worker(tmp_path, "engine-failure-retires")
+    try:
+        engine_failure_pending(w, "s")
+        w.call("cancel_synthesis", session_id="s")
+        failure = w.event("failure", "s")
+        assert failure["reason"] == "fixture synthesizer reset failed", failure
+        try:
+            code = w.p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            pytest.fail("the worker went on serving after an engine failure, with its input open")
+        assert code == 1, f"the worker that retired after an engine failure exited {code}"
+    finally:
+        w.close()
+
+
+def test_a_contained_session_failure_leaves_the_worker_serving(tmp_path):
+    w = worker(tmp_path, "contained-keeps-serving")
+    try:
+        w.open("first")
+        w.input.write(frame(GAP, 1, 1, 30 * 16000 + 1))
+        assert "audio gap too long" in w.event("failure", "first")["reason"]
+        time.sleep(1)
+        assert w.p.poll() is None, "a contained session failure retired the worker"
+        w.open("second")
+    finally:
+        assert w.close() == 0
 
 
 def quiet(w, stream, samples, seq, start):

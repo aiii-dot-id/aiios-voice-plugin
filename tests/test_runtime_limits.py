@@ -31,7 +31,7 @@ OTHER = dict(host_read_ms=2000, host_write_ms=8000, storage_wait_ms=14000, drain
              control_write_ms=5000, retire_ms=4000, capture_tail_ms=3000, worker_exit_ms=6000,
              worker_reap_ms=7000, lane_flush_ms=900, model_call_ms=20000, input_tail_ms=2500,
              output_take_ms=6000, speaker_match_ms=8000, warm_probe_ms=30000, endpoint_decision_ms=700,
-             endpoint_retire_ms=21000, separation_min_ms=3000, separation_max_ms=19000)
+             endpoint_retire_ms=21000, separation_min_ms=3000, separation_max_ms=19000, model_server_channels=16)
 DECLARED_STARTUP_MS = 180000
 CARRIERS_OWN = ('control_ms', 'ready_ms', 'worker_exit_ms', 'worker_reap_ms', 'lane_flush_ms')
 
@@ -45,6 +45,12 @@ def carrier_constant(name):
     return int(count) * MILLISECONDS[unit]
 
 
+def carrier_count(name):
+    found = re.search(r'\b' + name + r'\s*=\s*(\d+)\s*$', CARRIER, re.M)
+    assert found, 'the carrier declares no count ' + name
+    return int(found.group(1))
+
+
 def carrier_table(literal):
     members = carrier_members()
     return {members[field]: int(value) for field, value in re.findall(r'(\w+): ms\((-?\d+)\)', literal)}
@@ -55,14 +61,16 @@ def carrier_defaults():
     block = re.search(r'var defaultLimits = limits\{(.*?)\}', CARRIER, re.S).group(1)
     by_field = {field: int(count) * MILLISECONDS[unit]
                 for field, count, unit in re.findall(r'(\w+):\s*(\d+) \* time\.(Second|Millisecond)', block)}
+    by_field.update((field, int(count)) for field, count in re.findall(r'(\w+):\s*(\d+)\s*(?:,|$)', block))
     sets = dict(re.findall(r'\{p\.(\w+), &l\.(\w+)\}', CARRIER))
+    sets.update(re.findall(r'if p\.(\w+) != nil \{\s*l\.(\w+) = \*p\.\w+\s*\}', CARRIER))
     assert set(sets) == set(members) and set(sets.values()) == set(by_field) and len(by_field) == len(members)
     return {members[member]: by_field[field] for member, field in sets.items()}
 
 
 def test_the_scripts_names_order_and_defaults_are_the_carriers():
     members = carrier_members()
-    assert len(members) == 27 and tuple(members.values()) == MEMBERS, (
+    assert len(members) == 28 and tuple(members.values()) == MEMBERS, (
         'the members the carrier reads are not the ones the scripts write, or not in its order')
     assert carrier_defaults() == DEFAULTS
     assert default_limits() == DEFAULTS and tuple(default_limits()) == MEMBERS
@@ -71,12 +79,14 @@ def test_the_scripts_names_order_and_defaults_are_the_carriers():
 def test_the_scripts_ranges_allowance_and_margin_are_the_carriers():
     general = re.findall(r'"(\w+_ms)":\s*l\.\w+', CARRIER)
     listeners = {'reply_settings_ms', 'endpoint_decision_ms'}
-    assert len(general) == len(MEMBERS) - 3 and set(general) | listeners | {'ready_ms'} == set(MEMBERS)
+    assert len(general) == len(MEMBERS) - 4
+    assert set(general) | listeners | {'ready_ms', 'model_server_channels'} == set(MEMBERS)
     for name in general:
         assert RANGES[name] == (carrier_constant('limitFloor'), carrier_constant('limitCeiling')), name
     for name in listeners:
         assert RANGES[name] == (carrier_constant('replyFloor'), carrier_constant('replyCeiling')), name
     assert RANGES['ready_ms'] == (carrier_constant('readyFloor'), carrier_constant('readyCeiling')) == (1000, 3600000)
+    assert RANGES['model_server_channels'] == (carrier_count('channelsFloor'), carrier_count('channelsCeiling')) == (1, 64)
     assert runtime_limits.HOST_INVOKE_ALLOWANCE_MS == carrier_constant('hostInvokeAllowance')
     assert runtime_limits.MARGIN_MS == carrier_constant('limitMargin')
     assert runtime_limits.HOST_ANSWER_MARGIN_MS == carrier_constant('hostAnswerMargin')
@@ -98,6 +108,7 @@ CARRIER_ARITHMETIC = (
     'if l.EndpointRetire < l.ModelCall+limitMargin {',
     'if l.SeparationMax < l.SeparationMin {',
     'if l.ModelCall < l.SeparationMax+limitMargin {',
+    'if l.ModelServerChannels < channelsFloor || l.ModelServerChannels > channelsCeiling {',
     'if action == "" { return l.HostRead } return l.HostWrite',
     'func (l limits) workerExchange(action string) time.Duration { return l.query(action) + limitMargin }',
     'func (l limits) opening() time.Duration { return l.StorageWait }',
@@ -130,6 +141,7 @@ CARRIER_ARITHMETIC = (
     'EndpointRetireMS: l.EndpointRetire.Milliseconds(),',
     'SeparationMinMS: l.SeparationMin.Milliseconds(),',
     'SeparationMaxMS: l.SeparationMax.Milliseconds(),',
+    'ModelServerChannels: l.ModelServerChannels,',
 )
 
 
@@ -150,11 +162,12 @@ def carrier_handed():
 
 def test_what_the_scripts_compute_for_the_worker_is_what_the_carrier_hands_over():
     handed = worker_table(carrier_defaults())
-    assert list(handed) == carrier_handed() and len(handed) == 24
+    assert list(handed) == carrier_handed() and len(handed) == 25
     compiled = {name + '_ms': int(value)
                 for name, value in re.findall(r'std::chrono::milliseconds (\w+)\{(\d+)\};', WORKER)}
+    compiled.update((name, int(value)) for name, value in re.findall(r'uint32_t (\w+)\{(\d+)\};', WORKER))
     assert handed == compiled
-    parsed = re.findall(r'\{"([a-z_]+_ms)",\s*&limits\.', WORKER)
+    parsed = re.findall(r'\{"([a-z_]+)",\s*&limits\.', WORKER)
     assert sorted(parsed) == sorted(handed), 'the worker does not parse the members the carrier hands over'
     assert set(MEMBERS) - set(handed) == {'host_read_ms', 'host_write_ms', 'storage_wait_ms', *CARRIERS_OWN}
     assert worker_environment({}) == json.dumps(handed, separators=(',', ':'))
@@ -175,6 +188,61 @@ def test_the_tests_table_and_the_stand_ins_are_the_one_the_carrier_computes_from
             native_limits.limits(**{own: 1000})
     stand_in = (ROOT / 'scripts/prove_native_worker_transport.py').read_text(encoding='utf-8')
     assert "env.pop('AII_VOICE_LIMITS',None)" in stand_in and 'worker_environment(default_limits())' in stand_in
+
+
+def test_the_model_servers_channels_have_one_ceiling_everywhere():
+    control = (ROOT / 'runtime/native/session/model_server_control.h').read_text(encoding='utf-8')
+    worker = re.search(r'\bchannels_ceiling\s*=\s*(\d+)', WORKER)
+    server = re.search(r'\bconstexpr size_t model_server_channel_ceiling\s*=\s*(\d+);', control)
+    assert worker and server, 'the worker or the model server declares no ceiling of channels'
+    assert (carrier_count('channelsCeiling') == int(worker.group(1)) == int(server.group(1))
+            == RANGES['model_server_channels'][1] == 64)
+
+
+def test_the_scripts_read_the_model_servers_channels_as_the_carrier_does():
+    assert limits_from({})['model_server_channels'] == 64 == worker_table({})['model_server_channels']
+    for stated in (1, 8, 64):
+        assert limits_from(dict(model_server_channels=stated))['model_server_channels'] == stated
+        assert worker_table(dict(model_server_channels=stated))['model_server_channels'] == stated
+
+
+@pytest.mark.parametrize('stated,words', [
+    (dict(model_server_channels=0), 'runtime limit model_server_channels is 0; it must be 1 to 64'),
+    (dict(model_server_channels=65), 'runtime limit model_server_channels is 65; it must be 1 to 64'),
+    (dict(model_server_channels=None), 'runtime limit model_server_channels must be a whole number of channels'),
+    (dict(model_server_channels=8.5), 'runtime limit model_server_channels must be a whole number of channels'),
+    (dict(model_server_channels='8'), 'runtime limit model_server_channels must be a whole number of channels'),
+    (dict(model_server_channels=True), 'runtime limit model_server_channels must be a whole number of channels'),
+])
+def test_the_scripts_refuse_a_count_of_channels_out_of_range_or_not_whole_by_name(stated, words):
+    with pytest.raises(ValueError) as refusal:
+        limits_from(stated)
+    assert words in str(refusal.value)
+
+
+def test_the_model_servers_entry_reserves_and_serves_the_tables_count_not_the_ceiling():
+    source = ' '.join((ROOT / 'runtime/native/session/native_c_api.cpp').read_text(encoding='utf-8').split())
+    assert source.count('aii::voice::reserve_then_ready(model_server_channels,') == 1
+    assert source.count('aii::voice::serve_model_server(factory,control,model_server_channels,') == 1
+    assert source.count('ServerFactory factory(*owner,max_sessions?max_sessions:model_server_channels,') == 1
+    assert source.count(r'{\"event\":\"descriptors\",\"channels\":%u,') == 1
+    held = re.findall(r'static_assert\([^;]*model_server_channel_ceiling[^;]*\);', source)
+    ranged = re.findall(r'if\(model_server_channels<1\|\|model_server_channels>aii::voice::model_server_channel_ceiling\) '
+                        r'throw std::invalid_argument\(.*?std::to_string\(aii::voice::model_server_channel_ceiling\)\);', source)
+    assert len(held) == 1 and len(ranged) == 1, (held, ranged)
+    rest = source.replace(held[0], '').replace(ranged[0], '')
+    assert 'model_server_channel_ceiling' not in rest and 'model_server_channel_limit' not in rest
+
+
+def test_the_model_servers_old_entry_is_gone_and_its_new_name_is_exported():
+    session = ROOT / 'runtime/native/session'
+    for name in ('c_api.h', 'native_c_api.cpp', 'native_runtime.def', 'worker.cpp', 'worker_test_models.cpp'):
+        assert 'aii_voice_model_server_run' not in (session / name).read_text(encoding='utf-8'), name
+    assert (session / 'native_runtime.def').read_text(encoding='utf-8').split().count('aii_voice_model_server_serve') == 1
+    assert ' '.join((session / 'c_api.h').read_text(encoding='utf-8').split()).count(
+        'aii_voice_result aii_voice_model_server_serve(') == 1
+    worker = ' '.join((session / 'worker.cpp').read_text(encoding='utf-8').split())
+    assert worker.count('uint32_t(uid.limits().retire.count()),uid.limits().model_server_channels,installed->max_sessions,') == 1
 
 
 def test_the_worker_counts_its_own_end_and_a_captures_last_frames_by_the_table():
@@ -214,9 +282,13 @@ SESSION_TYPED = {
                         'std::chrono::milliseconds(1)', 'std::chrono::milliseconds(1)', 'std::chrono::seconds(120)'],
     'causal_turn_probe.cpp': ['1ms'] * 3,
     'continuous_probe.cpp': ['1ms'] * 6,
+    'hearing_pair_probe.cpp': ['1ms'] * 2,
+    'hearing_channel_probe.cpp': ['1ms'] * 2,
     'pause_projection_probe.cpp': ['10s'],
     'probe.cpp': ['std::chrono::milliseconds(1)'] * 9,
     'speaker_model_probe.cpp': ['std::chrono::milliseconds(1)'] * 2,
+    'admission.h': ['criterion_first_sound_ms = 2000', 'first_sound_ms = 0', 'retry_after_ms = 0'],
+    'native_models.cpp': ['lane_ms=0', 'audio_ms=0', 'first_sound_ms=0', 'lane_ms=0', 'audio_ms=0', 'reply_lane_ms=0', 'reply_first_sound_ms=0', 'start_ms=0', 'reply_first_sound_ms=0', 'held_ms=0', 'first_sound_ms=0'],
 }
 SESSION_TESTS = ('c_api_test_models.cpp', 'worker_test_models.cpp', 'worker_exit_test_library.cpp')
 A_NUMBER = r"(?<![\w.])\d[\d']*(?![\w.])"
@@ -247,7 +319,8 @@ def test_a_write_that_has_had_its_time_is_said_by_its_pipe_whichever_thread_sees
     assert ('if (expired()) throw UnframedWrite(expiry()); if (stop) throw UnframedWrite("native pipe write interrupted");') in pipe
 
 
-WORKERS_TABLE = ['%s{%d}' % (member[:-len('_ms')], value) for member, value in native_limits.TABLE.items()]
+WORKERS_TABLE = ['%s{%d}' % (member[:-len('_ms')], value) for member, value in native_limits.TABLE.items()
+                 if member.endswith('_ms')]
 
 
 def test_no_duration_is_typed_in_the_session_directory_but_those_listed_with_a_reason():
@@ -430,6 +503,8 @@ CARRIER_REFUSES = (
     (dict(separation_max_ms=29501), 'a separation may take 29501 ms (separation_max_ms)'),
     (dict(model_call_ms=25499, endpoint_retire_ms=30500), 'the model call it runs in is given 25499 ms (model_call_ms)'),
     (dict(separation_min_ms=25001), 'the most must not be the less'),
+    (dict(model_server_channels=0), 'model_server_channels is 0; it must be 1 to 64'),
+    (dict(model_server_channels=65), 'model_server_channels is 65; it must be 1 to 64'),
 )
 
 

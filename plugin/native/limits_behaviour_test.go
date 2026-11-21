@@ -149,7 +149,7 @@ func TestTheWorkerIsHandedTheProfilesLimits(t *testing.T) {
 		ControlMS: ms(1500), AudioWriteMS: ms(4000), ReadyMS: ms(240000), ControlWriteMS: ms(5000),
 		RetireMS: ms(4000), CaptureTailMS: ms(3000), WorkerExitMS: ms(6000), WorkerReapMS: ms(7000), LaneFlushMS: ms(900),
 		ModelCallMS: ms(20000), InputTailMS: ms(2500), OutputTakeMS: ms(6000), SpeakerMatchMS: ms(8000), WarmProbeMS: ms(30000),
-		DecisionMS: ms(700), EndRetireMS: ms(21000), SeparateMinMS: ms(3000), SeparateMaxMS: ms(19000)}
+		DecisionMS: ms(700), EndRetireMS: ms(21000), SeparateMinMS: ms(3000), SeparateMaxMS: ms(19000), ModelServerChannels: ms(8)}
 	cmd, l, err := packagedWorker(filepath.Join(root, "carrier"), writeRuntimeProfile(t, root, p))
 	if err != nil {
 		t.Fatal(err)
@@ -159,10 +159,11 @@ func TestTheWorkerIsHandedTheProfilesLimits(t *testing.T) {
 		l.Control != 1500*time.Millisecond || l.AudioWrite != 4*time.Second || l.Ready != 4*time.Minute || l.ControlWrite != 5*time.Second ||
 		l.Retire != 4*time.Second || l.CaptureTail != 3*time.Second || l.WorkerExit != 6*time.Second || l.WorkerReap != 7*time.Second || l.LaneFlush != 900*time.Millisecond ||
 		l.ModelCall != 20*time.Second || l.InputTail != 2500*time.Millisecond || l.OutputTake != 6*time.Second || l.SpeakerMatch != 8*time.Second || l.WarmProbe != 30*time.Second ||
-		l.EndpointDecision != 700*time.Millisecond || l.EndpointRetire != 21*time.Second || l.SeparationMin != 3*time.Second || l.SeparationMax != 19*time.Second {
+		l.EndpointDecision != 700*time.Millisecond || l.EndpointRetire != 21*time.Second || l.SeparationMin != 3*time.Second || l.SeparationMax != 19*time.Second ||
+		l.ModelServerChannels != 8 {
 		t.Fatalf("the profile's table was not taken: %+v", l)
 	}
-	want := limitsEnv + `={"exchange_read_ms":1500,"exchange_write_ms":4500,"opening_ms":6500,"whole_read_ms":6500,"whole_publication_ms":20000,"drain_idle_ms":9000,"reply_settings_ms":200,"abort_ms":3000,"capture_close_ms":30000,"session_open_ms":40000,"opening_notice_ms":700,"audio_write_ms":4000,"control_write_ms":5000,"retire_ms":4000,"capture_tail_ms":3000,"model_call_ms":20000,"input_tail_ms":2500,"output_take_ms":6000,"speaker_match_ms":8000,"warm_probe_ms":30000,"endpoint_decision_ms":700,"endpoint_retire_ms":21000,"separation_min_ms":3000,"separation_max_ms":19000}`
+	want := limitsEnv + `={"exchange_read_ms":1500,"exchange_write_ms":4500,"opening_ms":6500,"whole_read_ms":6500,"whole_publication_ms":20000,"drain_idle_ms":9000,"reply_settings_ms":200,"abort_ms":3000,"capture_close_ms":30000,"session_open_ms":40000,"opening_notice_ms":700,"audio_write_ms":4000,"control_write_ms":5000,"retire_ms":4000,"capture_tail_ms":3000,"model_call_ms":20000,"input_tail_ms":2500,"output_take_ms":6000,"speaker_match_ms":8000,"warm_probe_ms":30000,"endpoint_decision_ms":700,"endpoint_retire_ms":21000,"separation_min_ms":3000,"separation_max_ms":19000,"model_server_channels":8}`
 	if got := handed(cmd.Env); len(got) != 1 || got[0] != want {
 		t.Fatalf("the worker's limits:\n got %q\nwant %q", got, want)
 	}

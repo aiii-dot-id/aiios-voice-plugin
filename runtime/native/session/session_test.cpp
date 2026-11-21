@@ -1,5 +1,6 @@
 #include "session.h"
 #include "text.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -7,6 +8,7 @@
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 using namespace aii::voice;
@@ -55,11 +57,13 @@ struct SlowEnd:End {
 struct Tts:Synthesizer {
   std::atomic<uint64_t> through{0},generation{0};
   std::atomic<bool> entered{false},hold{false},fault_on_cancel{false},blocked{false},release{false};
+  std::atomic<bool> late{false},late_given{false};
   std::atomic<size_t> starts{0};
   size_t hold_segment=0;
   std::vector<std::string> texts;
   int chunks=0;
   int chunk_count=2;
+  std::chrono::milliseconds notice{0};
   size_t reserve_samples=0;
   size_t playback_reserve_samples() const override { return reserve_samples; }
   void start(uint64_t id,const std::string& text) override {
@@ -68,6 +72,8 @@ struct Tts:Synthesizer {
   std::vector<float> next() override {
     if(chunks==1 && (hold || (hold_segment && starts==hold_segment))) { blocked=true; until([&]{return through>=generation || release.load();}); }
     if(through>=generation) {
+      if(notice.count()) std::this_thread::sleep_for(notice);
+      if(late && !late_given.exchange(true)) return std::vector<float>(960,.7f);
       if(fault_on_cancel) throw std::runtime_error("inference failure, not cancellation");
       throw Cancelled("TTS fenced");
     }
@@ -178,8 +184,6 @@ void independent_interruption(uint32_t capture_minutes=default_capture_limit_min
   std::vector<float> speech(512,.5f);
   check(s.feed(0,speech.data(),512),"first audio refused");
   until([&]{return a.entered.load();});
-  std::vector<float> overload(32768,.5f);
-  check(!s.feed(512,overload.data(),overload.size()),"unbounded input admitted behind blocked recognizer");
   check(s.status().received==512,"backpressure consumed refused input");
   t.hold=true; s.synthesize(1,"Keep speaking while recognition is delayed.");
   until([&]{return t.entered.load();});
@@ -210,6 +214,115 @@ void independent_interruption(uint32_t capture_minutes=default_capture_limit_min
   check(s.wait_closed(1000),"interrupted session owners did not retire");
   check(s.status().error.empty(),"expected cancellation faulted session");
   check(a.samples==1024,"opening words or exact input tail were lost");
+}
+uint64_t fill(Session& s,uint64_t at,size_t packet) {
+  std::vector<float> quiet(packet,0.f);
+  for(;;) {
+    const auto deadline=std::chrono::steady_clock::now()+300ms;
+    bool admitted=false;
+    while(!(admitted=s.feed(at,quiet.data(),packet)) && std::chrono::steady_clock::now()<deadline)
+      std::this_thread::sleep_for(1ms);
+    if(!admitted) return at;
+    at+=packet;
+  }
+}
+uint64_t expected_backlog(uint32_t timeout_ms) {
+  const uint64_t bound=std::max<uint64_t>(32768,std::min<uint64_t>((timeout_ms+1000ull)*16,60*16000));
+  return bound-bound%512;
+}
+void release_and_close(Asr& a,Session& s,uint64_t total) {
+  a.released=true;
+  s.finish_input(total);
+  until([&]{return s.status().input_finished && !s.status().synthesizing;});
+  Audio frame; bool ended=false;
+  while(s.audio(frame)) { check(frame.pcm.empty(),"stale PCM escaped the interruption fence"); ended|=frame.end; }
+  check(ended,"cancel lost terminal audio boundary");
+  s.playback(1,960,true,true); s.close(false);
+  check(s.wait_closed(2000),"session owners did not retire");
+  check(s.status().error.empty(),"expected cancellation faulted session");
+  check(s.status().received==total && s.status().recognized==total,"input was lost behind backpressure");
+}
+void barge_in_behind_a_stalled_recognizer() {
+  Asr a; a.released=false; Detector v; End e; Tts t; Session s(a,v,e,t);
+  std::vector<float> speech(512,.5f), quiet(512,0.f);
+  check(s.feed(0,speech.data(),512),"first audio refused");
+  until([&]{return a.entered.load();});
+  t.hold=true; s.synthesize(1,"Keep speaking while recognition is stalled.");
+  until([&]{return t.entered.load();});
+  Audio frame; until([&]{return s.audio(frame);});
+  until([&]{return t.blocked.load();});
+  uint64_t at=512;
+  for(;at<512+48000;at+=512) {
+    const auto deadline=std::chrono::steady_clock::now()+2s;
+    while(!s.feed(at,quiet.data(),512)) {
+      if(std::chrono::steady_clock::now()>deadline)
+        throw std::runtime_error("silence refused behind a stalled recognizer before three seconds of backlog");
+      std::this_thread::sleep_for(1ms);
+    }
+  }
+  check(t.through.load()==0,"silence interrupted the reply");
+  const auto start=std::chrono::steady_clock::now();
+  check(s.feed(at,speech.data(),512),"speech refused behind a stalled recognizer");
+  until([&]{return t.through.load()==1;});
+  check(std::chrono::steady_clock::now()-start<500ms,"barge-in waited behind recognition");
+  release_and_close(a,s,at+512);
+}
+struct SlowAsr:Asr {
+  std::string push(const float* p,size_t n) override {
+    std::this_thread::sleep_for(std::chrono::microseconds(n*80)); return Asr::push(p,n);
+  }
+};
+void barge_in_behind_a_slow_recognizer() {
+  SlowAsr a; Detector v; End e; Tts t; Session s(a,v,e,t);
+  std::vector<float> speech(512,.5f), quiet(512,0.f);
+  t.hold=true; s.synthesize(1,"Keep speaking while recognition is slow.");
+  until([&]{return t.entered.load();});
+  Audio frame; until([&]{return s.audio(frame);});
+  until([&]{return t.blocked.load();});
+  uint64_t at=0;
+  for(;at<48000;at+=512) until([&]{return s.feed(at,quiet.data(),512);});
+  const auto start=std::chrono::steady_clock::now();
+  until([&]{return s.feed(at,speech.data(),512);});
+  until([&]{return t.through.load()==1;});
+  check(std::chrono::steady_clock::now()-start<500ms,"barge-in waited behind a slow recognizer");
+  release_and_close(a,s,at+512);
+}
+void backlog_follows_the_recognizers_limit(uint32_t capture_minutes) {
+  for(const uint32_t timeout_ms:{2000u,600000u}) {
+    Asr a; a.released=false; Detector v; End e; Tts t;
+    Settings settings; settings.capture_limit_minutes=capture_minutes; settings.model_call_timeout_ms=timeout_ms;
+    Session s(a,v,e,t,settings);
+    std::vector<float> speech(512,.5f);
+    check(s.feed(0,speech.data(),512),"first audio refused");
+    until([&]{return a.entered.load();});
+    const uint64_t stopped=fill(s,512,512);
+    if(stopped!=expected_backlog(timeout_ms)) {
+      throw std::runtime_error("the backlog behind a held recognizer stopped at "+std::to_string(stopped)+
+        " samples, not at "+std::to_string(expected_backlog(timeout_ms))+" (a "+std::to_string(timeout_ms)+" ms deadline)");
+    }
+    check(s.status().received==stopped,"backpressure consumed refused input");
+    std::vector<float> big(32769,0.f);
+    refuses([&]{s.feed(stopped,big.data(),big.size());},"a single feed over 32,768 samples admitted");
+    a.released=true; s.finish_input(stopped);
+    until([&]{return s.status().input_finished;});
+    s.close(false); check(s.wait_closed(5000),"held-recognizer session did not retire");
+    check(s.status().error.empty(),"bounded backlog faulted the session");
+    check(s.status().received==stopped && s.status().recognized==stopped,"input was lost behind backpressure");
+  }
+}
+void a_short_deadline_takes_a_full_feed() {
+  for(const bool announced:{false,true}) {
+    Asr a; Detector v; End e; Tts t;
+    Settings settings; settings.model_call_timeout_ms=1000;
+    Session s(a,v,e,t,settings);
+    std::vector<float> pcm(32768,0.f);
+    if(announced) s.finish_input(32768);
+    check(s.feed(0,pcm.data(),pcm.size()),"a legal first feed of 32,768 samples was refused under a short deadline");
+    if(!announced) s.finish_input(32768);
+    until([&]{return s.status().input_finished;});
+    s.close(false); check(s.wait_closed(2000),"short-deadline session did not retire");
+    check(s.status().error.empty() && s.status().recognized==32768,"short-deadline session lost or faulted its feed");
+  }
 }
 std::vector<uint64_t> pause(size_t packet) {
   Asr a; Detector v; End e; Tts t; Session s(a,v,e,t,Settings{512,.5f});
@@ -400,23 +513,25 @@ void admitted_cutoff_repeats_after_the_drain_released() {
   try{s.finish_input(2048);check(false,"a different cutoff was admitted after release");}
   catch(const std::invalid_argument& x){check(std::string(x.what())=="finish refused: the session is stopping","a late different cutoff has the wrong refusal");}
 }
+Settings held_tail_settings() { Settings s{768,.5f,200}; s.model_call_timeout_ms=3096; return s; }
 void backpressured_tail_is_not_missing(bool deliver) {
-  Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,200});
+  Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,held_tail_settings());
   std::vector<float> pcm(32768,.5f);
   check(s.feed(0,pcm.data(),pcm.size()),"initial bounded queue refused");
   until([&]{return a.entered.load();});
-  s.finish_input(32769);
-  check(!s.feed(32768,pcm.data(),1),"blocked recognizer did not apply backpressure");
+  until([&]{return s.feed(32768,pcm.data(),pcm.size());});
+  s.finish_input(65537);
+  check(!s.feed(65536,pcm.data(),1),"blocked recognizer did not apply backpressure");
   std::this_thread::sleep_for(600ms);
   check(s.status().error.empty() && !s.status().input_finished,
         "engine backpressure was called missing input");
-  s.finish_input(32769);
+  s.finish_input(65537);
   a.released=true;
   until([&]{return s.status().recognized>=512;});
   if(deliver) {
-    check(s.feed(32768,pcm.data(),1),"already-present tail was refused after capacity returned");
-    s.close(false);check(s.wait_closed(1000),"backpressured tail did not drain");
-    check(a.samples==32769 && s.status().input_finished,"backpressure lost a tail sample");
+    check(s.feed(65536,pcm.data(),1),"already-present tail was refused after capacity returned");
+    s.close(false);check(s.wait_closed(2000),"backpressured tail did not drain");
+    check(a.samples==65537 && s.status().input_finished,"backpressure lost a tail sample");
   } else {
     s.close(false);check(s.wait_closed(1000),"missing tail deadline never resumed");
     check(s.status().error=="input tail missing at admitted cutoff: 200 ms, the time the limits table gives it (input_tail_ms)" && !s.status().input_finished,
@@ -424,11 +539,12 @@ void backpressured_tail_is_not_missing(bool deliver) {
   }
 }
 void abort_bypasses_backpressured_tail() {
-  Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,Settings{768,.5f,200});
+  Asr a;a.released=false;Detector v;End e;Tts t;Session s(a,v,e,t,held_tail_settings());
   std::vector<float> pcm(32768,.5f);
   check(s.feed(0,pcm.data(),pcm.size()),"initial queue refused");
-  until([&]{return a.entered.load();});s.finish_input(32769);
-  check(!s.feed(32768,pcm.data(),1),"tail was not backpressured");
+  until([&]{return a.entered.load();});
+  until([&]{return s.feed(32768,pcm.data(),pcm.size());});s.finish_input(65537);
+  check(!s.feed(65536,pcm.data(),1),"tail was not backpressured");
   s.close(true);check(s.wait_closed(1000) && a.cancelled,"Abort waited behind the held tail");
   check(!s.status().input_finished,"Abort fabricated a completed tail");
 }
@@ -442,6 +558,78 @@ void bounded_read_keeps_custody() {
   s.stop_playback(1);check(s.audio_bounded(out,0,required) && out.end,"capacity retry revived detached stale PCM");
   s.playback(1,0,true,true);s.finish_input(0);s.close(false);check(s.wait_closed(1000),"bounded read stranded owner");
 }
+void replacement_follows_an_admitted_cancel() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;t.notice=300ms;Session s(a,v,e,t);
+  s.synthesize(1,"The reply being replaced.");until([&]{return t.blocked.load();});
+  s.interrupt(1);
+  check(!s.generation(1).retired,"the test needs the cancelled reply still computing");
+  s.synthesize(2,"The newer reply.");
+  check(t.starts==1,"a second reply started beside the first");
+  t.hold=false;until([&]{return !s.status().synthesizing;});
+  check(t.starts==2 && t.texts.back()=="The newer reply.","the newer reply was not spoken after the first");
+  check(s.generation(1).cancelled && s.generation(1).retired && s.generation(2).retired && !s.generation(2).cancelled,
+        "the replaced reply did not retire as cancelled, or the newer one did not end");
+  Audio out;uint64_t samples=0;size_t ends1=0,ends2=0;while(s.audio(out)){
+    if(out.generation==1){check(out.pcm.empty(),"the cancelled reply's PCM escaped");ends1+=out.end;}
+    else{ if(out.end)++ends2; else samples+=out.pcm.size(); }
+  }
+  check(ends1==1 && ends2==1 && samples==1920,"each reply needs one END, and the newer one all its audio");
+  bool cancelled1=false,ended2=false;Event event;while(s.event(event)){
+    cancelled1|=event.kind=="synthesis_cancelled" && event.generation==1;
+    ended2|=event.kind=="synthesis_end" && event.generation==2;
+  }
+  check(cancelled1 && ended2,"the engine did not say how each reply ended");
+  s.playback(1,0,true,true);s.playback(2,samples,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"the session did not close after both replies");
+}
+void a_replaced_replys_late_chunk_never_sounds() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;t.late=true;t.notice=100ms;Session s(a,v,e,t);
+  s.synthesize(1,"The reply being replaced.");until([&]{return t.blocked.load();});
+  s.interrupt(1);
+  s.synthesize(2,"The newer reply.");
+  check(t.starts==1,"the newer reply took the speaking model before the older one retired");
+  t.hold=false;until([&]{return !s.status().synthesizing;});
+  check(t.late_given,"the test needs the cancelled model to hand back its late chunk");
+  Audio out;bool end1_seen=false,audio2_before_end1=false,late_escaped=false;uint64_t samples2=0;
+  while(s.audio(out)){
+    for(float x:out.pcm) late_escaped|=x>.69f && x<.71f;
+    if(out.generation==1){ if(out.end)end1_seen=true; else check(out.pcm.empty(),"the cancelled reply's PCM escaped"); }
+    else if(!out.end){ audio2_before_end1|=!end1_seen; samples2+=out.pcm.size(); }
+  }
+  check(!late_escaped,"the cancelled reply's late chunk reached the output");
+  check(end1_seen && !audio2_before_end1,"the newer reply's audio came before the older reply's END");
+  check(samples2==1920,"the newer reply did not deliver all its audio");
+  s.playback(1,0,true,true);s.playback(2,samples2,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"the session did not close after both replies");
+}
+void a_reply_replaced_before_it_started_retires() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;t.notice=300ms;Session s(a,v,e,t);
+  s.synthesize(1,"First.");until([&]{return t.blocked.load();});
+  s.interrupt(1);s.synthesize(2,"Second, never spoken.");s.interrupt(2);s.synthesize(3,"Third.");
+  check(s.generation(2).retired && s.generation(2).cancelled,"the never-started reply was left for the loop");
+  t.hold=false;until([&]{return !s.status().synthesizing;});
+  check(t.starts==2 && t.texts.back()=="Third.","the never-started reply was spoken, or the last one was not");
+  Audio out;uint64_t samples=0;while(s.audio(out))if(out.generation==3 && !out.end)samples+=out.pcm.size();
+  bool cancelled2=false;Event event;while(s.event(event))cancelled2|=event.kind=="synthesis_cancelled" && event.generation==2;
+  check(cancelled2,"the never-started reply was not said as cancelled");
+  s.playback(1,0,true,true);s.playback(2,0,true,true);s.playback(3,samples,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"a never-started reply held the session open");
+}
+void a_stopped_reply_still_holds_the_next() {
+  Asr a;Detector v;End e;Tts t;t.hold=true;Session s(a,v,e,t);
+  s.synthesize(1,"Stopped, still computing.");until([&]{return t.blocked.load();});
+  s.stop_playback(1);
+  refuses([&]{s.synthesize(2,"Too early.");},"a newer reply was admitted beside running compute");
+  t.release=true;until([&]{return !s.status().synthesizing;});
+  s.synthesize(3,"After it.");until([&]{return !s.status().synthesizing;});
+  Audio out;uint64_t samples=0;while(s.audio(out))if(out.generation==3 && !out.end)samples+=out.pcm.size();
+  s.playback(1,0,true,true);s.playback(3,samples,true,false);
+  s.finish_input(0);until([&]{return s.status().input_finished;});s.close(false);
+  check(s.wait_closed(1000),"the stopped reply's session did not close");
+}
 int main() {
   try {
     settled_generation_custody();
@@ -450,6 +638,11 @@ int main() {
     admission_and_receipts(); std::cout<<"receipt-held drain and exact terminal evidence PASS\n";
     independent_interruption(); std::cout<<"interruption bypasses blocked recognition; prefix and recovery PASS\n";
     independent_interruption(0);std::cout<<"unlimited duration retains bounded backpressure and independent interruption PASS\n";
+    barge_in_behind_a_stalled_recognizer();std::cout<<"speech interrupts past the old 32,768-sample backlog behind a stalled recognizer PASS\n";
+    barge_in_behind_a_slow_recognizer();std::cout<<"speech interrupts behind a recognizer slower than capture PASS\n";
+    backlog_follows_the_recognizers_limit(default_capture_limit_minutes);backlog_follows_the_recognizers_limit(0);
+    std::cout<<"the backlog is bounded at the recognizer's limit and a minute's ceiling; a feed stays at 32,768 PASS\n";
+    a_short_deadline_takes_a_full_feed();std::cout<<"a short recognizer deadline still admits one full 32,768-sample feed PASS\n";
     const auto a=pause(512),b=pause(241),c=pause(4096);
     check(a.size()==1 && a==b && a==c && a[0]==9216,"pause commitment depends on transport batch");
     std::cout<<"512ms pause at sample 9216 across 512/241/4096 input batches PASS\n";
@@ -472,5 +665,9 @@ int main() {
     std::cout<<"an admitted cutoff repeated after the drain released is not a late finish PASS\n";
     std::cout<<"backpressure suspends only the missing-tail wait; deadline resumes on capacity PASS\n";
     bounded_read_keeps_custody();std::cout<<"capacity refusal keeps event/audio custody under control fences PASS\n";
+    replacement_follows_an_admitted_cancel();std::cout<<"a reply sent once its predecessor's cancel is admitted is spoken after it PASS\n";
+    a_reply_replaced_before_it_started_retires();std::cout<<"a reply replaced before it started retires at once PASS\n";
+    a_replaced_replys_late_chunk_never_sounds();std::cout<<"a replaced reply's late chunk never sounds, and its END comes first PASS\n";
+    a_stopped_reply_still_holds_the_next();std::cout<<"a stop without a cancel still holds the next reply PASS\n";
   } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
 }

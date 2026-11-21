@@ -20,7 +20,7 @@ void Microphone::reset(uint64_t epoch,bool continue_capture) {
 #ifdef AII_NEMOTRON_DIAR
   if(nemotron_)nemotron_->reset(continue_capture);
 #endif
-  epoch_=epoch;position_=0;activity_frames_=target_frames_=0;ended_=faulted_=false;
+  epoch_=epoch;position_=0;real_samples_=0;activity_frames_=target_frames_=0;ended_=faulted_=false;
   cancelled_.store(false);refinement_={};refine_attempted_=false;refinement_seconds_=0;
   refinement_status_=refine_enabled_?"pending":"disabled";
 }
@@ -46,6 +46,9 @@ std::vector<MicrophoneUpdate> Microphone::finish(const std::function<void()>& co
     (void)completed;
 #endif
     if(!frontend_.samples())return {};
+    real_samples_=frontend_.samples();
+    static const std::vector<float> lookahead(final_lookahead_samples,0.f);
+    frontend_.accept(lookahead.data(),lookahead.size());
     frontend_.finish();auto updates=consume(true);
     if(refine_enabled_)refinement_.seal(activity_frames_);
     return updates;
@@ -83,7 +86,7 @@ std::vector<MicrophoneUpdate> Microphone::consume(bool final) {
       const auto targets=nemotron_targets(fine,masks);
       if(refine_enabled_)refinement_.targets(targets);
       auto tracks=hearing_.push_conditioned(epoch_,shared,last,targets);
-      updates.push_back({position_*160,std::min((position_+take)*160,frontend_.samples()),std::move(tracks),activity_frames_,{},8,160});
+      updates.push_back({std::min(position_*160,real_end()),std::min((position_+take)*160,real_end()),std::move(tracks),activity_frames_,{},8,160});
       const auto evidence_end=last?available:std::min<uint64_t>(first+wanted,available);
       if(evidence_end>activity_frames_) {
         updates.back().activity=nemotron_->range(activity_frames_,evidence_end-activity_frames_);
@@ -97,7 +100,7 @@ std::vector<MicrophoneUpdate> Microphone::consume(bool final) {
     auto features=frontend_.frames(position_-cache,take+cache);
     auto tracks=hearing_.push(epoch_,features.data(),take+cache,take+cache,position_?2:0,last);
     const auto& activity=hearing_.activity();
-    updates.push_back({position_*160,std::min((position_+take)*160,frontend_.samples()),std::move(tracks),activity_frames_,activity});
+    updates.push_back({std::min(position_*160,real_end()),std::min((position_+take)*160,real_end()),std::move(tracks),activity_frames_,activity});
     activity_frames_+=activity.size()/4;
     }
     position_+=shift;
@@ -107,13 +110,13 @@ std::vector<MicrophoneUpdate> Microphone::consume(bool final) {
   }
   if(final) {
     auto rest=hearing_.finish(epoch_);
-    if(!rest.empty())updates.push_back({frontend_.samples(),frontend_.samples(),std::move(rest),activity_frames_,{},
+    if(!rest.empty())updates.push_back({real_end(),real_end(),std::move(rest),activity_frames_,{},
                                         v3?size_t(8):size_t(4),v3?uint64_t(160):uint64_t(1280)});
   }
 #ifdef AII_NEMOTRON_DIAR
   if(final && nemotron_ && activity_frames_<nemotron_->frames()) {
     const auto end=nemotron_->frames();
-    updates.push_back({0,frontend_.samples(),{},activity_frames_,
+    updates.push_back({0,real_end(),{},activity_frames_,
                       nemotron_->range(activity_frames_,end-activity_frames_),8,160});
     activity_frames_=end;nemotron_->discard_before(end);
   }

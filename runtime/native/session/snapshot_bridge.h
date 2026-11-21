@@ -12,7 +12,7 @@ struct StorageLate : wire::Refused { using wire::Refused::Refused; };
 inline constexpr const char* kHostStorageNoAnswer = "HOST_STORAGE_NO_ANSWER";
 class SnapshotBridge {
  public:
-  enum class Store { Enrollment, PendingCaptures, Recovery, SpeakerRegistry, Waveform };
+  enum class Store { Enrollment, PendingCaptures, Recovery, SpeakerRegistry, Waveform, SpeakerHeard };
   using Send=std::function<void(wire::Json)>;
   explicit SnapshotBridge(Send send={}):send_(std::move(send)){}
   void sender(Send send) {send_=std::move(send);}

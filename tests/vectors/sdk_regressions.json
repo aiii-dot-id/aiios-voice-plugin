@@ -1,0 +1,18 @@
+{
+  "description": "Where the SDK regressions the carrier relies on (tests/test_plugin_sdk_pin.py, REGRESSIONS) ran and passed, and the code they ran on. A public SDK release carries no tests: its derivation leaves them out and strips comments. Where the pinned SDK carries no tests, the test holds the pinned code to the code the regressions passed on, by scripts/sdk_code_digest.go: each package's non-test sources parsed without comments and printed canonically, so two trees that differ only in comments have one digest. Any change of code needs the regressions run again and recorded here. The kit's vector files this tree reads (vectors_sha256) are carried under tests/vectors/ as that kit had them; scripts/sdk_vectors.py gives them only for this pin and this code.",
+  "pinned_revision": "32ccba4f2a06282f60649d2422d615e0e1113b81",
+  "pinned_release": "v0.1.16-sdk.1",
+  "proven_at": {
+    "revision": "fc8f22dd7d0ea1b12b06710479e5a84b4da17254",
+    "where": "the kit's private source, the commit the public release's code equals",
+    "result": "the 12 regressions passed (go test -run, with the Go plugin/native/go.mod names, 2026-10-10)"
+  },
+  "code_sha256": {
+    "pkg/aiiosdk": "e7194cc4ffe64e8e3a0d26449e501efdeb7c78fbd8e55b9af095a8f4d9bdfa9b",
+    "pkg/aiiospkg": "1dc8f4139e3116fb9c8eb3ea502bf07d2cb67f399da8e9968b3775df0e9ef0a5"
+  },
+  "vectors_sha256": {
+    "audio_framing.json": "705174600d65dce0b7f3c152d376940c9d56477d46821bf6477ee5560a9b750d",
+    "runtime_extent.json": "d8067f01326836f00d338247c6f85052692643f8e782e8ffa460bd8d9d1585f6"
+  }
+}

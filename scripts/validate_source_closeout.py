@@ -25,7 +25,7 @@ TESTS = (
     "test_plugin_capture_processing", "test_plugin_readiness", "test_plugin_playback_receipts",
     "test_plugin_playback_control", "test_plugin_abort_drain", "test_plugin_startup_timing",
     "test_plugin_readonly_loading", "test_native_current_interrupt", "test_signed_windows_rebind",
-    "test_native_capture_duration", "test_native_settings_packaging", "test_beta3_release_contract",
+    "test_native_capture_duration", "test_native_settings_packaging", "test_beta3_release_contract", "test_partial_desktop_family",
     "test_native_drain_progress",
     "test_native_drain_order",
     "test_native_unserved_settings",
@@ -36,6 +36,7 @@ TESTS = (
     "test_native_fault_scope",
     "test_plugin_sdk_declaration",
     "test_native_output_only",
+    "test_native_check_session",
     "test_native_meeting_endurance",
     "test_speaker_attribution_contract", "test_reused_release_assets",
     "test_plugin_sdk_pin",
@@ -45,6 +46,7 @@ TESTS = (
     "test_native_abort_while_opening",
     "test_native_reply_voice",
     "test_carrier_with_fixture_worker",
+    "test_native_engine_log",
 )
 
 OUTSIDE_THE_GATES = {
@@ -55,7 +57,7 @@ OUTSIDE_THE_GATES = {
     "test_separator_export":
         "It imports torch, which requirements-test.txt does not install. It runs in the model-export "
         "environment (torch, onnx, onnxruntime) when the separator's export changes: "
-        "python -m unittest tests.test_separator_export -v (docs/DEVELOPMENT.md)",
+        "python -m unittest tests.test_separator_export -v (docs/DEVELOPMENT.md, docs/OVERLAP_IDENTITY_GATE.md)",
     "test_voice_app_conversation":
         "It imports runtime.voice_app, which imports aiohttp, and requirements-test.txt does not install "
         "aiohttp. No gate runs it. It runs only where the Python voice application's own dependencies "

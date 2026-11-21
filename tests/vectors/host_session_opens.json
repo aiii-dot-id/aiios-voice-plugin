@@ -1,5 +1,5 @@
 {
-  "description": "The speech.session.open a host sends a resident voice engine today, whole, as the host's code builds it. session_topology.json (the host's admission vectors, with narrative description omitted) says which directions an open may ask for; these entries are the opens themselves, with everything else the host puts in one: the mode word, the handles in the host's form, the capture report, the channel roles, and audio.input.stream, the AUD1 stream number the session's input is written on. They stand in the order one engine process could be sent them: each open with an input declares the next stream number, starting at 1 and never repeated; an open with no input declares none; a refused open's number is not given to a later one. The host keeps no vectors of its whole open, so these were written from the host code named in each entry's source, as the release named in taken_from builds it. Session ids and endpoint numbers are placeholders in the host's form (vs- and 32 hex digits; browser:<n>:mic and browser:<n>:spk). page_request is the page's voice_session message that makes the host build the open, without the members that change nothing in the open (the page's mark that an open followed a gesture). admission is the audio member of this engine's answer where it is not the shared file's confirmed admission for the topology. refused_without is the whole answer of an engine built without the frontend that needs names.",
+  "description": "The speech.session.open a host sends a resident voice engine today, whole, as the host's code builds it. session_topology.json (the host's file, copied byte for byte) says which directions an open may ask for; these entries are the opens themselves, with everything else the host puts in one: the mode word, the handles in the host's form, the capture report, the channel roles, and audio.input.stream, the AUD1 stream number the session's input is written on. They stand in the order one engine process could be sent them: each open with an input declares the next stream number, starting at 1 and never repeated; an open with no input declares none; a refused open's number is not given to a later one. The host keeps no vectors of its whole open, so these were written from the host code named in each entry's source, as the release named in taken_from builds it. Session ids and endpoint numbers are placeholders in the host's form (vs- and 32 hex digits; browser:<n>:mic and browser:<n>:spk). page_request is the page's voice_session message that makes the host build the open, without the members that change nothing in the open (the page's mark that an open followed a gesture). admission is the audio member of this engine's answer where it is not the shared file's confirmed admission for the topology. refused_without is the whole answer of an engine built without the frontend that needs names.",
   "taken_from": {
     "host": {
       "release": "AII OS 0.1.15",
@@ -16,14 +16,9 @@
     },
     "kit": {
       "topology_vectors": "vectors/session_topology.json",
-      "pinned_revision": "ca3a6f2fdd69af0c42dfedb83d7e1bca66eb4809",
-      "pinned_topology_vectors_sha256": "9273c2786e9a71e710963ee80d6727ae959069e78fc68b3270ba5b418313e131",
-      "source_mapping": "Public SDK v0.1.15; all topology request and result fields are unchanged."
-    },
-    "public_copy": {
-      "sha256": "55f049851273133deaabb788773b5d89ebe3796c270906c5a333f0550b2ff565",
-      "payload_sha256": "51c3a83a0e88132ff2398e585407b870469b68d8283f3e0b0476da95ab394f4f",
-      "normalization": "Remove only the top-level description; encode all remaining JSON as UTF-8 with sorted keys and compact separators."
+      "pinned_revision": "32ccba4f2a06282f60649d2422d615e0e1113b81",
+      "pinned_note": "The public SDK release v0.1.16-sdk.1 (32ccba4) carries no vectors/ folder: its derivation leaves the kit's vectors out, so there is no kit copy to compare here. Its source, the kit line through fc8f22d, carried session_topology.json as these bytes.",
+      "pinned_topology_vectors_sha256": "9273c2786e9a71e710963ee80d6727ae959069e78fc68b3270ba5b418313e131"
     }
   },
   "opens": [

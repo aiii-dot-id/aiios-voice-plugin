@@ -32,8 +32,10 @@ _TABLE = (
     ('endpoint_retire_ms', 30500, 250, 120000),
     ('separation_min_ms', 4000, 250, 120000),
     ('separation_max_ms', 25000, 250, 120000),
+    ('model_server_channels', 64, 1, 64),
 )
 MEMBERS = tuple(row[0] for row in _TABLE)
+COUNTS = frozenset({'model_server_channels'})
 DEFAULTS = {row[0]: row[1] for row in _TABLE}
 RANGES = {row[0]: (row[2], row[3]) for row in _TABLE}
 
@@ -83,12 +85,14 @@ def limits_from(stated):
     table = dict(DEFAULTS)
     for name, value in _named(stated).items():
         if type(value) is not int:
-            raise ValueError('runtime limit ' + name + ' must be a whole number of milliseconds')
+            raise ValueError('runtime limit ' + name + ' must be a whole number of '
+                             + ('channels' if name in COUNTS else 'milliseconds'))
         table[name] = value
     for name in MEMBERS:
         low, high = RANGES[name]
         if not low <= table[name] <= high:
-            raise ValueError('runtime limit %s is %d ms; it must be %d to %d' % (name, table[name], low, high))
+            raise ValueError('runtime limit %s is %d%s; it must be %d to %d'
+                             % (name, table[name], '' if name in COUNTS else ' ms', low, high))
     if table['host_write_ms'] < table['host_read_ms']:
         raise ValueError("runtime limits: a write must be given at least a read's time")
     if table['storage_wait_ms'] < table['host_write_ms']:
@@ -161,6 +165,7 @@ def worker_table(stated):
         'endpoint_retire_ms': table['endpoint_retire_ms'],
         'separation_min_ms': table['separation_min_ms'],
         'separation_max_ms': table['separation_max_ms'],
+        'model_server_channels': table['model_server_channels'],
     }
 
 

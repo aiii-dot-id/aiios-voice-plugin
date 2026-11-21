@@ -20,9 +20,11 @@ microphones can leave attribution unresolved.
 
 ## Build
 
-The [maintenance build recipe](maintenance/README.md) maps beta11.4's eight
-carriers to their native sources and runtime profiles.
+The [native build](plugin/NATIVE_BUILD.md) names the pinned Plugin SDK revision
+and how each carrier and its runtime are built.
 [Development instructions](docs/DEVELOPMENT.md) cover dependencies and tests.
+[What changed in 0.1.0-beta.12](docs/CHANGES_0.1.0-beta.12.md) lists every
+change since 0.1.0-beta.11, by subject.
 The shipped engine is a C++ worker launched by a Go carrier. Python files are
 build tools, tests, and reference implementations; they are not installed in
 the native plugin package.

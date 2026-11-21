@@ -11,13 +11,13 @@ import hashlib
 import json
 import os
 import platform
-import re
 import subprocess
 import sys
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from scripts import go_toolchain
 ROOT = Path(__file__).resolve().parents[1]
 PIN_FILE = ROOT / "plugin/sdk-source.json"
 PIN = json.loads(PIN_FILE.read_text())
@@ -73,10 +73,12 @@ def verify_sdk(root=ROOT):
             expected[member.name] = hashlib.sha256(tf.extractfile(member).read()).hexdigest()
     if regular_files(source) != expected:
         raise ValueError("SDK checkout differs from sealed archive (including extra files)")
+    replace = (
+        "replace github.com/aiii-dot-id/aii-plugin-sdk => ../../" + pin["source"]
+    )
     mod = (root / "plugin/native/go.mod").read_text()
-    required = "require github.com/aiii-dot-id/aii-plugin-sdk " + pin["version"]
-    if required not in mod.splitlines() or re.search(r"(?m)^\s*replace\b", mod):
-        raise ValueError("native go.mod must bind the public SDK version without replacement")
+    if [line for line in mod.splitlines() if line.startswith("replace ")] != [replace]:
+        raise ValueError("native go.mod does not bind the pinned SDK")
     return pin, expected
 
 
@@ -163,9 +165,7 @@ def bundle(output, archive):
 def build(go, output):
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise ValueError("this four-artifact builder requires Apple Silicon (native race proof)")
-    version = subprocess.check_output([str(go), "version"], text=True).strip()
-    if "go1.27.0 " not in version:
-        raise ValueError("carrier qualification requires Go 1.27.0")
+    version = go_toolchain.require(go, "carrier qualification")
     before = inputs()
     output.mkdir(parents=True, exist_ok=False)
     record = {
@@ -206,7 +206,7 @@ def build(go, output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--go", type=Path, default=Path("/usr/local/go1.27/bin/go"))
+    parser.add_argument("--go", type=Path, default=go_toolchain.default_go())
     parser.add_argument("--output", type=Path, default=BUILD_DIR)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--bundle", type=Path)

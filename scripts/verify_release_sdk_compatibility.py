@@ -8,6 +8,7 @@ import tarfile
 import hashlib
 
 from scripts.release_files import census, emit, put, sha
+from scripts import go_toolchain
 
 
 def assembly_receipt(prior):
@@ -52,9 +53,9 @@ def verify(sdk, archive, assembly, out):
     shutil.copytree(assembly / 'author', author, ignore=shutil.ignore_patterns('*.aiiospkg', 'stage'))
     env = {**os.environ, 'GOTOOLCHAIN': 'local', 'GOWORK': 'off', 'GOPROXY': 'off'}
     commands = [
-        ['/usr/local/go1.27/bin/go', 'test', '-count=1', './...'],
-        ['/usr/local/go1.27/bin/go', 'test', '-race', '-count=1', './...'],
-        ['/usr/local/go1.27/bin/go', 'build', '-trimpath', '-buildvcs=false', '-o', str(out / 'assemble'), str(source)],
+        [str(go_toolchain.default_go()), 'test', '-count=1', './...'],
+        [str(go_toolchain.default_go()), 'test', '-race', '-count=1', './...'],
+        [str(go_toolchain.default_go()), 'build', '-trimpath', '-buildvcs=false', '-o', str(out / 'assemble'), str(source)],
         [str(out / 'assemble'), str(author)],
     ]
     results = []

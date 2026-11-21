@@ -18,6 +18,7 @@ import tarfile
 from scripts.build_plugin_carrier import verify_sdk, SDK_SOURCE
 from scripts.package_native_runtime import refuse_interpreter_profile, verify
 from scripts.runtime_limits import profile_limits
+from scripts import go_toolchain
 from scripts.rebind_signed_windows_runtime import SUBJECT, verify_authenticode
 from scripts.check_native_binary_privacy import audit_release_images, release_owned_image, third_party_images
 from scripts.windows_signing_targets import CARRIER, signing_targets
@@ -183,7 +184,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for n in ('checkpoint','audit','out','go-modcache'): p.add_argument('--'+n,type=Path,required=True)
     p.add_argument('--audit-sha256',required=True); p.add_argument('--runtime-sha256',required=True)
-    p.add_argument('--go',type=Path,default=Path('/usr/local/go1.27/bin/go'))
+    p.add_argument('--go',type=Path,default=go_toolchain.default_go())
     p.add_argument('--signtool',type=Path,help='Required on Windows; validates publisher, trust and timestamp')
     p.add_argument('--variant-id',help='Explicit component-set ID; omission retains the single-platform checkpoint ID')
     p.add_argument('--max-compressed-bytes',type=int,required=True,

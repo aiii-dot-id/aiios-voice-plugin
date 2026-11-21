@@ -55,4 +55,4 @@ def test_settings_description_needs_neither_model_root_nor_audio_endpoints():
     worker = Path(os.environ['AII_NATIVE_INTERRUPT_FIXTURE']).resolve()
     env = {k: v for k, v in os.environ.items() if k not in ('AII_MODELS_DIR', 'AII_AUDIO_IN_FD', 'AII_AUDIO_OUT_FD')}
     done = subprocess.run([str(worker), '--describe-settings'], env=env, capture_output=True, timeout=5, check=True)
-    assert len(json.loads(done.stdout)) == 8
+    assert len(json.loads(done.stdout)) == 10

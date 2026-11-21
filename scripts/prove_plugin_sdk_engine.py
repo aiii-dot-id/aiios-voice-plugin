@@ -98,14 +98,16 @@ def validate_description(description):
                   ("list", "enroll", "remove", "reset", "discard_capture", "upgrade_policy", "buckets", "associate", "forget", "link")}
     recording = {"recording." + name for name in ("record", "status", "list", "delete", "prune")}
     vocabulary = {"vocabulary." + name for name in ("list", "correct", "forget")}
-    if set(ids) != expected | enrollment | recording | vocabulary or len(ids) != 26:
-        raise ValueError("The carrier must declare eight controls, ten speaker operations, five recording operations and three vocabulary operations")
+    archives = {"speaker.recovery_list", "speaker.recovery_delete"}
+    if set(ids) != expected | enrollment | archives | recording | vocabulary or len(ids) != 28:
+        raise ValueError("The carrier must declare eight controls, ten speaker operations, two recovery archive operations, five recording operations and three vocabulary operations")
     for row in description:
         if row["id"] in enrollment:
             if not isinstance(row.get("summary"), str) or not row["summary"].strip():
                 raise ValueError("Speaker operation summary missing")
-            write = row["id"] not in ("speaker.list", "speaker.buckets")
-            if (row.get("operator_confirms", False) is not write
+            write = row["id"] != "speaker.list"
+            confirms = row["id"] not in ("speaker.list", "speaker.buckets")
+            if (row.get("operator_confirms", False) is not confirms
                     or row.get("capabilities") != ["fs.private"]
                     or row.get("effects") != ("write.local" if write else "read.internal")):
                 raise ValueError("Enrollment effects/confirmation contract differs")
@@ -124,6 +126,16 @@ def validate_description(description):
                     or row.get("input") != f"schemas/recording-{name}.input.json"
                     or row.get("output") != output):
                 raise ValueError("Recording contract differs")
+        if row["id"] in archives:
+            name = row["id"].split(".")[1]
+            write = name == "recovery_delete"
+            if (not isinstance(row.get("summary"), str) or not row["summary"].strip()
+                    or row.get("operator_confirms", False) is not write
+                    or row.get("capabilities") != ["fs.private"]
+                    or row.get("effects") != ("write.local" if write else "read.internal")
+                    or row.get("input") != f"schemas/speaker-{name}.input.json"
+                    or row.get("output") != f"schemas/speaker-{name}.output.json"):
+                raise ValueError("Recovery archive contract differs")
         if row["id"] in vocabulary:
             name = row["id"].split(".")[1]
             write = name != "list"
@@ -134,6 +146,9 @@ def validate_description(description):
                     or row.get("input") != f"schemas/vocabulary-{name}.input.json"
                     or row.get("output") != "schemas/vocabulary.output.json"):
                 raise ValueError("Vocabulary contract differs")
+
+
+READY_LINE = r"^AII_VOICE_READY event=ready models_loaded=(\d+) accelerator=([a-z0-9_]+(?:\+[a-z0-9_]+)*) probe_ms=(\d+)(?: sdk=\S+)?$"
 
 
 class SDKHost:
@@ -396,9 +411,7 @@ class SDKHost:
         while time.monotonic() < deadline:
             data = Path(self.log.name).read_text(encoding="utf8", errors="replace")
             lines = re.findall(
-                r"^AII_VOICE_READY event=ready models_loaded=(\d+) accelerator=(\w+) probe_ms=(\d+)$",
-                data,
-                re.MULTILINE,
+                READY_LINE, data, re.MULTILINE,
             )
             if lines:
                 if len(lines) != 1:
